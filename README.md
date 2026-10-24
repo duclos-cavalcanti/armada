@@ -48,11 +48,16 @@ personal systems) live in a gitignored profile, applied onto `.claude/settings.j
 
 ```bash
 harness/apply.sh harness/profiles/<name>.json   # rebuild = committed base + profile
-git checkout .claude/settings.json              # un-apply
 ```
 
-The applied file is what `make install` stows into `~/.claude` — don't commit it
-while a profile is applied.
+The applied file is what `make install` stows into `~/.claude`. The committed base
+stays frozen: `apply.sh` marks the file `skip-worktree`, so git ignores the applied
+copy. To un-apply (or to edit the base itself), clear the flag first:
+
+```bash
+git update-index --no-skip-worktree .claude/settings.json
+git checkout .claude/settings.json
+```
 
 ### 3. Run
 

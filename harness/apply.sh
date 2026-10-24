@@ -7,8 +7,10 @@
 # work, personal. Objects merge deeply; arrays concatenate without duplicates. The
 # base is always HEAD's settings.json, so swapping profiles drops the old one cleanly
 # (uncommitted edits to settings.json are discarded). The result is what `make install`
-# stows into ~/.claude — never commit it while a profile is applied. Revert with
-# `git checkout .claude/settings.json`.
+# stows into ~/.claude. The committed base stays frozen: the file is marked
+# skip-worktree, so git ignores the applied copy. Revert with:
+#   git update-index --no-skip-worktree .claude/settings.json
+#   git checkout .claude/settings.json
 set -euo pipefail
 
 # shellcheck disable=SC2016 # jq program, not shell expansion
@@ -29,7 +31,8 @@ main() {
     repo="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
     merged="$(jq -s "$MERGE" <(git -C "$repo" show HEAD:.claude/settings.json) "$profile")"
     printf '%s\n' "$merged" > "$repo/.claude/settings.json"
-    echo "applied $profile → .claude/settings.json (don't commit it while applied)"
+    git -C "$repo" update-index --skip-worktree .claude/settings.json
+    echo "applied $profile → .claude/settings.json (skip-worktree: git ignores it)"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
