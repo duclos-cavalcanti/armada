@@ -118,7 +118,7 @@ mod tests {
     use super::*;
 
     const SAMPLE: &str = r#"{"resourceLogs":[{"resource":{"attributes":[
-        {"key":"mady.role","value":{"stringValue":"worker"}}]},
+        {"key":"fleet.role","value":{"stringValue":"worker"}}]},
         "scopeLogs":[{"logRecords":[{"timeUnixNano":"1780000000000000000",
         "body":{"stringValue":"claude_code.api_request"},
         "attributes":[{"key":"cost_usd","value":{"doubleValue":0.5}}]}]}]}]}"#;

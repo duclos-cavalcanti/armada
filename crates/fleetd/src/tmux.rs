@@ -27,7 +27,7 @@ impl Default for TmuxHost {
 }
 
 /// The per-cog OpenTelemetry attribution injected at spawn: `OTEL_SERVICE_NAME` + the
-/// `mady.role`/`mady.ticket` resource attributes, parsed from the session name (`worker-MADY-1`
+/// `fleet.role`/`fleet.ticket` resource attributes, parsed from the session name (`worker-MADY-1`
 /// → role=worker, ticket=MADY-1; a standing cog like `foreman` → role only). Always injected —
 /// inert when telemetry is off. A one-off `claude` gets none → NULL role at the collector (the
 /// "interactive" bucket). This is the one piece settings.json can't provide (it's static).
@@ -36,11 +36,11 @@ fn otel_attribution(session_name: &str) -> Vec<(&'static str, String)> {
         Some((role, num)) => (role.to_string(), Some(format!("MADY-{num}"))),
         None => (session_name.to_string(), None),
     };
-    let mut attrs = format!("mady.role={role}");
+    let mut attrs = format!("fleet.role={role}");
     if let Some(t) = &ticket {
-        attrs.push_str(&format!(",mady.ticket={t}"));
+        attrs.push_str(&format!(",fleet.ticket={t}"));
     }
-    vec![("OTEL_SERVICE_NAME", format!("mady-{role}")), ("OTEL_RESOURCE_ATTRIBUTES", attrs)]
+    vec![("OTEL_SERVICE_NAME", format!("fleet-{role}")), ("OTEL_RESOURCE_ATTRIBUTES", attrs)]
 }
 
 fn tmux(args: &[&str]) -> Result<Output> {
@@ -54,10 +54,7 @@ fn target(name: &str) -> String {
 
 impl SessionHost for TmuxHost {
     fn spawn(&self, name: &str, cwd: &Path, cmd: &str) -> Result<()> {
-        // A detached tmux session running `cmd` in `cwd` — the Rust re-iteration of
-        // launcher.sh's spawn. config.env sourcing is intentionally NOT replicated: it's
-        // redundant (kit scripts re-source it via bootstrap.sh; no agent reads MADY_* from the
-        // env). OTEL, which launcher.sh also handled, IS replicated below when enabled.
+        // A detached tmux session running `cmd` in `cwd`, plus per-cog OTEL attribution below.
         let mut tmux = Command::new("tmux");
         tmux.args(["new-session", "-d", "-s", name, "-n", "main"]);
         // Per-cog OpenTelemetry attribution (tmux 3.0+ `-e`) — tags the cog's emissions by role
@@ -114,14 +111,14 @@ mod tests {
     #[test]
     fn attribution_tags_role_and_ticket_from_the_session_name() {
         let env: HashMap<_, _> = otel_attribution("worker-MADY-1").into_iter().collect();
-        assert_eq!(env["OTEL_SERVICE_NAME"], "mady-worker");
-        assert_eq!(env["OTEL_RESOURCE_ATTRIBUTES"], "mady.role=worker,mady.ticket=MADY-1");
+        assert_eq!(env["OTEL_SERVICE_NAME"], "fleet-worker");
+        assert_eq!(env["OTEL_RESOURCE_ATTRIBUTES"], "fleet.role=worker,fleet.ticket=MADY-1");
     }
 
     #[test]
     fn attribution_for_a_standing_cog_has_role_but_no_ticket() {
         let env: HashMap<_, _> = otel_attribution("foreman").into_iter().collect();
-        assert_eq!(env["OTEL_SERVICE_NAME"], "mady-foreman");
-        assert_eq!(env["OTEL_RESOURCE_ATTRIBUTES"], "mady.role=foreman");
+        assert_eq!(env["OTEL_SERVICE_NAME"], "fleet-foreman");
+        assert_eq!(env["OTEL_RESOURCE_ATTRIBUTES"], "fleet.role=foreman");
     }
 }

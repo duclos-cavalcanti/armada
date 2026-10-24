@@ -32,7 +32,7 @@ fn render_tab_strip(f: &mut Frame, area: Rect, app: &App) {
     let titles: Vec<Line> = TabId::all().iter().map(|t| Line::from(t.label())).collect();
     let selected = TabId::all().iter().position(|t| *t == app.tab).unwrap_or(0);
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title(" MADY · fleet "))
+        .block(Block::default().borders(Borders::ALL).title(" fleet "))
         .select(selected)
         .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
     f.render_widget(tabs, area);

@@ -1,4 +1,4 @@
-# fleet — the MADY factory daemon workspace (see PLAN.md).
+# armada — the fleet workspace.
 # Virtual workspace: the fleet crates under crates/*, plus the standalone TUIs
 # under apps/* — one `cargo build` builds the whole system.
 [workspace]

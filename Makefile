@@ -1,4 +1,4 @@
-# MADY development kit — operator entry points.
+# Armada — operator entry points.
 #
 # The kit is the fleet: one self-ticking daemon (fleetd) + its client (fleetc).
 # `install.sh` gates the Brewfile, stows agents/skills (+ the .claude config), and

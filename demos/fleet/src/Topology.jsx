@@ -396,7 +396,7 @@ export default function Topology() {
   return (
     <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
       <div className="viz-header">
-        <b>{arch.title ?? 'MADY — architecture topology'}</b>
+        <b>{arch.title ?? 'Armada — architecture topology'}</b>
         <span style={{ color: 'var(--dim)', fontSize: 11, display: 'block', marginTop: 4 }}>crossing-aware orthogonal routing · baseline @ {arch.sha}</span>
       </div>
       <div style={{ position: 'fixed', top: 14, right: 14, zIndex: 6, display: 'flex', gap: 8, alignItems: 'center' }}>

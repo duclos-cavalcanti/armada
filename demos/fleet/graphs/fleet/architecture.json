@@ -1,5 +1,5 @@
 {
-  "title": "The MADY Fleet — live architecture",
+  "title": "The Fleet — live architecture",
   "sha": "1cdee16",
   "note": "The factory's OWN machinery (this repo), not the b2b-api product. fleetd is the single-writer daemon: a UDS control server + a scheduler (the only ledger writer, pacing poll/sync/reconcile) + an OTLP collector, over a SQLite ledger. fleetc is the control surface. reconcile converges intent (orders/convoys/board) against reality (sessions/ships/Jira), spawning & reaping the crew of Claude cogs in tmux. Base edges = the standing topology; pick a flow to light up one dynamic. Positions hand-placed; drag + Copy layout to iterate.",
   "groups": [
@@ -90,8 +90,8 @@
             "goal": "Staff the per-convoy orchestrator and the peer-MR reviewer.",
             "why": "One cold captain per active convoy with work; one singleton lookout per changed peer ship.",
             "steps": [
-              "Active convoy + work + no live captain + not anchored → LaunchCaptain at the hub with MADY_CONVOY injected.",
-              "First peer Open ship whose head_sha ≠ reviewed + no live lookout → LaunchLookout at the hub with MADY_SHIP=iid (no worktree).",
+              "Active convoy + work + no live captain + not anchored → LaunchCaptain at the hub with FLEET_CONVOY injected.",
+              "First peer Open ship whose head_sha ≠ reviewed + no live lookout → LaunchLookout at the hub with FLEET_SHIP=iid (no worktree).",
               "Convoy no longer active / peer gone → StandDownCaptain / StandDownLookout."
             ],
             "guarantees": [
@@ -345,7 +345,7 @@
         { "from": "server",      "to": "scheduler",   "label": "mpsc" },
         { "from": "scheduler",   "to": "ledger",      "label": "convoys.open + ConvoyOpened" },
         { "from": "scheduler",   "to": "reconcile",   "label": "reconcile tick" },
-        { "from": "reconcile",   "to": "sessionhost", "label": "LaunchCaptain (MADY_CONVOY)" },
+        { "from": "reconcile",   "to": "sessionhost", "label": "LaunchCaptain (FLEET_CONVOY)" },
         { "from": "sessionhost", "to": "captain",     "label": "claude --agent captain (at hub)" },
         { "from": "captain",     "to": "server",      "label": "fleetc context --convoy (its slice)" },
         { "from": "captain",     "to": "fleetc",      "label": "fleet-berth + dispatch (frontier)" }
@@ -366,7 +366,7 @@
         { "from": "forge",       "to": "gitlab",      "label": "glab api" },
         { "from": "sync",        "to": "ledger",      "label": "ships.sync (peer · pilot ≠ us)" },
         { "from": "scheduler",   "to": "reconcile",   "label": "reconcile tick" },
-        { "from": "reconcile",   "to": "sessionhost", "label": "LaunchLookout (MADY_SHIP=iid)" },
+        { "from": "reconcile",   "to": "sessionhost", "label": "LaunchLookout (FLEET_SHIP=iid)" },
         { "from": "sessionhost", "to": "lookout",     "label": "claude --agent lookout (at hub, no worktree)" },
         { "from": "lookout",     "to": "gitlab",      "label": "/mr-review · post threads · approve if clean" },
         { "from": "reconcile",   "to": "ledger",      "label": "ships.reviewed = head_sha" }

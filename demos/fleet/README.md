@@ -1,6 +1,6 @@
 # fleet architecture viewer
 
-Interactive architecture / call-flow viewer for the **MADY fleet itself** — the
+Interactive architecture / call-flow viewer for the **fleet itself** — the
 factory's own machinery (`fleetd` / `fleetc` / the `ledger` / the crew of cogs),
 *not* the b2b-api product. Same React Flow + crossing-aware orthogonal edge
 router as `../architecture`, in the mady-style dark palette. The renderer

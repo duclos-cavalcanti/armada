@@ -1,6 +1,6 @@
 # dashboard
 
-A live TUI over the MADY fleet. Reads **fleetd's ledger read-only**
+A live TUI over the fleet. Reads **fleetd's ledger read-only**
 (`$HOME/.fleet/ledger.db`, or `--ledger <path>`) and renders the fleet at a glance,
 refreshing once a second. A **viewer, not an orchestrator** — it renders state and
 binds keys to copy it out; it never mutates the fleet (that's `fleetc`). Built on
@@ -27,15 +27,17 @@ Cycle with `Tab` / `S-Tab`:
 | `j` / `k` | move the cursor within the focused pane |
 | `space` | zoom the focused pane (toggle) |
 | `y` / `Y` | yank the focused pane / the whole page |
+| any other | run `handler.sh <tab/pane> <key> <row fields…>` on the focused row |
 
 ## Layout
 
 ```
 apps/dashboard/
 ├── Cargo.toml
+├── handler.sh       # the action handler: (tab/pane, key) → action
 └── src/
     ├── main.rs      # entry, event loop, key handling, tab + pane focus
-    ├── config.rs    # CLI + defaults (the ledger path)
+    ├── action.rs    # non-navigation keys → handler.sh (the action handler)
     ├── source.rs    # Fleet::load() — reads the ledger read-only into the view model
     └── ui/mod.rs    # tab strip + per-tab panes + footer (pure render over App)
 ```

@@ -16,9 +16,9 @@ CREATE TABLE IF NOT EXISTS telemetry (
     received_at TEXT NOT NULL,   -- fleetd ingest time (RFC3339)
     ts          TEXT,            -- the OTEL record time (RFC3339), when present
     event       TEXT NOT NULL,   -- log event name (body.stringValue), e.g. claude_code.api_request
-    service     TEXT,            -- resource service.name (mady-<role>)
-    role        TEXT,            -- from the mady.role resource attribute
-    ticket      TEXT,            -- from the mady.ticket resource attribute
+    service     TEXT,            -- resource service.name (fleet-<role>)
+    role        TEXT,            -- from the fleet.role resource attribute
+    ticket      TEXT,            -- from the fleet.ticket resource attribute
     session_id  TEXT,            -- Claude's session.id
     cost_usd    REAL,            -- hot fact: per-request cost
     model       TEXT,            -- hot dimension
@@ -111,7 +111,7 @@ mod tests {
             received_at: "r".into(),
             ts: Some(ts.into()),
             event: "claude_code.api_request".into(),
-            service: Some(format!("mady-{role}")),
+            service: Some(format!("fleet-{role}")),
             role: Some(role.into()),
             ticket: Some(ticket.into()),
             session_id: Some("s1".into()),

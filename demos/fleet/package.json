@@ -2,7 +2,7 @@
   "name": "fleet-viz",
   "private": true,
   "type": "module",
-  "description": "Interactive architecture viewer for the MADY fleet itself (fleetd/fleetc/ledger/crew). React Flow; local-only.",
+  "description": "Interactive architecture viewer for the fleet itself (fleetd/fleetc/ledger/crew). React Flow; local-only.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

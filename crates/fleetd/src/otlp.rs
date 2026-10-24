@@ -11,11 +11,11 @@ use serde_json::{Map, Value};
 pub fn parse_logs(body: &Value, received_at: &str) -> Vec<TelemetryRow> {
     let mut rows = Vec::new();
     for rl in array(body, "resourceLogs") {
-        // Resource-level attributes: service.name + our attribution (mady.role / mady.ticket).
+        // Resource-level attributes: service.name + our attribution (fleet.role / fleet.ticket).
         let res = attrs_map(rl.pointer("/resource/attributes"));
         let service = res.get("service.name").and_then(as_string);
-        let role = res.get("mady.role").and_then(as_string);
-        let ticket = res.get("mady.ticket").and_then(as_string);
+        let role = res.get("fleet.role").and_then(as_string);
+        let ticket = res.get("fleet.ticket").and_then(as_string);
         let res_session = res.get("session.id").and_then(as_string);
 
         for sl in array(rl, "scopeLogs") {
@@ -114,9 +114,9 @@ mod tests {
         let body = json!({
             "resourceLogs": [{
                 "resource": { "attributes": [
-                    {"key":"service.name","value":{"stringValue":"mady-worker"}},
-                    {"key":"mady.role","value":{"stringValue":"worker"}},
-                    {"key":"mady.ticket","value":{"stringValue":"MADY-1"}},
+                    {"key":"service.name","value":{"stringValue":"fleet-worker"}},
+                    {"key":"fleet.role","value":{"stringValue":"worker"}},
+                    {"key":"fleet.ticket","value":{"stringValue":"MADY-1"}},
                     {"key":"session.id","value":{"stringValue":"sess-1"}}
                 ]},
                 "scopeLogs": [{ "logRecords": [{
@@ -135,7 +135,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         let r = &rows[0];
         assert_eq!(r.event, "claude_code.api_request");
-        assert_eq!(r.service.as_deref(), Some("mady-worker"));
+        assert_eq!(r.service.as_deref(), Some("fleet-worker"));
         assert_eq!(r.role.as_deref(), Some("worker"));
         assert_eq!(r.ticket.as_deref(), Some("MADY-1"));
         assert_eq!(r.session_id.as_deref(), Some("sess-1"));

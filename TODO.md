@@ -1,4 +1,4 @@
-# MADY fleet TODO
+# Armada TODO
 
 - [ ] **Cutover — seed the fresh ledger from the pre-cutover manifest.** *(the last step: go live)*
   *What:* the fleet boots on a clean ledger (rebuilt from Jira/glab sync). Re-inject the work in flight in the old factory so the fresh fleet resumes it. From the FLEET_PROGRESS cutover manifest (git `a935716~1`), translate the 7 captured cogs:

@@ -23,7 +23,7 @@ Run in one Bash invocation (from your worktree):
 ```bash
 TICKET=$(git branch --show-current | grep -oE 'MADY-[0-9]+' | head -1)
 if [ -z "$TICKET" ]; then
-  echo "no MADY ticket on this branch — a ticketless hand has no sailor to yield to; nothing to do."
+  echo "no ticket on this branch — a ticketless hand has no sailor to yield to; nothing to do."
   exit 0
 fi
 fleetc status --cog hand --ticket "$TICKET" --state concluded \

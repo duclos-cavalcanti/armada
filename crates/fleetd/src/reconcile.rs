@@ -770,7 +770,7 @@ fn stand_down<H: SessionHost>(ledger: &Ledger, host: &H, ticket: &str, kind: &st
 
 /// LaunchCaptain — the live counterpart to converge's `reconcile_foremen` spawn: launch a captain
 /// at the hub (no ticket, no worktree, no Jira), record the ticketless session, and emit
-/// `SessionStarted`. The captain self-identifies its convoy from the `MADY_CONVOY` env var — an
+/// `SessionStarted`. The captain self-identifies its convoy from the `FLEET_CONVOY` env var — an
 /// adapter-agnostic contract (no tmux/vendor leak into the agent), injected as a cmd-prefix so
 /// `TmuxHost` stays generic. `Ok(None)` from the `one_live_captain_per_convoy` lock means the slot
 /// is already held → a benign skip.
@@ -796,7 +796,7 @@ fn launch_captain<H: SessionHost>(ledger: &Ledger, host: &H, hub: &str, convoy: 
         None => return Ok(()),
     };
 
-    let cmd = format!("MADY_CONVOY={convoy} {}", launch_cmd("captain", Some(&hid)));
+    let cmd = format!("FLEET_CONVOY={convoy} {}", launch_cmd("captain", Some(&hid)));
     host.spawn(&tmux_session, Path::new(hub), &cmd)?;
 
     ledger.append(
@@ -954,7 +954,7 @@ fn launch_sailor<H: SessionHost, F: Forge>(
 /// LaunchLookout — the SINGLETON allied-ship review cold-loop. Review ONE allied ship (an MR we don't own).
 /// fleetd has picked the iid (the next unreviewed ally); fresh-poll it, mark it `reviewed = head_sha`
 /// at dispatch (sailor-style — the head this pass reviews), then launch the one lookout AT THE HUB
-/// with the MR's iid injected via `MADY_SHIP` (no worktree — an allied MR isn't ours; `/mr-review`
+/// with the MR's iid injected via `FLEET_SHIP` (no worktree — an allied MR isn't ours; `/mr-review`
 /// fetches by SHA). The `one_live_lookout` lock makes a duplicate a benign skip.
 fn launch_lookout<H: SessionHost, F: Forge>(
     ledger: &Ledger,
@@ -993,7 +993,7 @@ fn launch_lookout<H: SessionHost, F: Forge>(
         None => return Ok(()), // the singleton lock holds → a lookout is already reviewing. Benign skip.
     };
 
-    let cmd = format!("MADY_SHIP={iid} {}", launch_cmd("lookout", Some(&hid)));
+    let cmd = format!("FLEET_SHIP={iid} {}", launch_cmd("lookout", Some(&hid)));
     host.spawn(&lookout_tmux, Path::new(hub), &cmd)?;
     ledger.append(
         &now_rfc3339(),
@@ -2149,7 +2149,7 @@ mod tests {
         let (name, cwd, cmd) = &spawned[0];
         assert_eq!((name.as_str(), cwd.as_str()), ("lookout", "/hub"));
         assert!(
-            cmd.starts_with("MADY_SHIP=77 claude --session-id ") && cmd.ends_with(" --agent lookout"),
+            cmd.starts_with("FLEET_SHIP=77 claude --session-id ") && cmd.ends_with(" --agent lookout"),
             "cmd was: {cmd}"
         );
         // reviewed recorded at the fresh-polled head.
@@ -2579,13 +2579,13 @@ mod tests {
         assert_eq!(live[0].kind, CrewKind::Captain);
         assert!(live[0].ticket.is_none(), "a captain is ticketless");
         assert_eq!(live[0].convoy, Some(ConvoyKey("MADY-100".into())));
-        // launched at the hub (no worktree), convoy identity injected via MADY_CONVOY, no Jira.
+        // launched at the hub (no worktree), convoy identity injected via FLEET_CONVOY, no Jira.
         let spawned = host.spawned.borrow();
         assert_eq!(spawned.len(), 1);
         let (name, cwd, cmd) = &spawned[0];
         assert_eq!((name.as_str(), cwd.as_str()), ("captain-MADY-100", "/hub"));
         assert!(
-            cmd.starts_with("MADY_CONVOY=MADY-100 claude --session-id ") && cmd.ends_with(" --agent captain"),
+            cmd.starts_with("FLEET_CONVOY=MADY-100 claude --session-id ") && cmd.ends_with(" --agent captain"),
             "cmd was: {cmd}"
         );
         assert!(tracker.moves.borrow().is_empty());

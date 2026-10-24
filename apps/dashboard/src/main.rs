@@ -1,4 +1,4 @@
-mod config;
+mod action;
 mod source;
 mod ui;
 
@@ -15,10 +15,9 @@ use std::io::stdout;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crate::config::Config;
 use crate::source::Fleet;
 
-/// A live TUI over the MADY fleet. Reads fleetd's ledger READ-ONLY and renders the
+/// A live TUI over the fleet. Reads fleetd's ledger READ-ONLY and renders the
 /// cog roster, the armada, and the sprint board — refreshing once a second.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -105,7 +104,6 @@ pub struct App {
     pub zoomed: bool,
     pub ledger_path: PathBuf,
     pub fleet: Fleet,
-    pub config: Config,
     pub last_refresh: Instant,
     pub quit: bool,
 }
@@ -126,7 +124,6 @@ impl App {
             convoys_cursor: 0,
             zoomed: false,
             fleet: Fleet::load(&ledger_path),
-            config: Config::load(),
             ledger_path,
             last_refresh: Instant::now(),
             quit: false,
@@ -275,7 +272,6 @@ impl App {
             }
             KeyCode::Char('r') => {
                 self.refresh(true);
-                self.config = Config::load();
                 return;
             }
             KeyCode::Char('y') => {
@@ -322,16 +318,16 @@ impl App {
         }
 
         // Everything else → the action handler, with the focused row's fields.
-        if config::is_reserved(key.code, key.modifiers) {
+        if action::is_reserved(key.code, key.modifiers) {
             return;
         }
-        let Some(key_name) = config::key_name(key.code, key.modifiers) else {
+        let Some(key_name) = action::key_name(key.code, key.modifiers) else {
             return;
         };
         let Some((coordinate, fields)) = self.focused_action() else {
             return;
         };
-        config::spawn_action(&self.config.action_handler, &coordinate, &key_name, fields);
+        action::spawn(&coordinate, &key_name, fields);
     }
 
     fn refresh(&mut self, force: bool) {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Claude Code statusline — ticket/branch | model·effort | context % | cost.
 # Invoked by settings.json statusLine; reads the session JSON on stdin.
-# Requires: jq. Label priority: MADY ticket from branch → branch → folder.
+# Requires: jq. Label priority: ticket from branch → branch → folder.
 
 input=$(cat)
 
@@ -14,7 +14,7 @@ eval "$(jq -r '
   @sh "EFFORT=\(.effort.level // "")"
 ' <<<"$input" 2>/dev/null)" || { printf '??'; exit 0; }
 
-# --- Label: MADY ticket from branch, else branch, else folder ---
+# --- Label: ticket from branch, else branch, else folder ---
 TICKET="" DESC=""
 BRANCH=$(git -C "$DIR" symbolic-ref --short HEAD 2>/dev/null) || true
 if [[ "$BRANCH" =~ (MADY-[0-9]+) ]]; then

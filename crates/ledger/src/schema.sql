@@ -6,7 +6,7 @@
 CREATE TABLE IF NOT EXISTS tickets (
     key         TEXT PRIMARY KEY,                     -- 'MADY-1234'
     convoy      TEXT,                                 -- nullable; adapter-neutral grouping key (NOT a ticket)
-    held        INTEGER NOT NULL DEFAULT 0,           -- mady-hold (0/1)
+    held        INTEGER NOT NULL DEFAULT 0,           -- held off the dispatch frontier (0/1)
     created_at  TEXT NOT NULL,
     -- cached tracker mirror (re-synced; the tracker is the source of truth):
     title       TEXT,

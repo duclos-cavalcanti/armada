@@ -34,8 +34,7 @@ pub struct Config {
     pub telemetry_db: String,
     pub otel_addr: String,
     /// The hub — the main-repo working dir where standing crew (captains, and later
-    /// auditor/shipwright) launch (the bash kit's `$MADY_REPOSITORY`). Captains carry no
-    /// per-ticket worktree, so they run here.
+    /// auditor/shipwright) launch. Captains carry no per-ticket worktree, so they run here.
     pub hub: String,
 }
 
@@ -53,7 +52,7 @@ impl Default for Config {
             gitlab_project: "12345678".into(),
             telemetry_db: wire::default_telemetry_db(),
             otel_addr: "127.0.0.1:4318".into(),
-            hub: std::env::var("MADY_REPOSITORY").unwrap_or_else(|_| ".".into()),
+            hub: ".".into(),
         }
     }
 }

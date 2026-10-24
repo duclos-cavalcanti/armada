@@ -1,11 +1,11 @@
 ---
-description: Create a git worktree + branch for a MADY ticket under the factory's worktrees/ dir, forked off a given base (default origin/master) of the master hub. Pure worktree creation — no Jira lifecycle. The operator or captain runs this when producing a dispatch, then passes the emitted path to `fleetc dispatch --worktree`; fleetd's reconcile spawns the cog there (reconcile never creates worktrees).
+description: Create a git worktree + branch for a ticket under the factory's worktrees/ dir, forked off a given base (default origin/master) of the master hub. Pure worktree creation — no Jira lifecycle. The operator or captain runs this when producing a dispatch, then passes the emitted path to `fleetc dispatch --worktree`; fleetd's reconcile spawns the cog there (reconcile never creates worktrees).
 argument-hint: <ticket> [<fork-base-branch>]
 ---
 
 # Skill: fleet-berth
 
-You are creating the git worktree + branch for a MADY ticket so downstream work
+You are creating the git worktree + branch for a ticket so downstream work
 can start. **This skill is Jira-read-only** — it fetches the ticket's issue-type
 to derive the branch name, refreshes the fork base, then creates the worktree
 under the factory's `worktrees/` dir, forked off the **master hub**. Jira-side

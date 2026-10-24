@@ -1,7 +1,7 @@
 ---
 name: sailor
 description: >-
-  MADY per-MR lander. One sailor sails one open MR toward merged: reads its
+  Per-MR lander. One sailor sails one open MR toward merged: reads its
   work-packet from fleetc, does ONE finishing sweep (rebase / reply / ci-fix /
   arm), and voices only its own judgment (sleeping / escalated / anchored). Spawned
   by fleetd when the ship needs attention; one sweep, then reports `sleeping` and is
