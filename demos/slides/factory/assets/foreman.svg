@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1240 380" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Role 1 — Selection: foreman + the skills it uses">
+  <defs>
+    <marker id="arr"        viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9DA7B3"/></marker>
+    <marker id="arr-red"    viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#F85149"/></marker>
+    <marker id="arr-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#DB6D28"/></marker>
+    <marker id="arr-cyan"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#39C5CF"/></marker>
+    <style><![CDATA[
+      .band       { fill: rgba(255,255,255,0.02); stroke: #30363D; stroke-width: 1; stroke-dasharray: 4 3; }
+      .band-label { fill: #9DA7B3; font: 700 13px sans-serif; letter-spacing: 0.12em; text-transform: uppercase; }
+      .band-sub   { fill: #6E7681; font: 11px sans-serif; }
+      .node       { rx: 8; stroke-width: 1.5; }
+      .node.term       { fill: rgba(219,109,40,0.14); stroke: #DB6D28; }
+      .node.atom       { fill: rgba(63,185,80,0.10);  stroke: #3FB950; }
+      .node.orch       { fill: rgba(88,166,255,0.14); stroke: #58A6FF; }
+      .node.harness    { fill: rgba(125,125,125,0.10); stroke: #9DA7B3; }
+      .node.agent-foreman { fill: rgba(248,81,73,0.18); stroke: #F85149; stroke-width: 2; }
+      .node.converge-note { fill: rgba(57,197,207,0.12); stroke: #39C5CF; stroke-dasharray: 4 3; }
+      .agent-label { fill: #E6EDF3; font: 700 14px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .agent-sub   { fill: #9DA7B3; font: 11px sans-serif; text-anchor: middle; }
+      .label  { fill: #E6EDF3; font: 600 12px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .sub    { fill: #9DA7B3; font: 10px sans-serif; text-anchor: middle; }
+      .note   { fill: #39C5CF; font: 10px sans-serif; text-anchor: middle; }
+      .edge   { fill: none; stroke: #6E7681; stroke-width: 1.4; }
+      .edge.red    { stroke: #F85149; }
+      .edge.orange { stroke: #DB6D28; stroke-width: 2; }
+      .edge.cyan   { stroke: #39C5CF; }
+      .edge.uses-fm  { stroke: #F85149; stroke-width: 1.2; }
+      .edge.handoff  { stroke-dasharray: 2 4; stroke-width: 2; }
+      .edge-label  { fill: #9DA7B3; font: 10px ui-monospace, Menlo, monospace; }
+      .edge-label.red   { fill: #F85149; }
+      .edge-label.cyan  { fill: #39C5CF; }
+    ]]></style>
+  </defs>
+
+  <rect class="band" x="20" y="20" width="1200" height="340"/>
+  <text class="band-label" x="40" y="50">Role 1 · Selection</text>
+  <text class="band-sub"   x="40" y="68">foreman works only from its queue (~/.mady/state/queue/) — classifies each ticket before dispatch, writes a packet, and watches the cogs it dispatched. It does NOT mutate Jira or spawn cogs — converge does.</text>
+
+  <!-- Input + output terminals -->
+  <ellipse cx="100" cy="150" rx="74" ry="26" class="node term"/>
+  <text class="label" x="100" y="148">📋 its queue</text>
+  <text class="sub"   x="100" y="163">state/queue · stays To Do</text>
+
+  <ellipse cx="100" cy="320" rx="80" ry="28" class="node term"/>
+  <text class="label" x="100" y="316">📦 dispatch packet</text>
+  <text class="sub"   x="100" y="331">~/.mady/state/dispatch/</text>
+  <text class="sub"   x="100" y="343">&lt;TICKET&gt;.json · sole output</text>
+
+  <line class="edge orange" x1="100" y1="176" x2="100" y2="290" marker-end="url(#arr-orange)"/>
+
+  <!-- Foreman agent -->
+  <rect class="node agent-foreman" x="260" y="112" width="280" height="76"/>
+  <text class="agent-label" x="400" y="140">🧑‍🏫  foreman</text>
+  <text class="agent-sub"   x="400" y="158">.claude/agents/foreman.md</text>
+  <text class="agent-sub"   x="400" y="174">idle Opus · selection + drain</text>
+
+  <!-- Skills + helpers the foreman uses -->
+  <rect class="node harness" x="600" y="92" width="200" height="44"/>
+  <text class="label" x="700" y="110">foreman/candidate.sh</text>
+  <text class="sub"   x="700" y="126">assemble candidate</text>
+
+  <rect class="node harness" x="820" y="92" width="200" height="44"/>
+  <text class="label" x="920" y="110">foreman/classify.py</text>
+  <text class="sub"   x="920" y="126">READY-CLEAN / -STACKED / WAIT</text>
+
+  <rect class="node harness" x="1040" y="92" width="170" height="44"/>
+  <text class="label" x="1125" y="110">foreman/blocker.sh</text>
+  <text class="sub"   x="1125" y="126">open-MR projection</text>
+
+  <rect class="node harness" x="600" y="160" width="200" height="44"/>
+  <text class="label" x="700" y="178">foreman/dispatch.sh</text>
+  <text class="sub"   x="700" y="194">atomic packet write</text>
+
+  <rect class="node harness" x="820" y="160" width="200" height="44"/>
+  <text class="label" x="920" y="178">foreman/queue.sh</text>
+  <text class="sub"   x="920" y="194">reads state/queue · the board</text>
+
+  <rect class="node atom" x="1040" y="160" width="170" height="44"/>
+  <text class="label" x="1125" y="178">dispatch packet</text>
+  <text class="sub"   x="1125" y="194">.schema.json</text>
+
+  <!-- Uses arrows -->
+  <path class="edge uses-fm" d="M540,134 L600,114" marker-end="url(#arr-red)"/>
+  <path class="edge uses-fm" d="M540,140 L820,114" marker-end="url(#arr-red)"/>
+  <path class="edge uses-fm" d="M540,144 L1040,114" marker-end="url(#arr-red)"/>
+  <path class="edge uses-fm" d="M540,150 L600,182" marker-end="url(#arr-red)"/>
+  <path class="edge uses-fm" d="M540,156 L820,182" marker-end="url(#arr-red)"/>
+  <path class="edge uses-fm" d="M540,162 L1040,182" marker-end="url(#arr-red)"/>
+  <text class="edge-label red" x="556" y="100">uses</text>
+
+  <!-- Foreman → dispatch packet (handoff) -->
+  <path class="edge red handoff" d="M400,188 C400,260 200,308 182,318" marker-end="url(#arr-red)"/>
+  <text class="edge-label red" x="214" y="262">writes packet · per ticket</text>
+
+  <!-- converge.sh note off the packet output -->
+  <rect class="node converge-note" x="240" y="292" width="320" height="56"/>
+  <text class="note" x="400" y="312">🎻 converge.sh (cron) actuates the packet</text>
+  <text class="note" x="400" y="328">claim Jira (To Do → In Progress)</text>
+  <text class="note" x="400" y="342">+ create worktree + spawn worker</text>
+
+  <path class="edge cyan handoff" d="M180,320 L240,320" marker-end="url(#arr-cyan)"/>
+</svg>

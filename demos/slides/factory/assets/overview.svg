@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1480 1140" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="MADY Dark Factory overview — the foreman writes dispatch intent, converge.sh (cron) actuates it (claims Jira, spawns workers and finishers, concludes merged dispatches), agents write filesystem state, the dashboard reads it, GitLab and Jira on the side">
+  <defs>
+    <marker id="arr"        viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9DA7B3"/></marker>
+    <marker id="arr-red"    viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#F85149"/></marker>
+    <marker id="arr-cyan"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#39C5CF"/></marker>
+    <marker id="arr-blue"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#58A6FF"/></marker>
+    <marker id="arr-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#E3B341"/></marker>
+    <marker id="arr-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#BC8CFF"/></marker>
+    <marker id="arr-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#DB6D28"/></marker>
+    <marker id="arr-green"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3FB950"/></marker>
+    <style><![CDATA[
+      .band       { fill: rgba(255,255,255,0.02); stroke: #30363D; stroke-width: 1; stroke-dasharray: 4 3; }
+      .band-label { fill: #9DA7B3; font: 700 13px sans-serif; letter-spacing: 0.12em; text-transform: uppercase; }
+      .band-sub   { fill: #6E7681; font: 11px sans-serif; }
+      .node       { rx: 8; stroke-width: 1.5; }
+      .node.state { fill: rgba(219,109,40,0.16); stroke: #DB6D28; }
+      .node.dashboard { fill: rgba(125,125,125,0.12); stroke: #9DA7B3; stroke-width: 2; }
+      .node.ext   { fill: rgba(63,185,80,0.10); stroke: #3FB950; stroke-width: 1.5; }
+      .node.agent-foreman   { fill: rgba(248,81,73,0.18);  stroke: #F85149; stroke-width: 2; }
+      .node.agent-converge   { fill: rgba(57,197,207,0.16); stroke: #39C5CF; stroke-width: 2; }
+      .node.agent-worker     { fill: rgba(88,166,255,0.18); stroke: #58A6FF; stroke-width: 2; }
+      .node.agent-finisher   { fill: rgba(227,179,65,0.18); stroke: #E3B341; stroke-width: 2; }
+      .node.agent-auditor    { fill: rgba(188,140,255,0.18); stroke: #BC8CFF; stroke-width: 2; }
+      .node.agent-millwright { fill: rgba(63,185,80,0.16);   stroke: #3FB950; stroke-width: 2; }
+      .node.agent-draftsman  { fill: rgba(219,109,40,0.16);  stroke: #DB6D28; stroke-width: 2; }
+      /* NOTE: inspector removed from the diagram (2026-10); still live in agent/factory logic */
+      .node.agent-prover     { fill: rgba(57,197,207,0.12);  stroke: #39C5CF; stroke-width: 2; }
+      .agent-label { fill: #E6EDF3; font: 700 14px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .agent-sub   { fill: #9DA7B3; font: 10px sans-serif; text-anchor: middle; }
+      .label  { fill: #E6EDF3; font: 600 12px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .sub    { fill: #9DA7B3; font: 10px sans-serif; text-anchor: middle; }
+      .dash-label { fill: #E6EDF3; font: 700 28px ui-monospace, Menlo, monospace; text-anchor: middle; letter-spacing: 0.08em; }
+      .dash-sub   { fill: #9DA7B3; font: 12px sans-serif; text-anchor: middle; }
+      .edge   { fill: none; stroke: #6E7681; stroke-width: 1.4; }
+      .edge.cyan      { stroke: #39C5CF; stroke-width: 2; }
+      .edge.intent    { stroke: #F85149; stroke-width: 1.8; stroke-dasharray: 2 4; }
+      .edge.spawn     { stroke: #39C5CF; stroke-width: 2; }
+      .edge.conclude  { stroke: #3FB950; stroke-width: 2; }
+      .edge.write-fm  { stroke: #F85149; stroke-dasharray: 2 4; stroke-width: 1.6; }
+      .edge.write-ov  { stroke: #39C5CF; stroke-dasharray: 2 4; stroke-width: 1.6; }
+      .edge.write-wk  { stroke: #58A6FF; stroke-dasharray: 2 4; stroke-width: 1.6; }
+      .edge.write-sv  { stroke: #E3B341; stroke-dasharray: 2 4; stroke-width: 1.6; }
+      .edge.read      { stroke: #9DA7B3; stroke-dasharray: 5 3; stroke-width: 1.6; }
+      .edge.ext       { stroke: #3FB950; stroke-dasharray: 5 3; stroke-width: 1.5; }
+      .edge-label  { fill: #9DA7B3; font: 10px ui-monospace, Menlo, monospace; }
+      .edge-label.cyan  { fill: #39C5CF; }
+      .edge-label.red   { fill: #F85149; }
+      .edge-label.green { fill: #3FB950; }
+    ]]></style>
+  </defs>
+
+  <!-- ============ BAND BACKGROUNDS ============ -->
+  <rect class="band" x="20"  y="20"   width="1140" height="560"/>
+  <rect class="band" x="20"  y="600"  width="1440" height="300"/>
+  <rect class="band" x="20"  y="920"  width="1440" height="200"/>
+  <!-- External services band (right column, alongside agents) -->
+  <rect class="band" x="1180" y="20"  width="280"  height="560"/>
+
+  <text class="band-label" x="40" y="50">① Agents · intent → actuation</text>
+  <text class="band-sub"   x="40" y="68">the foreman writes dispatch intent; converge.sh (cron) is the actuation layer that spawns workers + finishers and reconciles Jira. auditor + millwright run parallel (run.sh); draftsman + prover are on-demand.</text>
+
+  <text class="band-label" x="1200" y="50">External</text>
+  <text class="band-sub"   x="1200" y="68">reached via glab + jira-cli / MCP</text>
+
+  <text class="band-label" x="40" y="630">② Filesystem · ~/.mady/state/</text>
+  <text class="band-sub"   x="40" y="648">atomic schema-validated JSON snapshots — agents write, the dashboard reads</text>
+
+  <text class="band-label" x="40" y="950">③ Dashboard</text>
+  <text class="band-sub"   x="40" y="968">single ratatui TUI binary — reads the filesystem cross-section live</text>
+
+  <!-- ================================================================ -->
+  <!-- ① AGENTS                                                          -->
+  <!-- ================================================================ -->
+
+  <!-- Queue — the foreman's input board (~/.mady/state/queue/); the foreman works only from this -->
+  <rect class="node state" x="315" y="84" width="200" height="64"/>
+  <text class="label" x="415" y="108">📋 queue/</text>
+  <text class="sub"   x="415" y="126">state/queue · the board</text>
+  <text class="sub"   x="415" y="140" style="fill:#6E7681">foreman works from it</text>
+
+  <!-- foreman reads its queue -->
+  <path class="edge read" d="M515,116 L575,116" marker-end="url(#arr)"/>
+  <text class="edge-label" x="545" y="108" style="text-anchor:middle">reads</text>
+
+  <!-- Foreman (intent producer + escalation drain) — top of the spine: the lead character -->
+  <rect class="node agent-foreman" x="575" y="80" width="250" height="84"/>
+  <text class="agent-label" x="700" y="110" style="font-size:16px">🧑‍🏫  foreman</text>
+  <text class="agent-sub"   x="700" y="130">intent + drain</text>
+  <text class="agent-sub"   x="700" y="145">evaluates tickets · writes dispatch packets</text>
+  <text class="agent-sub"   x="700" y="158" style="fill:#6E7681">no Jira writes · no spawns · no tick loop</text>
+
+  <!-- converge.sh (mechanical actuation loop — sits below the foreman, cron, not an agent) -->
+  <rect class="node agent-converge" x="560" y="214" width="280" height="98"/>
+  <text class="agent-label" x="700" y="244">🎻  converge.sh (cron)</text>
+  <text class="agent-sub"   x="700" y="264">mechanical actuation loop</text>
+  <text class="agent-sub"   x="700" y="279">reads dispatch/ + workers/ + finishers/</text>
+  <text class="agent-sub"   x="700" y="293">claims Jira · spawns crew · concludes</text>
+  <text class="agent-sub"   x="700" y="305" style="fill:#6E7681">To&#160;Do→In&#160;Progress→In&#160;QA→Done</text>
+
+  <!-- Worker (spawned by converge.sh) -->
+  <rect class="node agent-worker" x="500" y="380" width="220" height="78"/>
+  <text class="agent-label" x="610" y="408">👷  worker</text>
+  <text class="agent-sub"   x="610" y="426">one-shot per ticket</text>
+  <text class="agent-sub"   x="610" y="440">implements · opens draft MR</text>
+  <text class="agent-sub"   x="610" y="453" style="fill:#6E7681">concludes → converge.sh reaps</text>
+
+  <!-- Finisher (spawned by converge.sh from concluded workers) -->
+  <rect class="node agent-finisher" x="780" y="380" width="220" height="78"/>
+  <text class="agent-label" x="890" y="408">🦺  finisher</text>
+  <text class="agent-sub"   x="890" y="426">one per MR</text>
+  <text class="agent-sub"   x="890" y="440">rebases · CI-fixes · arms MWPS</text>
+  <text class="agent-sub"   x="890" y="453" style="fill:#6E7681">merged → converge.sh concludes</text>
+
+  <!-- Auditor (parallel, small) -->
+  <rect class="node agent-auditor" x="80" y="150" width="200" height="60"/>
+  <text class="agent-label" x="180" y="176">🕵️  auditor</text>
+  <text class="agent-sub"   x="180" y="194">parallel singleton · reviews peer MRs</text>
+
+  <!-- Millwright (parallel, spawned at run.sh — kit machinery expert) -->
+  <rect class="node agent-millwright" x="80" y="228" width="200" height="60"/>
+  <text class="agent-label" x="180" y="252">🔧  millwright</text>
+  <text class="agent-sub"   x="180" y="268">parallel · spawned at run.sh</text>
+  <text class="agent-sub"   x="180" y="282">the kit's own machinery</text>
+
+  <!-- Draftsman (expert — design canon, drafts the epics the foreman delivers) -->
+  <rect class="node agent-draftsman" x="80" y="306" width="200" height="60"/>
+  <text class="agent-label" x="180" y="330">🖋  draftsman</text>
+  <text class="agent-sub"   x="180" y="346">expert · design canon · grooming</text>
+  <text class="agent-sub"   x="180" y="360">drafts epic DAGs for the foreman</text>
+
+  <!-- Prover (expert — live conformance on dev ephemerals) -->
+  <rect class="node agent-prover" x="80" y="384" width="200" height="60"/>
+  <text class="agent-label" x="180" y="408">🧪  prover</text>
+  <text class="agent-sub"   x="180" y="424">expert · on-demand · dev ephemerals</text>
+  <text class="agent-sub"   x="180" y="438">proves deployed conformance vs spec</text>
+
+  <!-- draftsman → foreman : the epic it drafts -->
+  <path class="edge" d="M280,322 C420,300 480,190 570,138" marker-end="url(#arr-orange)" style="stroke:#DB6D28;stroke-dasharray:5 3;stroke-width:1.6"/>
+  <text class="edge-label" x="430" y="250" style="fill:#DB6D28">epic</text>
+
+  <!-- foreman → converge.sh : dispatch intent (top-down — foreman sits above the actuator) -->
+  <path class="edge intent" d="M700,164 L700,214" marker-end="url(#arr-red)"/>
+  <text class="edge-label red" x="712" y="194">dispatch intent (no spawn / no Jira)</text>
+
+  <!-- converge.sh → worker : spawns -->
+  <path class="edge spawn" d="M650,312 C645,340 615,365 610,380" marker-end="url(#arr-cyan)"/>
+  <text class="edge-label cyan" x="636" y="340">spawns</text>
+
+  <!-- converge.sh → finisher : spawns from concluded worker -->
+  <path class="edge spawn" d="M790,312 C815,340 875,365 890,380" marker-end="url(#arr-cyan)"/>
+  <text class="edge-label cyan" x="900" y="342">spawns (from concluded worker)</text>
+
+  <!-- worker → converge.sh : concluded (feedback) -->
+  <path class="edge cyan" d="M555,380 C555,355 600,330 635,312" marker-end="url(#arr-cyan)" style="stroke-dasharray:4 3"/>
+  <text class="edge-label cyan" x="520" y="342" style="text-anchor:end">concluded</text>
+
+  <!-- finisher → converge.sh : merged (terminal) -->
+  <path class="edge conclude" d="M955,380 C965,355 880,325 838,312" marker-end="url(#arr-green)"/>
+  <text class="edge-label green" x="965" y="372">merged → conclude</text>
+
+  <!-- ===== External services column ===== -->
+  <rect class="node ext" x="1210" y="130" width="220" height="64"/>
+  <text class="label" x="1320" y="158">GitLab</text>
+  <text class="sub"   x="1320" y="176">MRs · pipelines · merge trains</text>
+  <text class="sub"   x="1320" y="188" style="fill:#6E7681">via glab</text>
+
+  <rect class="node ext" x="1210" y="280" width="220" height="64"/>
+  <text class="label" x="1320" y="308">Jira</text>
+  <text class="sub"   x="1320" y="326">MADY tickets · status lanes</text>
+  <text class="sub"   x="1320" y="338" style="fill:#6E7681">via jira-cli / MCP</text>
+
+  <!-- converge.sh ↔ Jira : claims + concludes -->
+  <path class="edge ext" d="M840,262 C1000,265 1090,290 1210,300" marker-end="url(#arr-green)"/>
+  <text class="edge-label green" x="1015" y="270">claim · transition · conclude</text>
+
+  <!-- finisher ↔ GitLab -->
+  <path class="edge ext" d="M1000,400 C1120,360 1140,220 1210,180" marker-end="url(#arr-green)"/>
+  <text class="edge-label" x="1120" y="300" style="fill:#3FB950">rebase · CI · arm MWPS</text>
+
+  <!-- worker → GitLab (opens draft MR) -->
+  <path class="edge ext" d="M720,395 C1000,330 1100,230 1210,168" marker-end="url(#arr-green)"/>
+  <text class="edge-label" x="900" y="360" style="fill:#3FB950">draft MR</text>
+
+  <!-- ================================================================ -->
+  <!-- ② FILESYSTEM — ~/.mady/state/                                     -->
+  <!-- ================================================================ -->
+
+  <!-- foreman dispatch record (packets only; resolutions live on the drain surface, no status drop of its own) -->
+  <rect class="node state" x="80" y="700" width="230" height="80"/>
+  <text class="label" x="195" y="722">dispatch/&lt;T&gt;.json</text>
+  <text class="sub"   x="195" y="740">foreman's dispatch packets</text>
+  <text class="sub"   x="195" y="756">one per claimed ticket · no status drop</text>
+  <text class="sub"   x="195" y="772" style="fill:#6E7681">written by foreman · read by converge.sh</text>
+
+  <!-- converge.sh state -->
+  <rect class="node state" x="360" y="700" width="230" height="80"/>
+  <text class="label" x="475" y="722">foreman.json</text>
+  <text class="sub"   x="475" y="740">jira.json  ·  mrs.json (cron caches)</text>
+  <text class="sub"   x="475" y="756">foreman.jsonl history</text>
+  <text class="sub"   x="475" y="772" style="fill:#6E7681">converge.sh actuation ledger + reconciliation</text>
+
+  <!-- worker state -->
+  <rect class="node state" x="640" y="700" width="230" height="80"/>
+  <text class="label" x="755" y="722">workers/&lt;T&gt;.json</text>
+  <text class="sub"   x="755" y="740">workers/&lt;T&gt;.jsonl</text>
+  <text class="sub"   x="755" y="756">escalations/worker-&lt;T&gt;.json</text>
+  <text class="sub"   x="755" y="772" style="fill:#6E7681">status drops</text>
+
+  <!-- finisher state -->
+  <rect class="node state" x="920" y="700" width="230" height="80"/>
+  <text class="label" x="1035" y="722">finishers/&lt;T&gt;.json</text>
+  <text class="sub"   x="1035" y="740">finishers/&lt;T&gt;.jsonl</text>
+  <text class="sub"   x="1035" y="756">escalations/finisher-&lt;T&gt;.json</text>
+  <text class="sub"   x="1035" y="772" style="fill:#6E7681">status drops</text>
+
+  <!-- aux state -->
+  <rect class="node state" x="1200" y="700" width="230" height="80" fill="rgba(125,125,125,0.10)" stroke="#9DA7B3"/>
+  <text class="label" x="1315" y="722">escalations/  ·  resolutions/</text>
+  <text class="sub"   x="1315" y="740">cogs write escalations · foreman drains them</text>
+  <text class="sub"   x="1315" y="756">schema-validated · atomic mktemp + mv</text>
+  <text class="sub"   x="1315" y="772" style="fill:#6E7681">schemas/*.schema.json</text>
+
+  <!-- Agents → state writes -->
+  <path class="edge write-fm" d="M575,164 C350,340 190,520 150,700" marker-end="url(#arr-red)"/>
+  <text class="edge-label red" x="300" y="640">writes</text>
+
+  <path class="edge write-ov" d="M610,312 C540,420 470,560 475,700" marker-end="url(#arr-cyan)"/>
+  <text class="edge-label cyan" x="488" y="560">writes</text>
+
+  <path class="edge write-wk" d="M620,458 C660,540 720,620 740,700" marker-end="url(#arr-blue)"/>
+  <text class="edge-label" x="720" y="600" style="fill:#58A6FF">writes</text>
+
+  <path class="edge write-sv" d="M920,458 C960,540 1010,620 1030,700" marker-end="url(#arr-yellow)"/>
+  <text class="edge-label" x="1035" y="600" style="fill:#E3B341">writes</text>
+
+  <!-- foreman → escalations/resolutions : the drain — reads cog escalations, writes resolution sidecars -->
+  <path class="edge write-fm" d="M825,150 C1080,300 1120,520 1315,700" marker-end="url(#arr-red)"/>
+  <text class="edge-label red" x="1060" y="478">reads escalations · writes resolutions</text>
+
+  <!-- ================================================================ -->
+  <!-- ③ DASHBOARD                                                       -->
+  <!-- ================================================================ -->
+
+  <rect class="node dashboard" x="360" y="980" width="760" height="120"/>
+  <text class="dash-label" x="740" y="1032">DASHBOARD</text>
+  <text class="dash-sub"   x="740" y="1058">ratatui TUI · reads ~/.mady/state/* + tmux ls + crontab</text>
+  <text class="dash-sub"   x="740" y="1076">live cross-section, never writes — details in dashboard/README.md</text>
+
+  <!-- State → dashboard (reads) -->
+  <path class="edge read" d="M195,780 C195,900 360,960 420,980" marker-end="url(#arr)"/>
+  <path class="edge read" d="M475,780 C475,880 520,940 540,980" marker-end="url(#arr)"/>
+  <path class="edge read" d="M755,780 C755,880 760,940 760,980" marker-end="url(#arr)"/>
+  <path class="edge read" d="M1035,780 C1035,880 1060,940 1000,980" marker-end="url(#arr)"/>
+  <path class="edge read" d="M1315,780 C1315,920 1180,960 1120,980" marker-end="url(#arr)"/>
+  <text class="edge-label" x="740" y="942" style="text-anchor:middle">reads</text>
+
+</svg>

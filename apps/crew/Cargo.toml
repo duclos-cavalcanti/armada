@@ -1,0 +1,16 @@
+[package]
+name = "crew"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal ratatui seed for a Rust port of `crew` — a live TUI over registered agent sessions. For now: one draw/poll loop rendering a centered square."
+license = "MIT"
+
+[[bin]]
+name = "crew"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"

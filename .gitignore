@@ -1,0 +1,16 @@
+# Operator run-directives (per-run /loop scratch — ephemera, not doc canon)
+LOOP.md
+
+# Product overlay: worktrees/ is tracked as a dir via its own .gitignore stub
+# (`*` + `!.gitignore` — the dir exists in git, its contents never do).
+
+# Per-developer agent memory — never committed.
+**/.claude/agent-memory/
+
+# Per-machine personal settings overrides — never committed, never stowed
+# (install.sh stow_claude_global ignores it too).
+.claude/settings.local.json
+
+# Rust workspace build output (the fleet daemon — see PLAN.md). Cargo.lock IS
+# committed (the workspace ships binaries).
+/target

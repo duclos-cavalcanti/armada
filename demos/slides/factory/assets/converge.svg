@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1600 640" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" role="img"
+     aria-label="converge.sh per-tick logic: cron fires main() which runs five guarded reconcile steps in order — spawn_workers (claim To Do→In Progress, launch worker), spawn_finishers (launch finisher, In Progress→In QA, reap worker), reconcile_cogs (respawn crashed cogs, sweep stale sidecars), reconcile_foremen (spawn/reap foreman per queue board), conclude_dispatches (merged→Done, roll up parent, reap) — then write_snapshot emits converge.json which the foreman reads, and cron re-runs every 5 minutes; pure mechanics, no LLM, the sole Jira-transition point">
+  <defs>
+    <marker id="arr"       viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9DA7B3"/></marker>
+    <marker id="arr-cyan"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#39C5CF"/></marker>
+    <marker id="arr-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#DB6D28"/></marker>
+    <marker id="arr-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3FB950"/></marker>
+    <style><![CDATA[
+      .node        { rx: 8; stroke-width: 1.5; }
+      .node.entry  { fill: rgba(57,197,207,0.18); stroke: #39C5CF; stroke-width: 2.5; }
+      .node.step   { fill: rgba(57,197,207,0.10); stroke: #39C5CF; }
+      .node.snap   { fill: rgba(57,197,207,0.16); stroke: #39C5CF; stroke-width: 2; }
+      .node.out    { fill: rgba(219,109,40,0.14); stroke: #DB6D28; }
+      .label   { fill: #E6EDF3; font: 700 13px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .sub     { fill: #9DA7B3; font: 10.5px sans-serif; text-anchor: middle; }
+      .dim     { fill: #6E7681; font: 10px sans-serif; text-anchor: middle; }
+      .jira    { fill: #D29922; font: 600 10px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .foot    { fill: #9DA7B3; font: 11px sans-serif; }
+      .foot-dim{ fill: #6E7681; font: 11px sans-serif; }
+      .edge        { fill: none; stroke: #6E7681; stroke-width: 1.4; }
+      .edge.cyan   { stroke: #39C5CF; stroke-width: 2; }
+      .edge.loop   { stroke: #3FB950; stroke-width: 2; stroke-dasharray: 6 4; }
+      .elab        { fill: #9DA7B3; font: 10px ui-monospace, Menlo, monospace; }
+      .elab.green  { fill: #3FB950; }
+    ]]></style>
+  </defs>
+
+  <!-- ===== entry: cron fires the tick ===== -->
+  <rect class="node entry" x="50" y="28" width="288" height="70"/>
+  <text class="label" x="194" y="58">🎻 cron · mady-converge · */5</text>
+  <text class="sub"   x="194" y="80">converge.sh main() — one tick</text>
+
+  <!-- footer messages (top-right empty region) -->
+  <text class="foot"     x="620" y="52">pure mechanics — NO LLM judgement · the SOLE Jira-transition point for dispatched work</text>
+  <text class="foot-dim" x="620" y="74">idempotent + crash-safe · any failed guard/transition → [ANOMALY] in converge.json, retried next tick (never fatal)</text>
+
+  <!-- entry → step 1 -->
+  <path class="edge cyan" d="M194,98 L194,180" marker-end="url(#arr-cyan)"/>
+
+  <!-- ===== the five reconcile steps, in main()'s order ===== -->
+  <!-- 1 spawn_workers -->
+  <rect class="node step" x="50" y="180" width="288" height="160"/>
+  <text class="label" x="194" y="214">① spawn_workers</text>
+  <text class="sub"   x="194" y="246">◈ packet · no worker · tmux dead</text>
+  <text class="sub"   x="194" y="274">→ launch worker in its worktree</text>
+  <text class="jira"  x="194" y="314">Jira: To Do → In Progress</text>
+
+  <!-- 2 spawn_finishers -->
+  <rect class="node step" x="360" y="180" width="288" height="160"/>
+  <text class="label" x="504" y="214">② spawn_finishers</text>
+  <text class="sub"   x="504" y="246">◈ worker state = concluded</text>
+  <text class="sub"   x="504" y="274">→ launch finisher · reap worker</text>
+  <text class="jira"  x="504" y="314">Jira: In Progress → In QA</text>
+
+  <!-- 3 reconcile_cogs -->
+  <rect class="node step" x="670" y="180" width="288" height="160"/>
+  <text class="label" x="814" y="214">③ reconcile_cogs</text>
+  <text class="sub"   x="814" y="246">◈ crashed cog · tmux dead</text>
+  <text class="sub"   x="814" y="274">→ respawn (skip if parked)</text>
+  <text class="dim"   x="814" y="314">↩ sweep orphan sidecars</text>
+
+  <!-- 4 reconcile_foremen -->
+  <rect class="node step" x="980" y="180" width="288" height="160"/>
+  <text class="label" x="1124" y="214">④ reconcile_foremen</text>
+  <text class="sub"   x="1124" y="246">◈ queue board ⇆ session</text>
+  <text class="sub"   x="1124" y="274">→ spawn / reap foreman</text>
+  <text class="dim"   x="1124" y="314">one foreman per queue board</text>
+
+  <!-- 5 conclude_dispatches -->
+  <rect class="node step" x="1290" y="180" width="288" height="160"/>
+  <text class="label" x="1434" y="214">⑤ conclude_dispatches</text>
+  <text class="sub"   x="1434" y="246">◈ finisher merged / closed</text>
+  <text class="sub"   x="1434" y="274">→ reap packet · drops · tmux</text>
+  <text class="jira"  x="1434" y="314">Jira: In QA → Done (+ roll up)</text>
+
+  <!-- step-to-step sequence arrows -->
+  <path class="edge cyan" d="M338,260 L360,260" marker-end="url(#arr-cyan)"/>
+  <path class="edge cyan" d="M648,260 L670,260" marker-end="url(#arr-cyan)"/>
+  <path class="edge cyan" d="M958,260 L980,260" marker-end="url(#arr-cyan)"/>
+  <path class="edge cyan" d="M1268,260 L1290,260" marker-end="url(#arr-cyan)"/>
+
+  <!-- step 5 → write_snapshot -->
+  <path class="edge cyan" d="M1434,340 L1434,400" marker-end="url(#arr-cyan)"/>
+
+  <!-- ===== write_snapshot → converge.json ===== -->
+  <rect class="node snap" x="1290" y="400" width="288" height="96"/>
+  <text class="label" x="1434" y="432">write_snapshot</text>
+  <text class="sub"   x="1434" y="456">compose converge-status JSON</text>
+  <text class="sub"   x="1434" y="478">atomic mktemp+mv · schema-valid</text>
+
+  <rect class="node out" x="900" y="404" width="330" height="88"/>
+  <text class="label" x="1065" y="434">converge.json · .jsonl</text>
+  <text class="sub"   x="1065" y="456">the foreman reads this (cycle-aware)</text>
+  <text class="sub"   x="1065" y="478">active cogs · reconciled · claimed · anomalies</text>
+
+  <path class="edge cyan" d="M1290,448 L1232,448" marker-end="url(#arr-cyan)"/>
+
+  <!-- ===== loop-back: cron re-fires the whole tick ===== -->
+  <path class="edge loop" d="M1065,492 L1065,600 L22,600 L22,63 L44,63" marker-end="url(#arr-green)"/>
+  <text class="elab green" x="545" y="592">↺ cron re-runs the whole tick every */5 — re-derives from disk + tmux + Jira, never double-acts</text>
+</svg>

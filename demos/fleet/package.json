@@ -1,0 +1,22 @@
+{
+  "name": "fleet-viz",
+  "private": true,
+  "type": "module",
+  "description": "Interactive architecture viewer for the MADY fleet itself (fleetd/fleetc/ledger/crew). React Flow; local-only.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@dagrejs/dagre": "^3.0.0",
+    "@xyflow/react": "^12.11.2",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.0",
+    "vite": "^8.1.0",
+    "vite-plugin-singlefile": "^2.3.4"
+  }
+}

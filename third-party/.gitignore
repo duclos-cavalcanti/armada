@@ -1,0 +1,4 @@
+# Ignore everything in this folder except the folder itself (this file keeps it
+# tracked). Drop third-party checkouts / vendored sources here without committing them.
+*
+!.gitignore

@@ -1,0 +1,4 @@
+# Reproducible from package-lock.json / build — never committed.
+node_modules/
+dist/
+splash-page.json

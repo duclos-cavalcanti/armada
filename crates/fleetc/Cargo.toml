@@ -1,0 +1,13 @@
+[package]
+name = "fleetc"
+version = "0.1.0"
+edition = "2021"
+description = "fleetc — the fleet client CLI: the sanctioned write path (verbs → wire → fleetd). PLAN §2.1."
+
+[dependencies]
+domain = { path = "../domain" }
+wire = { path = "../wire" }
+ledger = { path = "../ledger" }
+anyhow = "1"
+serde = "1"
+serde_json = "1"

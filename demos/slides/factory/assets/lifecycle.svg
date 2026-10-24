@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 820"
+     preserveAspectRatio="xMidYMid meet" role="img"
+     aria-label="MADY factory work lifecycle state machine">
+  <defs>
+    <marker id="arr"        viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9DA7B3"/></marker>
+    <marker id="arr-blue"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#58A6FF"/></marker>
+    <marker id="arr-green"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3FB950"/></marker>
+    <marker id="arr-amber"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#D29922"/></marker>
+    <marker id="arr-red"    viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#F85149"/></marker>
+    <marker id="arr-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#BC8CFF"/></marker>
+    <style><![CDATA[
+      .band       { fill: rgba(255,255,255,0.02); stroke: #30363D; stroke-width: 1; stroke-dasharray: 4 3; }
+      .band-label { fill: #9DA7B3; font: 700 13px sans-serif; letter-spacing: 0.12em; }
+      .band-sub   { fill: #6E7681; font: 11px sans-serif; }
+
+      .node               { rx: 8; stroke-width: 1.5; }
+      .node.term          { fill: rgba(219,109,40,0.14); stroke: #DB6D28; }
+      .node.term-final    { fill: rgba(63,185,80,0.22);  stroke: #3FB950; }
+      .node.atom          { fill: rgba(63,185,80,0.10);  stroke: #3FB950; }
+      .node.harness       { fill: rgba(125,125,125,0.10); stroke: #9DA7B3; }
+      .node.tooling       { fill: rgba(188,140,255,0.10); stroke: #BC8CFF; }
+      .node.warn          { fill: rgba(210,153,34,0.12);  stroke: #D29922; }
+      .node.err           { fill: rgba(248,81,73,0.14);   stroke: #F85149; }
+      .node.agent         { stroke-width: 2; }
+      .node.agent-foreman { fill: rgba(248,81,73,0.18);  stroke: #F85149; }
+      .node.agent-worker  { fill: rgba(88,166,255,0.18); stroke: #58A6FF; }
+      .node.agent-finisher{ fill: rgba(227,179,65,0.18); stroke: #E3B341; }
+
+      .label { fill: #E6EDF3; font: 600 12px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .sub   { fill: #9DA7B3; font: 10px sans-serif; text-anchor: middle; }
+
+      .edge         { fill: none; stroke: #6E7681; stroke-width: 1.4; }
+      .edge.blue    { stroke: #58A6FF; }
+      .edge.green   { stroke: #3FB950; }
+      .edge.amber   { stroke: #D29922; }
+      .edge.red     { stroke: #F85149; }
+      .edge.purple  { stroke: #BC8CFF; }
+      .edge.wrap    { stroke-dasharray: 5 3; }
+      .edge.loop    { stroke: #3FB950; stroke-width: 2; stroke-dasharray: 5 3; }
+
+      .edge-label { fill: #9DA7B3; font: 10px ui-monospace, Menlo, monospace; text-anchor: middle; }
+    ]]></style>
+  </defs>
+
+  <!-- ======================= band: the line ======================= -->
+  <rect class="band" x="20" y="50" width="1360" height="240"/>
+  <text class="band-label" x="40" y="80">PRODUCTION — THE LINE</text>
+  <text class="band-sub"   x="40" y="98">one ticket, dispatch to Done · converge.sh (cron) owns every Jira transition</text>
+
+  <!-- GROOMED -->
+  <rect class="node term" x="50" y="130" width="130" height="80"/>
+  <text class="label" x="115" y="158">GROOMED</text>
+  <text class="sub"   x="115" y="176">Jira To Do · DoR</text>
+  <text class="sub"   x="115" y="192">by the draftsman</text>
+
+  <!-- DISPATCHED -->
+  <rect class="node term" x="245" y="130" width="130" height="80"/>
+  <text class="label" x="310" y="158">DISPATCHED</text>
+  <text class="sub"   x="310" y="176">packet + worktree</text>
+  <text class="sub"   x="310" y="192">Jira untouched</text>
+
+  <!-- IMPLEMENTING -->
+  <rect class="node agent agent-worker" x="440" y="130" width="130" height="80"/>
+  <text class="label" x="505" y="158">IMPLEMENTING</text>
+  <text class="sub"   x="505" y="176">Jira In Progress</text>
+  <text class="sub"   x="505" y="192">worker · /mady-implement</text>
+
+  <!-- CONCLUDED -->
+  <rect class="node atom" x="635" y="130" width="130" height="80"/>
+  <text class="label" x="700" y="158">CONCLUDED</text>
+  <text class="sub"   x="700" y="176">reviewed MR open</text>
+  <text class="sub"   x="700" y="192">Jira In QA</text>
+
+  <!-- FINISHING -->
+  <rect class="node agent agent-finisher" x="830" y="130" width="130" height="80"/>
+  <text class="label" x="895" y="158">FINISHING</text>
+  <text class="sub"   x="895" y="176">rebase · threads · CI · arm</text>
+  <text class="sub"   x="895" y="192">in-draft: arming withheld</text>
+
+  <!-- MERGED -->
+  <rect class="node term-final" x="1025" y="130" width="130" height="80"/>
+  <text class="label" x="1090" y="158">MERGED</text>
+  <text class="sub"   x="1090" y="176">GitLab merges</text>
+  <text class="sub"   x="1090" y="192">finisher exits</text>
+
+  <!-- DONE -->
+  <rect class="node term-final" x="1220" y="130" width="130" height="80"/>
+  <text class="label" x="1285" y="158">DONE</text>
+  <text class="sub"   x="1285" y="176">Jira Done</text>
+  <text class="sub"   x="1285" y="192">packet retired</text>
+
+  <!-- main-flow arrows -->
+  <path class="edge blue" d="M180,170 L245,170" marker-end="url(#arr-blue)"/>
+  <text class="edge-label" x="212" y="160">foreman</text>
+
+  <path class="edge blue" d="M375,170 L440,170" marker-end="url(#arr-blue)"/>
+  <text class="edge-label" x="407" y="148">converge</text>
+  <text class="edge-label" x="407" y="160">(cron)</text>
+
+  <path class="edge blue" d="M570,170 L635,170" marker-end="url(#arr-blue)"/>
+  <text class="edge-label" x="602" y="160">worker</text>
+
+  <path class="edge blue" d="M765,170 L830,170" marker-end="url(#arr-blue)"/>
+  <text class="edge-label" x="797" y="160">converge</text>
+
+  <path class="edge blue" d="M960,170 L1025,170" marker-end="url(#arr-blue)"/>
+  <text class="edge-label" x="992" y="160">finisher</text>
+
+  <path class="edge green" d="M1155,170 L1220,170" marker-end="url(#arr-green)"/>
+  <text class="edge-label" x="1187" y="160">converge</text>
+
+  <!-- ==================== band: exceptions ==================== -->
+  <rect class="band" x="20" y="320" width="1360" height="470"/>
+  <text class="band-label" x="40" y="350">EXCEPTIONS &amp; HOLDS</text>
+  <text class="band-sub"   x="40" y="368">escalation · PR cross-check triage · durable drain · park sentinels</text>
+
+  <!-- ESCALATED -->
+  <rect class="node err" x="760" y="400" width="220" height="70"/>
+  <text class="label" x="870" y="428">ESCALATED</text>
+  <text class="sub"   x="870" y="446">escalation file · review embedded</text>
+  <text class="sub"   x="870" y="460">cog parks · ScheduleWakeup(3600)</text>
+
+  <!-- PARKED -->
+  <rect class="node harness" x="1120" y="400" width="220" height="70"/>
+  <text class="label" x="1230" y="428">PARKED</text>
+  <text class="sub"   x="1230" y="446">sentinel · converge holds off</text>
+  <text class="sub"   x="1230" y="460">operator park.sh / pre-MR</text>
+
+  <!-- foreman triage -->
+  <rect class="node agent agent-foreman" x="760" y="540" width="220" height="70"/>
+  <text class="label" x="870" y="568">foreman triage</text>
+  <text class="sub"   x="870" y="586">principal-reviewer cross-check</text>
+  <text class="sub"   x="870" y="600">re-grounds vs master/MR/CI/Jira</text>
+
+  <!-- drain -->
+  <rect class="node warn" x="1060" y="540" width="240" height="70"/>
+  <text class="label" x="1180" y="568">DRAIN</text>
+  <text class="sub"   x="1180" y="586">resolutions/&lt;T&gt;.md first</text>
+  <text class="sub"   x="1180" y="600">then rm escalation · poke cog</text>
+
+  <!-- draftsman -->
+  <rect class="node tooling" x="440" y="690" width="220" height="60"/>
+  <text class="label" x="550" y="714">draftsman</text>
+  <text class="sub"   x="550" y="732">design adjudication · recommends</text>
+
+  <!-- operator -->
+  <rect class="node harness" x="760" y="690" width="220" height="60"/>
+  <text class="label" x="870" y="714">operator</text>
+  <text class="sub"   x="870" y="732">ANDON board · ruling / directive</text>
+
+  <!-- blocker edges: the cog escalates directly (no inspector) -->
+  <path class="edge red" d="M505,210 C505,330 650,398 800,400" marker-end="url(#arr-red)"/>
+  <text class="edge-label" x="620" y="332" style="fill:#F85149">blocker · escalates</text>
+  <path class="edge red" d="M895,210 C895,300 890,350 890,398" marker-end="url(#arr-red)"/>
+  <text class="edge-label" x="905" y="322" style="fill:#F85149">blocker · escalates</text>
+
+  <!-- escalated -> triage -->
+  <path class="edge red" d="M870,470 L870,540" marker-end="url(#arr-red)"/>
+  <text class="edge-label" x="905" y="510" style="fill:#F85149">foreman</text>
+
+  <!-- triage routes -->
+  <path class="edge amber" d="M980,575 L1060,575" marker-end="url(#arr-amber)"/>
+  <text class="edge-label" x="1020" y="563" style="fill:#D29922">REFUTE / REDUCTION</text>
+
+  <path class="edge red" d="M870,610 L870,690" marker-end="url(#arr-red)"/>
+  <text class="edge-label" x="908" y="655" style="fill:#F85149">CONCUR</text>
+
+  <path class="edge purple" d="M760,595 C660,615 610,650 575,690" marker-end="url(#arr-purple)"/>
+  <text class="edge-label" x="640" y="638" style="fill:#BC8CFF">design-natured</text>
+
+  <path class="edge purple" d="M660,722 L760,722" marker-end="url(#arr-purple)"/>
+  <text class="edge-label" x="710" y="712" style="fill:#BC8CFF">recommends</text>
+
+  <path class="edge amber" d="M980,712 C1080,700 1140,660 1168,610" marker-end="url(#arr-amber)"/>
+  <text class="edge-label" x="1090" y="688" style="fill:#D29922">directive</text>
+
+  <!-- drain -> resume -->
+  <path class="edge loop" d="M1185,540 C1210,380 1090,280 1000,213" marker-end="url(#arr-green)"/>
+  <text class="edge-label" x="1215" y="370" style="fill:#3FB950">wake · resume</text>
+  <text class="edge-label" x="1215" y="384" style="fill:#3FB950">(worker / finisher)</text>
+
+  <!-- park edges -->
+  <path class="edge amber wrap" d="M540,210 C700,330 1000,380 1120,428" marker-end="url(#arr-amber)"/>
+  <path class="edge amber wrap" d="M930,210 C1040,300 1140,340 1210,400" marker-end="url(#arr-amber)"/>
+  <text class="edge-label" x="1075" y="312" style="fill:#D29922">park</text>
+
+  <!-- park release -->
+  <path class="edge loop" d="M1335,400 C1360,290 1080,260 962,212" marker-end="url(#arr-green)"/>
+  <text class="edge-label" x="1250" y="270" style="fill:#3FB950">--clear · converge respawns</text>
+</svg>

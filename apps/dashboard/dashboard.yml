@@ -1,0 +1,38 @@
+# MADY dashboard configuration.
+#
+# The dashboard is a generic engine: it ingests `~/.mady/state/`, renders
+# tabs → panes → views, and — on a non-navigation keypress over a focused
+# row — hands the action off to ONE external handler:
+#
+#   <action_handler> <tab/pane/view> <key> <row-field>...
+# e.g.
+#   handler.sh system/foreman/activity enter MADY-123 READY-CLEAN 2026-06-…
+#
+# All action logic lives in that handler (default
+# `bin/features/dashboard/handler.sh`), which owns the (coordinate, key) → action
+# mapping. The dashboard knows nothing about what the actions DO — it only
+# reports which row is focused in which view and which key was pressed.
+# To change/add an action, edit the handler's `case`; to point at your own
+# handler, change `action_handler` below. A leading `~/` is expanded.
+#
+# Reserved keys (cannot be intercepted — they belong to the TUI core):
+#   q, Esc, r, h, l, j, k, Up, Down, ^n, ^p, Tab, S-Tab, 1, 2, 3, 4, 5, s, S, y, Y, space.
+#   (^n / ^p alias Down / Up — walk focus across panes. Tab / S-Tab switch
+#    top-level tabs; h / l cycle the focused pane's sub-views.)
+#   Every other key is forwarded to the handler with the focused
+#   coordinate; an unhandled (coordinate, key) pair is the handler's no-op.
+#
+# Multi-view panes (h / l cycles; the active view shows in the title breadcrumb):
+#   system/foreman — activity · convergence · escalations · scheduler
+#
+# The Tickets tab reads `~/.mady/state/jira.json`, refreshed every 10 min
+# by the `mady-jira-fetch` cron tick that `run.sh` registers on kit boot.
+# Seed the cache manually with one ad-hoc invocation:
+#   ~/.mady/bin/loop/jira-fetch-tick.sh
+#
+# The live config lives at `tooling/mady/dashboard/dashboard.yml`, symlinked into
+# `~/.mady/apps/dashboard/dashboard.yml` by install.sh. Edit either path. Press `r` in
+# the dashboard to reload. To recover from a broken live config:
+#   cp tooling/mady/dashboard/dashboard.default.yml tooling/mady/dashboard/dashboard.yml
+
+action_handler: '~/.mady/apps/dashboard/handler.sh'

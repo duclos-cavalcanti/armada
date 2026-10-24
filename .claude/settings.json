@@ -1,0 +1,119 @@
+{
+  "model": "claude-opus-4-8",
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318",
+    "OTEL_METRIC_EXPORT_INTERVAL": "15000",
+    "OTEL_EXPORTER_OTLP_COMPRESSION": "none"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(glab *)",
+      "Bash(jira issue create:*)",
+      "Bash(tmux *)",
+      "Bash(printenv TMUX)",
+      "mcp__atlassian__*",
+      "mcp__claude_ai_Atlassian_Rovo__*",
+      "Bash(aws cloudformation delete-stack:*)",
+      "Bash(aws cloudformation continue-update-rollback:*)",
+      "Bash(cdk destroy:*)",
+      "mcp__claude_ai_Slack__slack_send_message",
+      "mcp__claude_ai_Slack__slack_read_channel",
+      "mcp__claude_ai_Slack__slack_read_thread"
+    ],
+    "defaultMode": "auto"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/signal.sh SessionStart",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/signal.sh UserPromptSubmit",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/signal.sh Stop",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.claude/scripts/signal.sh Notification",
+            "async": true
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash ~/.claude/scripts/statusline.sh"
+  },
+  "enabledPlugins": {
+    "rust-analyzer-lsp@claude-plugins-official": true,
+    "pyright-lsp@claude-plugins-official": true,
+    "lua-lsp@claude-plugins-official": true,
+    "<redacted>": true,
+    "<redacted>": true
+  },
+  "extraKnownMarketplaces": {
+    "<redacted>": {
+      "source": {
+        "source": "git",
+        "url": "<redacted>"
+      }
+    }
+  },
+  "effortLevel": "high",
+  "autoUpdatesChannel": "latest",
+  "tui": "fullscreen",
+  "voice": {
+    "enabled": true,
+    "mode": "hold"
+  },
+  "skipWorkflowUsageWarning": true,
+  "skipAutoPermissionPrompt": true,
+  "voiceEnabled": true,
+  "autoMode": {
+    "environment": [
+      "$defaults",
+      "<redacted>",
+      "<redacted>",
+      "<redacted>",
+      "<redacted>",
+      "<redacted>",
+      "<redacted>",
+      "<redacted>",
+      "<redacted>",
+      "<redacted>",
+      "<redacted>"
+    ]
+  }
+}

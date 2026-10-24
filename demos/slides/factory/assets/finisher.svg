@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1240 470" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Role 3 — Merge: finisher + the skills it uses">
+  <defs>
+    <marker id="arr"        viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9DA7B3"/></marker>
+    <marker id="arr-blue"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#58A6FF"/></marker>
+    <marker id="arr-amber"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#D29922"/></marker>
+    <marker id="arr-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#E3B341"/></marker>
+    <marker id="arr-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#DB6D28"/></marker>
+    <marker id="arr-cyan"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#39C5CF"/></marker>
+    <style><![CDATA[
+      .band       { fill: rgba(255,255,255,0.02); stroke: #30363D; stroke-width: 1; stroke-dasharray: 4 3; }
+      .band-label { fill: #9DA7B3; font: 700 13px sans-serif; letter-spacing: 0.12em; text-transform: uppercase; }
+      .band-sub   { fill: #6E7681; font: 11px sans-serif; }
+      .node       { rx: 8; stroke-width: 1.5; }
+      .node.term       { fill: rgba(219,109,40,0.14); stroke: #DB6D28; }
+      .node.term-final { fill: rgba(63,185,80,0.22); stroke: #3FB950; }
+      .node.atom       { fill: rgba(63,185,80,0.10);  stroke: #3FB950; }
+      .node.team       { fill: rgba(210,153,34,0.10); stroke: #D29922; stroke-dasharray: 5 3; }
+      .node.orch       { fill: rgba(88,166,255,0.14); stroke: #58A6FF; }
+      .node.agent-finisher { fill: rgba(227,179,65,0.18); stroke: #E3B341; stroke-width: 2; }
+      .node.converge-note { fill: rgba(57,197,207,0.12); stroke: #39C5CF; stroke-dasharray: 4 3; }
+      .agent-label { fill: #E6EDF3; font: 700 14px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .agent-draft { fill: #6E7681; font: 600 10px sans-serif; text-anchor: middle; letter-spacing: 0.1em; }
+      .agent-sub   { fill: #9DA7B3; font: 11px sans-serif; text-anchor: middle; }
+      .label  { fill: #E6EDF3; font: 600 12px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .sub    { fill: #9DA7B3; font: 10px sans-serif; text-anchor: middle; }
+      .note   { fill: #39C5CF; font: 10px sans-serif; text-anchor: middle; }
+      .edge   { fill: none; stroke: #6E7681; stroke-width: 1.4; }
+      .edge.blue   { stroke: #58A6FF; }
+      .edge.amber  { stroke: #D29922; }
+      .edge.yellow { stroke: #E3B341; }
+      .edge.orange { stroke: #DB6D28; stroke-width: 2; }
+      .edge.cyan   { stroke: #39C5CF; }
+      .edge.uses-fn  { stroke: #E3B341; stroke-width: 1.2; }
+      .edge.wrap     { stroke-dasharray: 5 3; }
+      .edge.handoff  { stroke-dasharray: 2 4; stroke-width: 2; }
+      .edge-label  { fill: #9DA7B3; font: 10px ui-monospace, Menlo, monospace; }
+      .edge-label.amber  { fill: #D29922; }
+      .edge-label.yellow { fill: #E3B341; }
+      .edge-label.cyan   { fill: #39C5CF; }
+    ]]></style>
+  </defs>
+
+  <rect class="band" x="20" y="20" width="1200" height="430"/>
+  <text class="band-label" x="40" y="50">Role 3 · Merge</text>
+  <text class="band-sub"   x="40" y="68">finisher — one per MR, spawned by converge.sh (cron) on the worker's concluded signal; walks the punch list every tick until merged</text>
+
+  <!-- converge.sh spawn note -->
+  <rect class="node converge-note" x="40" y="92" width="170" height="46"/>
+  <text class="note" x="125" y="112">🎻 converge.sh spawns</text>
+  <text class="note" x="125" y="128">finisher (on concluded)</text>
+
+  <!-- I/O terminals -->
+  <ellipse cx="125" cy="195" rx="74" ry="26" class="node term"/>
+  <text class="label" x="125" y="193">📤 open MR</text>
+  <text class="sub"   x="125" y="208">undrafted · In Review</text>
+
+  <ellipse cx="125" cy="395" rx="74" ry="26" class="node term-final"/>
+  <text class="label" x="125" y="393">✅ MERGED</text>
+  <text class="sub"   x="125" y="408">terminal state · exits</text>
+
+  <path class="edge cyan handoff" d="M125,138 L125,169" marker-end="url(#arr-cyan)"/>
+  <line class="edge orange" x1="125" y1="221" x2="125" y2="369" marker-end="url(#arr-orange)"/>
+
+  <!-- Finisher agent -->
+  <rect class="node agent-finisher" x="260" y="155" width="280" height="76"/>
+  <text class="agent-label" x="400" y="183">🦺  finisher</text>
+  <text class="agent-sub"   x="400" y="215">.claude/agents/finisher.md</text>
+  <text class="agent-sub"   x="400" y="229">persistent Opus · one per MR</text>
+
+  <!-- /mady-finish (orchestrator) -->
+  <rect class="node orch" x="600" y="100" width="220" height="56"/>
+  <text class="label" x="710" y="124">/mady-finish</text>
+  <text class="sub"   x="710" y="140">punch-list orchestrator</text>
+
+  <!-- atomic primitives -->
+  <rect class="node atom" x="850" y="90" width="200" height="40"/>
+  <text class="label" x="950" y="106">/mady-mr-rebase</text>
+  <text class="sub"   x="950" y="121">server-side UI rebase</text>
+
+  <rect class="node atom" x="850" y="136" width="200" height="40"/>
+  <text class="label" x="950" y="152">/mady-mr-reply</text>
+  <text class="sub"   x="950" y="167">count-gated reply</text>
+
+  <rect class="node atom" x="850" y="182" width="200" height="40"/>
+  <text class="label" x="950" y="198">/mady-ci-fix</text>
+  <text class="sub"   x="950" y="213">classify + fix</text>
+
+  <rect class="node team" x="1080" y="136" width="140" height="40"/>
+  <text class="label" x="1150" y="160">/mr-reply [team]</text>
+
+  <rect class="node team" x="1080" y="182" width="140" height="40"/>
+  <text class="label" x="1150" y="206">/ci-failures [team]</text>
+
+  <!-- Arm MWPS -->
+  <rect class="node atom" x="600" y="250" width="450" height="44"/>
+  <text class="label" x="825" y="268">Arm MWPS · aggressively (every tick if !draft &amp;&amp; !armed)</text>
+  <text class="sub"   x="825" y="284">merge_when_pipeline_succeeds · GitLab gates on pipeline / threads</text>
+
+  <!-- finisher-status schema -->
+  <rect class="node atom" x="820" y="310" width="400" height="44"/>
+  <text class="label" x="1020" y="328">schemas/finisher-status.schema.json</text>
+  <text class="sub"   x="1020" y="344">state ∈ {started, finishing, merged, closed, escalated}</text>
+
+  <!-- Finisher uses arrows -->
+  <path class="edge uses-fn" d="M540,178 C570,128 580,128 600,128" marker-end="url(#arr-yellow)"/>
+  <path class="edge uses-fn" d="M540,186 C570,108 580,108 850,108" marker-end="url(#arr-yellow)"/>
+  <path class="edge uses-fn" d="M540,192 C570,154 580,154 850,154" marker-end="url(#arr-yellow)"/>
+  <path class="edge uses-fn" d="M540,198 C570,200 580,200 850,200" marker-end="url(#arr-yellow)"/>
+  <path class="edge uses-fn" d="M540,206 C570,270 580,270 600,270" marker-end="url(#arr-yellow)"/>
+  <text class="edge-label yellow" x="556" y="164">uses</text>
+
+  <!-- /mady-finish fans out -->
+  <path class="edge blue" d="M820,118 L850,108" marker-end="url(#arr-blue)"/>
+  <path class="edge blue" d="M820,126 L850,154" marker-end="url(#arr-blue)"/>
+  <path class="edge blue" d="M820,134 L850,200" marker-end="url(#arr-blue)"/>
+  <path class="edge blue" d="M770,156 L760,250" marker-end="url(#arr-blue)"/>
+
+  <!-- atomic primitives wrap team skills -->
+  <path class="edge amber wrap" d="M1050,154 L1080,154" marker-end="url(#arr-amber)"/>
+  <path class="edge amber wrap" d="M1050,200 L1080,200" marker-end="url(#arr-amber)"/>
+  <text class="edge-label amber" x="1054" y="148">wraps</text>
+
+  <!-- finisher → MERGED (terminal observation) -->
+  <path class="edge yellow handoff" d="M400,231 C300,310 200,375 199,392" marker-end="url(#arr-yellow)"/>
+  <text class="edge-label yellow" x="232" y="300">observes merged · records state</text>
+
+  <!-- converge.sh concludes Jira note -->
+  <rect class="node converge-note" x="240" y="400" width="320" height="36"/>
+  <text class="note" x="400" y="422">🎻 converge.sh concludes: Jira → Done</text>
+  <path class="edge cyan handoff" d="M199,402 L240,412" marker-end="url(#arr-cyan)"/>
+</svg>

@@ -1,0 +1,11 @@
+[package]
+name = "ledger"
+version = "0.1.0"
+edition = "2021"
+description = "fleet ledger — the SQLite persistence adapter (PLAN §3.1). Single writer: fleetd."
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+domain = { path = "../domain" }
+anyhow = "1"
+serde_json = "1"

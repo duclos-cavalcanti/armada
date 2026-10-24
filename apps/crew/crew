@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# crew — entry/orchestrator: a thin shell over the crew binary.
+#
+# The binary REFLECTS and RESOLVES (pure: reads the registry/state, resolves a
+# jump target, renders the status line). This script performs the tmux
+# SIDE-EFFECTS the binary deliberately avoids — creating/switching sessions,
+# fzf picking, opening $EDITOR. Runtime data (registry, state/) lives alongside
+# in this dir; the state producer (signal) stays bash.
+#
+#   crew add                 bookmark the current session
+#   crew go <n|name|next|prev>  jump to a bookmark (create at its path if absent)
+#   crew pick                fzf-pick a bookmark and jump
+#   crew list                plain bookmarks, one per line
+#   crew rm <n|name>         drop a bookmark
+#   crew edit                edit the registry in $EDITOR
+#   crew tmux-statusline     emit a one-line tmux-formatted crew summary
+#   crew signal <event>      map a Claude hook event -> state for this session
+
+DIR=$(cd "$(dirname "$0")" && pwd)
+
+BIN="$DIR/target/release/crew"
+CREW_FILE="$DIR/registry"
+CREW_STATE="$DIR/state"
+
+. "$DIR/lib/signal.sh"
+
+crew_go() {
+    local entry name path
+    entry=$("$BIN" go "$1") || return 0
+    [ -n "$entry" ] || { tmux display "crew: nothing to jump to"; return 0; }
+    name=${entry%%=*}
+    path=${entry#*=}
+    tmux has-session -t "=$name" 2>/dev/null || tmux new-session -ds "$name" -c "$path"
+    tmux switch-client -t "=$name"
+}
+
+crew_pick() {
+    local name
+    name=$("$BIN" list | fzf --reverse --prompt='crew> ') || return 0
+    [ -n "$name" ] || return 0
+    crew_go "$name"
+}
+
+crew_edit() {
+    "${EDITOR:-vi}" "$CREW_FILE"
+}
+
+case "$1" in
+    add)             "$BIN" add ;;
+    go)              crew_go "$2" ;;
+    pick)            crew_pick ;;
+    list)            "$BIN" list ;;
+    rm)              "$BIN" rm "$2" ;;
+    edit)            crew_edit ;;
+    tmux-statusline) "$BIN" status --format tmux ;;
+    signal)          crew_signal "$2" ;;
+    *)
+        echo "usage: crew {add|go <n|name|next|prev>|pick|list|rm <n|name>|edit|tmux-statusline|signal <event>}" >&2
+        exit 2
+        ;;
+esac

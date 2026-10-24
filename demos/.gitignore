@@ -1,0 +1,8 @@
+node_modules
+dist
+.DS_Store
+
+# open-slide bundled skills — regenerated from the installed package by
+# `sync:skills` (wired as a postinstall), so not committed per deck.
+.agents/skills/
+.claude/skills/

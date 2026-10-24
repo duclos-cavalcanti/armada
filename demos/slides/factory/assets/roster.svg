@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1280 940" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="MADY agent roster — the code-merging lifecycle (foreman, worker, finisher, bound by converge.sh), the parallel auditor reviewing peer MRs, and the expert tier (draftsman, millwright, prover)">
+  <defs>
+    <marker id="arr"        viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9DA7B3"/></marker>
+    <marker id="arr-red"    viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#F85149"/></marker>
+    <marker id="arr-cyan"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#39C5CF"/></marker>
+    <marker id="arr-blue"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#58A6FF"/></marker>
+    <marker id="arr-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#E3B341"/></marker>
+    <marker id="arr-green"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3FB950"/></marker>
+    <marker id="arr-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#DB6D28"/></marker>
+    <style><![CDATA[
+      .band       { fill: rgba(255,255,255,0.02); stroke: #30363D; stroke-width: 1; stroke-dasharray: 4 3; }
+      .band-label { fill: #9DA7B3; font: 700 13px sans-serif; letter-spacing: 0.10em; text-transform: uppercase; }
+      .band-sub   { fill: #6E7681; font: 11px sans-serif; }
+      .node       { rx: 8; stroke-width: 2; }
+      .node.term       { fill: rgba(219,109,40,0.14); stroke: #DB6D28; stroke-width: 1.5; }
+      .node.term-final { fill: rgba(63,185,80,0.20);  stroke: #3FB950; }
+      .n-foreman   { fill: rgba(248,81,73,0.18);  stroke: #F85149; }
+      .n-worker    { fill: rgba(88,166,255,0.18); stroke: #58A6FF; }
+      .n-finisher  { fill: rgba(227,179,65,0.18); stroke: #E3B341; }
+      .n-converge  { fill: rgba(57,197,207,0.14); stroke: #39C5CF; }
+      .n-auditor   { fill: rgba(188,140,255,0.16); stroke: #BC8CFF; }
+      .n-draftsman { fill: rgba(219,109,40,0.16); stroke: #DB6D28; }
+      .n-millwright{ fill: rgba(63,185,80,0.16);  stroke: #3FB950; }
+      .n-prover    { fill: rgba(57,197,207,0.14); stroke: #39C5CF; }
+      .label   { fill: #E6EDF3; font: 700 14px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .role    { fill: #E6EDF3; font: 600 12px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .sub     { fill: #9DA7B3; font: 10.5px sans-serif; text-anchor: middle; }
+      .dim     { fill: #6E7681; font: 10px sans-serif; text-anchor: middle; }
+      .edge        { fill: none; stroke: #6E7681; stroke-width: 1.6; }
+      .edge.orange { stroke: #DB6D28; stroke-width: 2; }
+      .edge.cyan   { stroke: #39C5CF; stroke-width: 2; }
+      .edge.green  { stroke: #3FB950; stroke-width: 2; }
+      .edge.spawn  { stroke: #39C5CF; stroke-width: 2; stroke-dasharray: 5 3; }
+      .elab   { fill: #9DA7B3; font: 10px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .elab.cyan { fill: #39C5CF; }
+    ]]></style>
+  </defs>
+
+  <!-- ===== BAND A — lifecycle ===== -->
+  <rect class="band" x="20" y="44" width="1240" height="420"/>
+  <text class="band-label" x="40" y="70">Code-merging lifecycle · R1 → R2 → R3</text>
+  <text class="band-sub"   x="40" y="88">a hand-off chain, bound by converge.sh (cron, not an agent).</text>
+
+  <!-- terminals row -->
+  <ellipse cx="140" cy="150" rx="88" ry="30" class="node term"/>
+  <text class="role" x="140" y="147">📋 Jira ticket</text>
+  <text class="sub"  x="140" y="164">MADY-NNN · To Do</text>
+
+  <ellipse cx="470" cy="150" rx="92" ry="30" class="node term"/>
+  <text class="role" x="470" y="147">📦 dispatch packet</text>
+  <text class="sub"  x="470" y="164">~/.mady/state/dispatch/</text>
+
+  <ellipse cx="800" cy="150" rx="80" ry="30" class="node term"/>
+  <text class="role" x="800" y="147">📤 open MR</text>
+  <text class="sub"  x="800" y="164">undrafted · In Review</text>
+
+  <ellipse cx="1120" cy="150" rx="82" ry="30" class="node term-final"/>
+  <text class="role" x="1120" y="147">✅ MERGED</text>
+  <text class="sub"  x="1120" y="164">Jira → Done</text>
+
+  <path class="edge orange" d="M228,150 L378,150" marker-end="url(#arr-orange)"/>
+  <path class="edge cyan"   d="M562,150 L720,150" marker-end="url(#arr-cyan)"/>
+  <path class="edge yellow" d="M880,150 L1038,150" marker-end="url(#arr-green)" style="stroke:#E3B341"/>
+
+  <!-- agents row -->
+  <rect class="node n-foreman" x="44" y="230" width="240" height="96"/>
+  <text class="label" x="164" y="262">🧑‍🏫  foreman  ·  R1</text>
+  <text class="sub"   x="164" y="282">operator console — dispatch</text>
+  <text class="sub"   x="164" y="298">+ resolution/escalation drain</text>
+  <text class="dim"   x="164" y="316">idle · chat-driven · writes packets</text>
+
+  <rect class="node n-worker" x="352" y="230" width="236" height="96"/>
+  <text class="label" x="470" y="262">👷  worker  ·  R2</text>
+  <text class="sub"   x="470" y="282">one-shot per ticket</text>
+  <text class="sub"   x="470" y="298">/mady-implement → draft MR</text>
+  <text class="dim"   x="470" y="316">spawned by converge.sh</text>
+
+  <rect class="node n-finisher" x="682" y="230" width="236" height="96"/>
+  <text class="label" x="800" y="262">🦺  finisher  ·  R3</text>
+  <text class="sub"   x="800" y="282">one per MR — punch list</text>
+  <text class="sub"   x="800" y="298">rebase · reply · CI · arm MWPS</text>
+  <text class="dim"   x="800" y="316">spawned on worker concluded</text>
+
+  <!-- ticket->foreman, foreman->packet -->
+  <path class="edge orange" d="M140,180 L155,230" marker-end="url(#arr-orange)"/>
+  <path class="edge orange" d="M270,258 C330,220 400,192 430,176" marker-end="url(#arr-orange)"/>
+  <text class="elab" x="360" y="212">writes packet</text>
+  <!-- packet->worker (via converge), worker->MR -->
+  <path class="edge blue" d="M470,230 L470,180" marker-end="url(#arr)" style="stroke:#58A6FF"/>
+  <path class="edge blue" d="M588,262 C660,220 730,190 760,176" marker-end="url(#arr)" style="stroke:#58A6FF"/>
+  <text class="elab" x="680" y="214">opens MR</text>
+  <!-- MR->finisher, finisher->merged -->
+  <path class="edge yellow" d="M800,230 L800,180" marker-end="url(#arr)" style="stroke:#E3B341"/>
+  <path class="edge green" d="M918,262 C1000,222 1070,192 1100,178" marker-end="url(#arr-green)"/>
+  <text class="elab" x="1020" y="214">merges</text>
+  <!-- converge strip -->
+  <rect class="node n-converge" x="44" y="374" width="874" height="66"/>
+  <text class="label" x="481" y="402">🎻  converge.sh (cron · mady-converge · */5)</text>
+  <text class="sub"   x="481" y="422">actuates packets · claims Jira · spawns + reaps worker/finisher · reconciles crashes · concludes Jira → Done  (NOT an agent)</text>
+  <path class="edge spawn" d="M300,374 L440,326" marker-end="url(#arr-cyan)"/>
+  <path class="edge spawn" d="M640,374 L770,326" marker-end="url(#arr-cyan)"/>
+  <text class="elab cyan" x="300" y="360">spawns / reaps</text>
+
+  <!-- ===== BAND B — parallel ===== -->
+  <rect class="band" x="20" y="484" width="1240" height="120"/>
+  <text class="band-label" x="40" y="510">Parallel</text>
+  <text class="band-sub"   x="40" y="528">singleton, spawned at run.sh — orthogonal to the lifecycle above.</text>
+
+  <rect class="node n-auditor" x="44" y="536" width="300" height="56"/>
+  <text class="label" x="194" y="562">🕵️  auditor</text>
+  <text class="sub"   x="194" y="580">reviews PEER MRs by SHA (not our own work)</text>
+
+  <text class="dim" x="700" y="558" style="text-anchor:start">The auditor is the review counterpart to the prover: it reviews an MR's <tspan style="fill:#9DA7B3">diff</tspan>,</text>
+  <text class="dim" x="700" y="576" style="text-anchor:start">while the prover (below) exercises the <tspan style="fill:#9DA7B3">running deployed system</tspan>.</text>
+
+  <!-- ===== BAND C — experts ===== -->
+  <rect class="band" x="20" y="624" width="1240" height="286"/>
+  <text class="band-label" x="40" y="650">Expert tier · standing domain authorities</text>
+  <text class="band-sub"   x="40" y="668">a separate concept from R1–R3 — consulted for judgment, not part of the merge chain.</text>
+
+  <rect class="node n-draftsman" x="60" y="700" width="360" height="176"/>
+  <text class="label" x="240" y="734">✏️  draftsman</text>
+  <text class="sub"   x="240" y="756">the design canon — docs/ ADDs</text>
+  <text class="sub"   x="240" y="774">grooms tickets · designs epic DAGs</text>
+  <text class="sub"   x="240" y="792">adjudicates design escalations</text>
+  <text class="dim"   x="240" y="814">authors Jira, not code/docs (via MR)</text>
+  <text class="dim"   x="240" y="832">on-demand · standing (long session)</text>
+
+  <rect class="node n-millwright" x="460" y="700" width="360" height="176"/>
+  <text class="label" x="640" y="734">🔧  millwright</text>
+  <text class="sub"   x="640" y="756">the kit's OWN machinery</text>
+  <text class="sub"   x="640" y="774">bin/ · adapters · agents · skills</text>
+  <text class="sub"   x="640" y="792">keeps the factory's tooling sound</text>
+  <text class="dim"   x="640" y="814">spawned at run.sh (kit-dev console)</text>
+  <text class="dim"   x="640" y="832">idle · chat-driven, like the foreman</text>
+
+  <rect class="node n-prover" x="860" y="700" width="360" height="176"/>
+  <text class="label" x="1040" y="734">🧪  prover</text>
+  <text class="sub"   x="1040" y="756">live-product conformance</text>
+  <text class="sub"   x="1040" y="774">deploys → drives API → verifies</text>
+  <text class="sub"   x="1040" y="792">→ tears down (dev ephemeral only)</text>
+  <text class="dim"   x="1040" y="814">runtime counterpart to the auditor</text>
+  <text class="dim"   x="1040" y="832">on-demand · operator-launched</text>
+</svg>

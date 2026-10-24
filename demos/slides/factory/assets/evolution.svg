@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1240 600" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Evolution of the factory: a single useful skill grows into a coordinated set of skills and scripts, which is then encapsulated as an agent">
+  <defs>
+    <marker id="arr"       viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9DA7B3"/></marker>
+    <marker id="arr-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3FB950"/></marker>
+    <marker id="arr-blue"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#58A6FF"/></marker>
+    <marker id="arr-dim"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6E7681"/></marker>
+    <style><![CDATA[
+      .stage-num   { fill: #6E7681; font: 700 30px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .stage-title { fill: #E6EDF3; font: 700 18px sans-serif; text-anchor: middle; }
+      .node        { rx: 8; stroke-width: 1.5; }
+      .node.skill  { fill: rgba(63,185,80,0.12);  stroke: #3FB950; }
+      .node.script { fill: rgba(57,197,207,0.12); stroke: #39C5CF; }
+      .node.panel  { fill: rgba(255,255,255,0.02); stroke: #30363D; stroke-dasharray: 5 3; }
+      .node.agent  { fill: rgba(88,166,255,0.14); stroke: #58A6FF; stroke-width: 2; }
+      .node.slot   { fill: rgba(125,125,125,0.08); stroke: #6E7681; stroke-dasharray: 3 3; }
+      .label   { fill: #E6EDF3; font: 600 13px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .label.sm{ font-size: 11px; }
+      .sub     { fill: #9DA7B3; font: 11px sans-serif; text-anchor: middle; }
+      .cap     { fill: #6E7681; font: italic 12px sans-serif; text-anchor: middle; }
+      .group-h { fill: #9DA7B3; font: 700 10px sans-serif; letter-spacing: 0.1em; text-transform: uppercase; text-anchor: middle; }
+      .agent-h { fill: #58A6FF; font: 700 14px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .hint    { fill: #39C5CF; font: 600 12px sans-serif; text-anchor: middle; }
+      .edge    { fill: none; stroke: #9DA7B3; stroke-width: 1.4; }
+      .axis    { fill: none; stroke: #30363D; stroke-width: 1.2; }
+      .axis-l  { fill: #6E7681; font: 11px sans-serif; }
+      .big     { stroke-width: 2.5; }
+    ]]></style>
+  </defs>
+
+  <!-- capability / scope axis -->
+  <line class="axis" x1="60" y1="540" x2="1180" y2="540" marker-end="url(#arr-dim)"/>
+  <text class="axis-l" x="60" y="560">one repeatable job</text>
+  <text class="axis-l" x="1180" y="560" text-anchor="end">the whole SDLC, run by a standing role</text>
+
+  <!-- ===================== ① a skill ===================== -->
+  <text class="stage-num"   x="180" y="80">①</text>
+  <text class="stage-title" x="180" y="108">a skill</text>
+  <rect class="node skill" x="90" y="215" width="180" height="78"/>
+  <text class="label" x="180" y="248">/tdd</text>
+  <text class="sub"   x="180" y="268">SKILL.md — a prompted,</text>
+  <text class="sub"   x="180" y="283">repeatable procedure</text>
+  <text class="cap"   x="180" y="325">where encoding it once paid off</text>
+
+  <!-- ① → ② -->
+  <line class="edge big" x1="285" y1="254" x2="405" y2="254" marker-end="url(#arr-green)"/>
+  <text class="sub" x="345" y="242">more jobs</text>
+
+  <!-- ===================== ② skills + scripts ===================== -->
+  <text class="stage-num"   x="600" y="80">②</text>
+  <text class="stage-title" x="600" y="108">skills + scripts</text>
+  <rect class="node panel" x="415" y="150" width="370" height="250"/>
+
+  <text class="group-h" x="510" y="180">skills · smart</text>
+  <rect class="node skill" x="430" y="190" width="160" height="30"/><text class="label sm" x="510" y="210">/mady-implement</text>
+  <rect class="node skill" x="430" y="226" width="160" height="30"/><text class="label sm" x="510" y="246">/mr-review</text>
+  <rect class="node skill" x="430" y="262" width="160" height="30"/><text class="label sm" x="510" y="282">/create-mr</text>
+
+  <text class="group-h" x="695" y="180">scripts · dumb</text>
+  <rect class="node script" x="610" y="190" width="160" height="30"/><text class="label sm" x="690" y="210">converge.sh</text>
+  <rect class="node script" x="610" y="226" width="160" height="30"/><text class="label sm" x="690" y="246">queue.sh</text>
+  <rect class="node script" x="610" y="262" width="160" height="30"/><text class="label sm" x="690" y="282">classify.py</text>
+
+  <text class="sub" x="600" y="330">coordinate to facilitate a larger job</text>
+  <text class="cap" x="600" y="380">deterministic spine + judgment, side by side</text>
+
+  <!-- ② → ③ -->
+  <line class="edge big" x1="795" y1="254" x2="895" y2="254" marker-end="url(#arr-blue)"/>
+  <text class="sub" x="845" y="242">encapsulate</text>
+
+  <!-- ===================== ③ an agent ===================== -->
+  <text class="stage-num"   x="1035" y="80">③</text>
+  <text class="stage-title" x="1035" y="108">an agent</text>
+  <rect class="node agent" x="905" y="150" width="260" height="250"/>
+  <text class="agent-h" x="1035" y="178">👷 agent</text>
+  <text class="sub"     x="1035" y="195">.claude/agents/&lt;name&gt;.md</text>
+
+  <!-- four encapsulated slots (detailed on the ↓ slide) -->
+  <rect class="node slot" x="925" y="208" width="220" height="26"/><text class="label sm" x="1035" y="226">📝 description</text>
+  <rect class="node slot" x="925" y="240" width="220" height="26"/><text class="label sm" x="1035" y="258">🧠 context</text>
+  <rect class="node slot" x="925" y="272" width="220" height="26"/><text class="label sm" x="1035" y="290">🧰 skills[]</text>
+  <rect class="node slot" x="925" y="304" width="220" height="26"/><text class="label sm" x="1035" y="322">▶ initial prompt</text>
+
+  <text class="hint" x="1035" y="368">press ↓ to open it up</text>
+  <text class="hint" x="1035" y="388" font-size="20">↓</text>
+</svg>

@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 1240 620" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Anatomy of an agent: one .md file encapsulating a description, its context, an enumeration of skills, and an initial system prompt">
+  <defs>
+    <marker id="arr-cyan" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#39C5CF"/></marker>
+    <style><![CDATA[
+      .agent    { fill: rgba(88,166,255,0.08); stroke: #58A6FF; stroke-width: 2; rx: 12; }
+      .agent-h  { fill: #58A6FF; font: 700 18px ui-monospace, Menlo, monospace; }
+      .agent-sub{ fill: #9DA7B3; font: 12px ui-monospace, Menlo, monospace; }
+      .comp     { fill: rgba(255,255,255,0.02); stroke: #30363D; stroke-width: 1.5; rx: 8; }
+      .comp-h   { fill: #E6EDF3; font: 700 15px sans-serif; }
+      .body     { fill: #9DA7B3; font: 12px sans-serif; }
+      .mono     { fill: #E6EDF3; font: 12px ui-monospace, Menlo, monospace; }
+      .mute     { fill: #6E7681; font: italic 11px sans-serif; }
+      .chip     { fill: rgba(63,185,80,0.12); stroke: #3FB950; stroke-width: 1.2; rx: 6; }
+      .chip-t   { fill: #E6EDF3; font: 11px ui-monospace, Menlo, monospace; text-anchor: middle; }
+      .tag      { fill: #39C5CF; font: 700 10px sans-serif; letter-spacing: 0.08em; text-transform: uppercase; }
+    ]]></style>
+  </defs>
+
+  <!-- the agent container: one .md file -->
+  <rect class="agent" x="120" y="70" width="1000" height="500"/>
+  <text class="agent-h"   x="150" y="112">👷 worker</text>
+  <text class="agent-sub" x="150" y="134">.claude/agents/worker.md  ·  persistent Opus  ·  one per ticket</text>
+  <text class="tag"       x="1090" y="112" text-anchor="end">one file = one role</text>
+
+  <!-- ===== 📝 description (top-left) ===== -->
+  <rect class="comp" x="150" y="160" width="455" height="175"/>
+  <text class="comp-h" x="172" y="190">📝 description</text>
+  <text class="body"   x="172" y="214">what it is &amp; when the orchestrator spawns it</text>
+  <text class="mono"   x="172" y="244">“per-ticket implementer —</text>
+  <text class="mono"   x="172" y="264">&#160;dispatch packet → reviewed, open MR”</text>
+  <text class="mute"   x="172" y="300">the frontmatter line the dispatcher routes on;</text>
+  <text class="mute"   x="172" y="318">precise triggers in, no overlap with siblings</text>
+
+  <!-- ===== 🧠 context (top-right) ===== -->
+  <rect class="comp" x="635" y="160" width="455" height="175"/>
+  <text class="comp-h" x="657" y="190">🧠 context</text>
+  <text class="body"   x="657" y="214">the grounding it reasons from</text>
+  <text class="mono"   x="657" y="242">MANIFEST.md        </text><text class="mute" x="820" y="242">← source of truth</text>
+  <text class="mono"   x="657" y="264">clean-architecture-canon</text>
+  <text class="mono"   x="657" y="286">worker-status.schema.json</text>
+  <text class="mute"   x="657" y="318">preloaded canon + invariants; defers to MANIFEST</text>
+
+  <!-- ===== 🧰 skills (bottom-left) ===== -->
+  <rect class="comp" x="150" y="355" width="455" height="190"/>
+  <text class="comp-h" x="172" y="385">🧰 skills</text>
+  <text class="body"   x="172" y="408">an enumeration of what it may call — the ② set, scoped</text>
+  <rect class="chip" x="172" y="424" width="180" height="28"/><text class="chip-t" x="262" y="443">/mady-implement</text>
+  <rect class="chip" x="364" y="424" width="150" height="28"/><text class="chip-t" x="439" y="443">/create-mr</text>
+  <rect class="chip" x="172" y="460" width="150" height="28"/><text class="chip-t" x="247" y="479">/mr-review</text>
+  <rect class="chip" x="334" y="460" width="100" height="28"/><text class="chip-t" x="384" y="479">/tdd</text>
+  <rect class="chip" x="446" y="460" width="130" height="28"/><text class="chip-t" x="511" y="479">Read·Edit·Bash</text>
+  <text class="mute"   x="172" y="516">the toolbelt — and, by omission, the guardrail</text>
+  <text class="mute"   x="172" y="533">(no tool it isn't granted)</text>
+
+  <!-- ===== ▶ initial prompt (bottom-right) ===== -->
+  <rect class="comp" x="635" y="355" width="455" height="190"/>
+  <text class="comp-h" x="657" y="385">▶ initial prompt</text>
+  <text class="body"   x="657" y="408">the standing system prompt that boots the role</text>
+  <text class="mono"   x="657" y="436">role · Role 2, per-ticket implementer</text>
+  <text class="mono"   x="657" y="458">lifecycle · implement → MR → review → conclude</text>
+  <text class="mono"   x="657" y="480">invariants · never moves Jira · refute before</text>
+  <text class="mono"   x="657" y="500">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;escalate · one ticket, end to end</text>
+  <text class="mute"   x="657" y="533">born knowing its job — it runs, it doesn't get told</text>
+
+  <!-- description → skills (the agent wraps them) -->
+  <path d="M377,335 C377,345 377,345 377,353" fill="none" stroke="#39C5CF" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arr-cyan)"/>
+</svg>

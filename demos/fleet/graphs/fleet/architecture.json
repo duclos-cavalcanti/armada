@@ -1,0 +1,420 @@
+{
+  "title": "The MADY Fleet — live architecture",
+  "sha": "1cdee16",
+  "note": "The factory's OWN machinery (this repo), not the b2b-api product. fleetd is the single-writer daemon: a UDS control server + a scheduler (the only ledger writer, pacing poll/sync/reconcile) + an OTLP collector, over a SQLite ledger. fleetc is the control surface. reconcile converges intent (orders/convoys/board) against reality (sessions/ships/Jira), spawning & reaping the crew of Claude cogs in tmux. Base edges = the standing topology; pick a flow to light up one dynamic. Positions hand-placed; drag + Copy layout to iterate.",
+  "groups": [
+    { "id": "operators", "label": "Operator & standing crew", "x": 20,   "y": 360, "w": 190,  "h": 360, "color": "#58A6FF" },
+    { "id": "control",   "label": "Control surface",          "x": 235,  "y": 395, "w": 180,  "h": 330, "color": "#79C0FF" },
+    { "id": "fleetd",    "label": "fleetd — the daemon (single writer)", "x": 600, "y": 70, "w": 475, "h": 645, "color": "#BC8CFF" },
+    { "id": "adapters",  "label": "Driven adapters (ports)",   "x": 812,  "y": 245, "w": 248,  "h": 455, "color": "#D29922" },
+    { "id": "state",     "label": "Ledger (SQLite · WAL)",     "x": 600,  "y": 745, "w": 475,  "h": 200, "color": "#56D364" },
+    { "id": "external",  "label": "External systems",          "x": 1180, "y": 80,  "w": 300,  "h": 370, "color": "#DB6D28" },
+    { "id": "floor",     "label": "tmux floor — the crew (cogs)", "x": 1180, "y": 480, "w": 300, "h": 460, "color": "#3FB950" }
+  ],
+  "nodes": [
+    { "id": "operator",   "kind": "human",   "label": "Operator",        "sub": "you · drives fleetc · chats cogs",   "x": 40,   "y": 410, "w": 150, "h": 56 },
+    { "id": "admiral",    "kind": "expert",  "label": "Admiral",         "sub": "design canon · opens convoys",       "x": 40,   "y": 505, "w": 150, "h": 56 },
+    { "id": "shipwright", "kind": "expert",  "label": "Shipwright",      "sub": "the kit itself (this repo)",         "x": 40,   "y": 600, "w": 150, "h": 56 },
+
+    { "id": "fleetc",     "kind": "cli",     "label": "fleetc",          "sub": "control surface · verbs → wire",      "x": 250,  "y": 445, "w": 150, "h": 62 },
+    { "id": "dashboard",  "kind": "tui",     "label": "dashboard",       "sub": "read-only TUI",                      "x": 250,  "y": 625, "w": 150, "h": 52 },
+
+    { "id": "uds",        "kind": "socket",  "label": "UDS control bus", "sub": "~/.fleet/fleetd.sock · HTTP-over-UDS", "x": 445, "y": 450, "w": 135, "h": 58 },
+
+    { "id": "reconcile",  "kind": "daemon",  "label": "reconcile",       "sub": "plan → execute · spawn/handoff/reap/heal", "x": 620, "y": 130, "w": 175, "h": 70,
+      "detail": {
+        "type": "crates/fleetd/src/reconcile.rs — the gap-closer (converge.sh, in Rust)",
+        "summary": "Each reconcile tick (~60s) closes the gap between INTENT (orders · convoys · the board) and REALITY (live sessions · ships · Jira). plan() is pure/read-only and returns a Vec<Action>; execute() applies each one through the ports. A per-action failure is never fatal — the next tick re-derives from the ledger and retries. reconcile owns every Jira transition; no cog moves a ticket itself.",
+        "modes": [
+          {
+            "label": "Spawn",
+            "status": "Spawn{Worker|Hand}",
+            "goal": "Turn a queued order into a running implementer.",
+            "why": "An order exists with no live session whose ticket is Ready (To Do · unheld · blockers terminal) or Stacked (one in-flight blocker with an open ship to fork from).",
+            "steps": [
+              "Read the worktree off the order (a missing worktree aborts the spawn — reconcile never creates one).",
+              "Claim gate: tracker.assigned_to_peer? — skip if a peer already owns the ticket (never stomp a peer).",
+              "tracker.transition → In Progress, then best-effort assign / label / add-to-sprint.",
+              "SessionRepo.start — the one_live_crew_per_ticket DB lock makes a duplicate a benign skip.",
+              "host.spawn `claude --session-id <uuid> --agent worker|hand` in the worktree; append SessionStarted."
+            ],
+            "guarantees": [
+              "The partial-unique spawn lock kills the double-spawn / zombie-respawn class by construction."
+            ]
+          },
+          {
+            "label": "Handoff",
+            "status": "Handoff (builder → sailor)",
+            "goal": "Hand a concluded build off to the merge sweep.",
+            "why": "A Worker/Hand self-reports `concluded` (MR open + self-reviewed) and no live sailor exists yet.",
+            "steps": [
+              "tracker.transition → In QA.",
+              "forge.request_review — resolve the team from the approval rules, assign reviewers.",
+              "End the builder session + kill its tmux pane (SessionEnded)."
+            ],
+            "guarantees": [
+              "The MR is the memory — a relaunch re-derives from the open ship, never double-hands-off."
+            ]
+          },
+          {
+            "label": "Sail & Reap",
+            "status": "LaunchSailor · Reap",
+            "goal": "Sweep an open ship toward merge, then reclaim everything when it merges.",
+            "why": "An open, auto-dispatched ship whose change-fingerprint ≠ last-swept gets a one-shot sailor; a Merged ship with anything left to clean gets reaped.",
+            "steps": [
+              "LaunchSailor — spawn a one-shot sailor in the worktree (fingerprint-gated so it only fires on real change).",
+              "The sailor sweeps (rebase / reply / ci-fix / arm) and reports `sleeping`; StandDown ends it so the next change re-fires.",
+              "On Merged: tracker.transition → Done + roll-up the parent story, end all sessions, kill tmux, `git worktree remove`, cancel the order."
+            ],
+            "guarantees": [
+              "`claude --agent` never self-exits — the sailor's `sleeping` REPORT, not a dead pane, is the finish signal."
+            ]
+          },
+          {
+            "label": "Heal / StandDown",
+            "status": "Heal · StandDown",
+            "goal": "Recover from a crash without double-acting.",
+            "why": "A live cog derives Liveness::Dead (tmux gone) while non-terminal and not paused/anchored.",
+            "steps": [
+              "Worker/Hand Dead → Heal: respawn the SAME tmux_session with the SAME --session-id (continuous transcript).",
+              "Sailor Dead (one-shot already done) → StandDown: end the session, no respawn.",
+              "An anchored_at session is NEVER healed — the anchor is the authoritative hold."
+            ],
+            "guarantees": [
+              "Idempotent at restart: re-derives from disk + tmux + ledger, never double-acts."
+            ]
+          },
+          {
+            "label": "Captain & Lookout",
+            "status": "LaunchCaptain · LaunchLookout",
+            "goal": "Staff the per-convoy orchestrator and the peer-MR reviewer.",
+            "why": "One cold captain per active convoy with work; one singleton lookout per changed peer ship.",
+            "steps": [
+              "Active convoy + work + no live captain + not anchored → LaunchCaptain at the hub with MADY_CONVOY injected.",
+              "First peer Open ship whose head_sha ≠ reviewed + no live lookout → LaunchLookout at the hub with MADY_SHIP=iid (no worktree).",
+              "Convoy no longer active / peer gone → StandDownCaptain / StandDownLookout."
+            ],
+            "guarantees": [
+              "one_live_captain_per_convoy + one_live_lookout partial indexes enforce the singletons in the DB."
+            ]
+          },
+          {
+            "label": "Block",
+            "status": "Block (ship dependency)",
+            "goal": "Mirror the Jira is-blocked-by graph onto GitLab MR dependencies.",
+            "why": "A dispatched ticket's blocker has an open ship — the merge gate must reflect the dependency.",
+            "steps": [
+              "For MRs WE dispatched only, resolve the blocker's ship and forge.block_on it (idempotent).",
+              "A cycle guard refuses to rewrite a peer's merge gate or form a loop."
+            ],
+            "guarantees": [
+              "Only a child we own is blocked — reconcile never rewrites a peer's gate."
+            ]
+          }
+        ]
+      } },
+    { "id": "sync",       "kind": "daemon",  "label": "sync",            "sub": "board + armada → ledger",            "x": 822,  "y": 130, "w": 165, "h": 70 },
+    { "id": "scheduler",  "kind": "daemon",  "label": "scheduler",       "sub": "pacer · the ONLY ledger writer",     "x": 620,  "y": 330, "w": 175, "h": 74,
+      "detail": {
+        "type": "crates/fleetd/src/scheduler.rs — the pacer + single writer (the daemon's heart)",
+        "summary": "Owns the ledger and is the authoritative write boundary. One loop with three Instant deadlines fires three tickers on cadences re-read live every iteration (so `fleetc settings set` takes effect without a restart); between ticks it blocks on the command channel with a 500ms quantum. The UDS server is the only sender; the scheduler the only receiver — so every mutation is single-writer, in a transaction, with a CDC event appended in the same txn.",
+        "modes": [
+          {
+            "label": "poll tick",
+            "status": "~5s · read-only",
+            "goal": "Keep an accurate in-memory liveness view without a per-query tmux fan-out.",
+            "why": "Liveness is derived, never stored (apiary's lag-bug lesson — the fan-out runs in ONE place).",
+            "steps": [
+              "Recompute context(): over ledger.live(), probe host.alive + host.last_activity (#{window_activity}) per session.",
+              "Classify Liveness { Active · Quiet · Idle · Dead } from age-of-activity vs thresholds.",
+              "Overwrite the snapshot mutex that GET /context reads lock-free; a class change emits an event."
+            ],
+            "guarantees": [
+              "No DB writes — a restart just re-polls; the snapshot is memoized, never trusted stale."
+            ]
+          },
+          {
+            "label": "sync tick",
+            "status": "~300s",
+            "goal": "Hydrate the ledger from the two external realities.",
+            "why": "board (Jira) + armada (GitLab) replace the old jira.json / mrs.json caches.",
+            "steps": [
+              "sync_board (tracker) BEFORE sync_armada (forge) — so ships can link their ticket FK.",
+              "Upsert tickets + ticket_blocks + ships; enrich only OUR ships with the per-MR snapshot.",
+              "Append a TickRan event carrying before/after change-counts (no-op detection)."
+            ],
+            "guarantees": [
+              "Factory-owned facts (held · created_at) survive a tracker re-sync; only the cache churns."
+            ]
+          },
+          {
+            "label": "reconcile tick",
+            "status": "~60s · dry_run aware",
+            "goal": "Converge intent against reality (see the reconcile node).",
+            "why": "Reads dry_run live; clones the poll's cog snapshot (no extra tmux fan-out).",
+            "steps": [
+              "Call reconcile::tick with the cloned cogs.",
+              "dry_run=true → log the planned Action[] as a TickRan event (the parity lens).",
+              "dry_run=false → execute() per action, recording applied / failed."
+            ],
+            "guarantees": [
+              "A per-action failure never aborts the tick — the next cycle retries."
+            ]
+          },
+          {
+            "label": "apply (writes)",
+            "status": "mpsc command boundary",
+            "goal": "Serialize every client write through one transactional path.",
+            "why": "15 Command variants (status · dispatch · convoy · anchor/weigh/sink · send · hold · rebase · settings).",
+            "steps": [
+              "Receive a Command from the UDS server over the mpsc channel.",
+              "Apply it in a transaction, appending the matching CDC event in the same txn.",
+              "Control verbs push a graceful-stop / resume / kill through SessionHost::send; sink also kills tmux."
+            ],
+            "guarantees": [
+              "Single writer, in transactions → no last-writer-wins races; the event log can't lie about state."
+            ]
+          }
+        ]
+      } },
+    { "id": "server",     "kind": "daemon",  "label": "server",          "sub": "UDS routes · validate · relay",      "x": 620,  "y": 465, "w": 175, "h": 60 },
+    { "id": "collector",  "kind": "daemon",  "label": "collector",       "sub": "OTLP :4318 → telemetry.db",          "x": 620,  "y": 600, "w": 175, "h": 58 },
+
+    { "id": "forge",      "kind": "adapter", "label": "GlabForge",       "sub": "Forge port · shell → glab",          "x": 828,  "y": 288, "w": 216, "h": 52 },
+    { "id": "tracker",    "kind": "adapter", "label": "JiraTracker",     "sub": "Tracker port · shell → jira-cli",    "x": 828,  "y": 365, "w": 216, "h": 52 },
+    { "id": "sessionhost","kind": "adapter", "label": "TmuxSessionHost", "sub": "SessionHost port · shell → tmux",    "x": 828,  "y": 470, "w": 216, "h": 52 },
+    { "id": "gitwt",      "kind": "adapter", "label": "GitWorktrees",    "sub": "worktree teardown (reap only)",      "x": 828,  "y": 560, "w": 216, "h": 52 },
+
+    { "id": "ledger",     "kind": "sqlite",  "label": "ledger.db",       "sub": "tickets · orders · sessions · ships · convoys · events", "x": 620, "y": 788, "w": 195, "h": 70 },
+    { "id": "telemetry",  "kind": "sqlite",  "label": "telemetry.db",    "sub": "cost · model · role (append-heavy)", "x": 620,  "y": 872, "w": 195, "h": 48 },
+    { "id": "hub",        "kind": "config",  "label": "worktrees/ hub",  "sub": "master clone + ticket worktrees",    "x": 845,  "y": 800, "w": 205, "h": 56 },
+
+    { "id": "captain",    "kind": "cog",     "label": "captain",         "sub": "one convoy pass · dispatches frontier", "x": 1200, "y": 525, "w": 258, "h": 54 },
+    { "id": "worker",     "kind": "cog",     "label": "worker",          "sub": "builds one ticket → MR",             "x": 1200, "y": 600, "w": 258, "h": 54 },
+    { "id": "hand",       "kind": "cog",     "label": "hand",            "sub": "operator-driven build",              "x": 1200, "y": 675, "w": 258, "h": 54 },
+    { "id": "sailor",     "kind": "cog",     "label": "sailor",          "sub": "one sweep · lands the ship",         "x": 1200, "y": 750, "w": 258, "h": 54 },
+    { "id": "lookout",    "kind": "cog",     "label": "lookout",         "sub": "reviews one PEER MR",                "x": 1200, "y": 825, "w": 258, "h": 54 },
+
+    { "id": "gitlab",     "kind": "external","label": "GitLab",          "sub": "MRs · pipelines · reviews",          "x": 1200, "y": 130, "w": 258, "h": 60 },
+    { "id": "jira",       "kind": "external","label": "Jira / MADY",     "sub": "tickets · sprints · transitions",    "x": 1200, "y": 235, "w": 258, "h": 60 },
+    { "id": "claude",     "kind": "external","label": "Claude Code",     "sub": "the harness backing every cog",      "x": 1200, "y": 345, "w": 258, "h": 60 }
+  ],
+  "base": [
+    { "source": "operator",   "target": "fleetc",     "label": "verbs: dispatch · convoy · anchor" },
+    { "source": "admiral",    "target": "fleetc",     "label": "convoy open (on order)" },
+    { "source": "admiral",    "target": "jira",       "label": "grooms (Atlassian MCP)" },
+    { "source": "shipwright", "target": "fleetc",     "label": "evolves the kit" },
+    { "source": "fleetc",     "target": "uds",        "label": "HTTP-over-UDS" },
+    { "source": "uds",        "target": "server",     "label": "GET/POST routes" },
+    { "source": "dashboard",  "target": "ledger",     "label": "reads (read-only)" },
+    { "source": "fleetc",     "target": "ledger",     "label": "plan/cost/transcript (read-only)" },
+
+    { "source": "server",     "target": "scheduler",  "label": "mpsc command channel" },
+    { "source": "scheduler",  "target": "reconcile",  "label": "reconcile tick (~60s)" },
+    { "source": "scheduler",  "target": "sync",       "label": "sync tick (~300s)" },
+    { "source": "scheduler",  "target": "ledger",     "label": "single writer (txn + CDC)" },
+    { "source": "scheduler",  "target": "sessionhost","label": "poll liveness (~5s)" },
+    { "source": "sync",       "target": "ledger",     "label": "upsert board + armada" },
+    { "source": "reconcile",  "target": "ledger",     "label": "SessionStarted · Reap · events" },
+
+    { "source": "reconcile",  "target": "sessionhost","label": "spawn / kill / send" },
+    { "source": "reconcile",  "target": "tracker",    "label": "claim · transition" },
+    { "source": "reconcile",  "target": "forge",      "label": "review · block · rebase" },
+    { "source": "reconcile",  "target": "gitwt",      "label": "worktree remove (reap)" },
+    { "source": "sync",       "target": "forge",      "label": "armada (open MRs)" },
+    { "source": "sync",       "target": "tracker",    "label": "board (active sprint)" },
+
+    { "source": "forge",      "target": "gitlab",     "label": "glab api" },
+    { "source": "tracker",    "target": "jira",       "label": "jira-cli" },
+    { "source": "gitwt",      "target": "hub",        "label": "git worktree remove" },
+
+    { "source": "sessionhost","target": "captain",    "label": "spawn (tmux)" },
+    { "source": "sessionhost","target": "worker",     "label": "spawn claude --agent" },
+    { "source": "sessionhost","target": "hand",       "label": "spawn (tmux)" },
+    { "source": "sessionhost","target": "sailor",     "label": "spawn (tmux)" },
+    { "source": "sessionhost","target": "lookout",    "label": "spawn (tmux)" },
+
+    { "source": "collector",  "target": "telemetry",  "label": "write rows" },
+    { "source": "worker",     "target": "claude",     "label": "claude --agent (the harness)" }
+  ],
+  "flows": [
+    {
+      "id": "dispatch",
+      "label": "Dispatch → worker spawned",
+      "fidelity": "grounded",
+      "note": "fleetc dispatch writes an order; the next reconcile tick claims the ticket in Jira and spawns a worker in the pre-berthed worktree. Grounded @ 1cdee16.",
+      "steps": [
+        { "from": "operator",    "to": "fleetc",      "label": "dispatch --ticket --ac --worktree" },
+        { "from": "fleetc",      "to": "uds",         "label": "POST /dispatch" },
+        { "from": "uds",         "to": "server",      "label": "validate DispatchOrder" },
+        { "from": "server",      "to": "scheduler",   "label": "mpsc" },
+        { "from": "scheduler",   "to": "ledger",      "label": "write order + Dispatched" },
+        { "from": "scheduler",   "to": "reconcile",   "label": "next reconcile tick" },
+        { "from": "reconcile",   "to": "tracker",     "label": "assigned_to_peer? → transition In Progress" },
+        { "from": "tracker",     "to": "jira",        "label": "move + assign / label / sprint" },
+        { "from": "reconcile",   "to": "ledger",      "label": "SessionRepo.start (spawn lock) + SessionStarted" },
+        { "from": "reconcile",   "to": "sessionhost", "label": "spawn" },
+        { "from": "sessionhost", "to": "worker",      "label": "claude --agent worker (in worktree)" }
+      ],
+      "resources": [
+        "orders — insert (one active per ticket)",
+        "sessions — insert (one_live_crew_per_ticket lock)",
+        "events — Dispatched · SessionStarted"
+      ]
+    },
+    {
+      "id": "build-handoff",
+      "label": "Worker builds → handoff to sailor",
+      "fidelity": "grounded",
+      "note": "The worker opens the MR and self-reports `concluded`; reconcile transitions the ticket to In QA, requests review, and reaps the builder pane. Grounded @ 1cdee16.",
+      "steps": [
+        { "from": "worker",     "to": "gitlab",      "label": "glab mr create (targets fork_from)" },
+        { "from": "worker",     "to": "server",      "label": "fleetc status: concluded" },
+        { "from": "server",     "to": "scheduler",   "label": "mpsc" },
+        { "from": "scheduler",  "to": "ledger",      "label": "reports.upsert + StatusReported" },
+        { "from": "scheduler",  "to": "reconcile",   "label": "reconcile tick" },
+        { "from": "reconcile",  "to": "tracker",     "label": "transition In QA" },
+        { "from": "tracker",    "to": "jira",        "label": "jira move" },
+        { "from": "reconcile",  "to": "forge",       "label": "request_review (assign reviewers)" },
+        { "from": "forge",      "to": "gitlab",      "label": "resolve team · assign" },
+        { "from": "reconcile",  "to": "sessionhost", "label": "kill worker pane" },
+        { "from": "reconcile",  "to": "ledger",      "label": "SessionEnded (worker)" }
+      ],
+      "resources": [
+        "reports — worker: concluded (latest row)",
+        "tickets — status In QA (cache)",
+        "sessions — worker ended_at set"
+      ]
+    },
+    {
+      "id": "sail-merge",
+      "label": "Sailor sweeps → ship merged → reaped",
+      "fidelity": "grounded",
+      "note": "A fingerprint-gated sailor does ONE sweep per ship change, reports `sleeping`, and re-fires on the next change until GitLab merges; then reconcile reaps everything. Grounded @ 1cdee16.",
+      "steps": [
+        { "from": "reconcile",   "to": "sessionhost", "label": "LaunchSailor (ship changed)" },
+        { "from": "sessionhost", "to": "sailor",      "label": "claude --agent sailor" },
+        { "from": "sailor",      "to": "server",      "label": "fleetc packet (order+ship+snapshot)" },
+        { "from": "sailor",      "to": "gitlab",      "label": "rechart / parley / repair / arm" },
+        { "from": "sailor",      "to": "server",      "label": "fleetc status: sleeping" },
+        { "from": "gitlab",      "to": "sync",        "label": "armada: ShipState Merged" },
+        { "from": "sync",        "to": "ledger",      "label": "ship_snapshots.sync + ShipMerged" },
+        { "from": "scheduler",   "to": "reconcile",   "label": "reconcile tick" },
+        { "from": "reconcile",   "to": "tracker",     "label": "transition Done + roll-up parent" },
+        { "from": "tracker",     "to": "jira",        "label": "jira move" },
+        { "from": "reconcile",   "to": "gitwt",       "label": "git worktree remove" },
+        { "from": "gitwt",       "to": "hub",         "label": "reclaim worktree + branch" },
+        { "from": "reconcile",   "to": "ledger",      "label": "SessionEnded + order cancelled" }
+      ],
+      "resources": [
+        "ships / ship_snapshots — synced (armed · merge_status, never stored-trusted)",
+        "orders — cancelled on reap",
+        "worktrees/ — removed (never --force)"
+      ]
+    },
+    {
+      "id": "sync-tick",
+      "label": "Sync tick — hydrate the ledger",
+      "fidelity": "grounded",
+      "note": "Every ~300s the scheduler pulls the board (Jira) and armada (GitLab) into the ledger — board before armada so ships can link their ticket FK. Replaces jira.json / mrs.json. Grounded @ 1cdee16.",
+      "steps": [
+        { "from": "scheduler", "to": "sync",    "label": "every ~300s" },
+        { "from": "sync",      "to": "tracker", "label": "active_sprint (JQL)" },
+        { "from": "tracker",   "to": "jira",    "label": "jira-cli" },
+        { "from": "sync",      "to": "forge",   "label": "armada (open MRs)" },
+        { "from": "forge",     "to": "gitlab",  "label": "glab api" },
+        { "from": "sync",      "to": "ledger",  "label": "upsert tickets + ticket_blocks + ships" },
+        { "from": "sync",      "to": "ledger",  "label": "TickRan (before/after counts)" }
+      ],
+      "resources": [
+        "tickets + ticket_blocks — the board mirror (Jira-authoritative)",
+        "ships + ship_snapshots — the armada mirror (ours enriched)",
+        "events — TickRan (no-op detection)"
+      ]
+    },
+    {
+      "id": "convoy",
+      "label": "Convoy opened → captain staffed",
+      "fidelity": "grounded",
+      "note": "The admiral grooms + opens a convoy; reconcile staffs one cold captain per active convoy, which reads its slice and dispatches the frontier. The admiral opens; reconcile launches. Grounded @ 1cdee16.",
+      "steps": [
+        { "from": "admiral",     "to": "jira",        "label": "groom to Definition of Ready (blocked-by edges)" },
+        { "from": "admiral",     "to": "fleetc",      "label": "fleetc convoy open KEY" },
+        { "from": "fleetc",      "to": "uds",         "label": "POST /convoy-open" },
+        { "from": "uds",         "to": "server",      "label": "validate" },
+        { "from": "server",      "to": "scheduler",   "label": "mpsc" },
+        { "from": "scheduler",   "to": "ledger",      "label": "convoys.open + ConvoyOpened" },
+        { "from": "scheduler",   "to": "reconcile",   "label": "reconcile tick" },
+        { "from": "reconcile",   "to": "sessionhost", "label": "LaunchCaptain (MADY_CONVOY)" },
+        { "from": "sessionhost", "to": "captain",     "label": "claude --agent captain (at hub)" },
+        { "from": "captain",     "to": "server",      "label": "fleetc context --convoy (its slice)" },
+        { "from": "captain",     "to": "fleetc",      "label": "fleet-berth + dispatch (frontier)" }
+      ],
+      "resources": [
+        "convoys — open (active = ended_at NULL)",
+        "sessions — one_live_captain_per_convoy lock",
+        "events — ConvoyOpened"
+      ]
+    },
+    {
+      "id": "lookout",
+      "label": "Peer-MR review (parallel, off the line)",
+      "fidelity": "grounded",
+      "note": "The singleton lookout reviews one PEER MR (never our own ships) per changed head, from the hub by SHA — no checkout. fleetd records the reviewed head and re-fires on the next change. Grounded @ 1cdee16.",
+      "steps": [
+        { "from": "sync",        "to": "forge",       "label": "armada: peer ship head_sha changed" },
+        { "from": "forge",       "to": "gitlab",      "label": "glab api" },
+        { "from": "sync",        "to": "ledger",      "label": "ships.sync (peer · pilot ≠ us)" },
+        { "from": "scheduler",   "to": "reconcile",   "label": "reconcile tick" },
+        { "from": "reconcile",   "to": "sessionhost", "label": "LaunchLookout (MADY_SHIP=iid)" },
+        { "from": "sessionhost", "to": "lookout",     "label": "claude --agent lookout (at hub, no worktree)" },
+        { "from": "lookout",     "to": "gitlab",      "label": "/mr-review · post threads · approve if clean" },
+        { "from": "reconcile",   "to": "ledger",      "label": "ships.reviewed = head_sha" }
+      ],
+      "resources": [
+        "ships.reviewed — the head_sha last reviewed (re-fire detector)",
+        "sessions — one_live_lookout singleton",
+        "our ships never pass here — peers only (team review owns ours)"
+      ]
+    },
+    {
+      "id": "anchor",
+      "label": "Anchor / weigh / sink a cog",
+      "fidelity": "grounded",
+      "note": "anchor is a graceful stop-and-hold stamped on the session; heal never respawns an anchored cog. weigh clears it; sink is the separate destructive teardown. Grounded @ 1cdee16.",
+      "steps": [
+        { "from": "operator",    "to": "fleetc",      "label": "fleetc anchor --cog worker --ticket" },
+        { "from": "fleetc",      "to": "uds",         "label": "POST /anchor" },
+        { "from": "uds",         "to": "server",      "label": "validate CogTarget" },
+        { "from": "server",      "to": "scheduler",   "label": "mpsc" },
+        { "from": "scheduler",   "to": "ledger",      "label": "sessions.anchored_at + SessionAnchored" },
+        { "from": "scheduler",   "to": "sessionhost", "label": "send graceful-stop (⚓)" },
+        { "from": "sessionhost", "to": "worker",      "label": "tmux send-keys: ⚓ anchor" },
+        { "from": "worker",      "to": "server",      "label": "fleetc status: anchored (checkpointed)" }
+      ],
+      "resources": [
+        "sessions.anchored_at — the authoritative hold (heal skips it)",
+        "events — SessionAnchored / SessionWeighed",
+        "sink = end session + kill tmux (destructive — a deliberate separate verb)"
+      ]
+    },
+    {
+      "id": "telemetry",
+      "label": "Telemetry & cost",
+      "fidelity": "grounded",
+      "note": "Every cog emits OTLP logs to the built-in collector, written to a SEPARATE telemetry.db (off the single-writer ledger path, since it's append-heavy). fleetc cost reads it read-only. Grounded @ 1cdee16.",
+      "steps": [
+        { "from": "worker",    "to": "collector",  "label": "OTLP logs :4318" },
+        { "from": "sailor",    "to": "collector",  "label": "OTLP" },
+        { "from": "captain",   "to": "collector",  "label": "OTLP" },
+        { "from": "collector", "to": "telemetry",  "label": "record rows (cost · model · role)" },
+        { "from": "operator",  "to": "fleetc",     "label": "fleetc cost --since" },
+        { "from": "fleetc",    "to": "telemetry",  "label": "read-only roll-up by role" }
+      ],
+      "resources": [
+        "telemetry.db — append-only, isolated from the ledger",
+        "cost_by_role — interactive (NULL role) vs per-cog spend"
+      ]
+    }
+  ]
+}

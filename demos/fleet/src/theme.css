@@ -1,0 +1,106 @@
+/* mady-style dark palette (copied from docs/src/demos/mady-reveal.css :root) so
+   the interactive viewer matches the static SVG/reveal surfaces — one product,
+   one palette. */
+:root {
+  --bg:#0D1117; --panel:#161B22; --border:#30363D; --text:#E6EDF3;
+  --muted:#9DA7B3; --dim:#6E7681; --green:#3FB950; --blue:#58A6FF;
+  --amber:#D29922; --purple:#BC8CFF; --orange:#DB6D28; --red:#F85149;
+  --yellow:#E3B341; --cyan:#39C5CF;
+}
+
+html, body, #root { margin: 0; height: 100%; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+}
+
+.react-flow { background: var(--bg); }
+
+/* node card */
+.node-kind  { font: 700 10px ui-monospace, Menlo, monospace; letter-spacing: 0.08em; text-transform: uppercase; }
+.node-label { font: 600 13px ui-monospace, Menlo, monospace; color: var(--text); margin-top: 2px; }
+.node-file  { font: 10px sans-serif; color: var(--dim); margin-top: 3px; }
+
+/* dark controls / minimap / edge labels / attribution */
+.react-flow__controls-button {
+  background: var(--panel); border-bottom: 1px solid var(--border); fill: var(--text);
+}
+.react-flow__controls-button:hover { background: var(--border); }
+.react-flow__minimap { background: var(--panel); }
+.react-flow__edge-textbg { fill: var(--bg); }
+.react-flow__edge-text   { fill: var(--muted); }
+.react-flow__attribution { background: transparent; color: var(--dim); }
+
+/* header chip */
+.viz-header {
+  position: absolute; z-index: 5; top: 12px; left: 12px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 12px; font-size: 13px;
+}
+.viz-header b { color: var(--text); }
+.viz-header span { color: var(--muted); }
+
+/* scenario switcher */
+.scenario-tabs { display: block; margin-top: 8px; }
+.scenario-tabs .tab {
+  background: var(--bg); color: var(--muted);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 9px; margin: 0 6px 4px 0; cursor: pointer;
+  font: 600 11px ui-monospace, Menlo, monospace;
+}
+.scenario-tabs .tab:hover { border-color: var(--blue); color: var(--text); }
+.scenario-tabs .tab.active {
+  background: var(--blue); color: var(--bg); border-color: var(--blue);
+}
+
+/* call-flow canvas + side panel split */
+.app-split { display: flex; width: 100%; height: 100%; }
+.cf-canvas { flex: 1 1 auto; position: relative; }
+.side-panel {
+  flex: 0 0 480px; height: 100%; overflow-y: auto;
+  background: var(--panel); border-left: 1px solid var(--border);
+  padding: 92px 16px 16px; box-sizing: border-box;
+}
+.side-section-title {
+  font: 700 12px ui-monospace, Menlo, monospace; color: var(--text);
+  text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px;
+}
+.side-summary {
+  font: 12px/1.5 sans-serif; color: var(--muted);
+  border-left: 3px solid var(--blue); padding: 4px 0 4px 10px; margin-bottom: 14px;
+}
+
+/* domain tree (inline, in the side panel) */
+.dtree { margin-bottom: 18px; }
+.dtree-conn { font: 10px ui-monospace, Menlo, monospace; color: var(--dim); margin: 2px 0 2px 14px; }
+.dtree-node {
+  background: var(--bg); border: 1.5px solid var(--dim); border-radius: 8px;
+  padding: 7px 10px;
+}
+.dtree-kind { font: 700 9px ui-monospace, Menlo, monospace; text-transform: uppercase; letter-spacing: 0.06em; }
+.dtree-label { font: 600 13px ui-monospace, Menlo, monospace; color: var(--text); margin-top: 1px; }
+.dtree-sub { font: 10px sans-serif; color: var(--muted); margin-top: 2px; }
+
+.policy-title { font: 700 12px ui-monospace, Menlo, monospace; color: var(--text); margin-bottom: 6px; }
+.policy-note { font: 11px/1.5 sans-serif; color: var(--amber); margin-bottom: 12px; }
+.policy-table { width: 100%; border-collapse: collapse; font: 11px ui-monospace, Menlo, monospace; }
+.policy-table th {
+  text-align: left; color: var(--dim); font-weight: 600; padding: 4px 6px;
+  border-bottom: 1px solid var(--border); text-transform: uppercase; font-size: 9px; letter-spacing: 0.06em;
+}
+.policy-table td { padding: 5px 6px; border-bottom: 1px solid #21262d; color: var(--muted); vertical-align: top; }
+.policy-table td.op { color: var(--text); }
+.policy-table .scope { display: block; color: var(--dim); font-size: 9px; margin-top: 1px; }
+.policy-table tr.row-actor td { background: rgba(88,166,255,0.06); }
+.policy-table tr.row-actor td.op { color: var(--blue); }
+.policy-table tr.row-changed td { background: rgba(227,179,65,0.12); }
+.policy-table tr.row-changed td.op { color: var(--yellow); font-weight: 700; }
+.policy-table td.sub-override { color: var(--green); font-weight: 700; }
+.policy-legend { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+.policy-legend .chip {
+  font: 9px ui-monospace, Menlo, monospace; padding: 2px 7px; border-radius: 10px;
+  border: 1px solid var(--border); color: var(--muted);
+}
+.policy-legend .chip.actor { border-color: var(--blue); color: var(--blue); }
+.policy-legend .chip.changed { border-color: var(--yellow); color: var(--yellow); }
+.policy-legend .chip.override { border-color: var(--green); color: var(--green); }
