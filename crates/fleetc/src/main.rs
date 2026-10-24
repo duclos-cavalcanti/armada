@@ -663,25 +663,25 @@ mod tests {
         let out = render_plan(&tick(serde_json::json!({
             "dry_run": true,
             "planned": [
-                { "action": "spawn", "ticket": "MADY-1", "kind": "worker" },
-                { "action": "launch_captain", "convoy": "MADY-100" },
+                { "action": "spawn", "ticket": "PROJ-1", "kind": "worker" },
+                { "action": "launch_captain", "convoy": "PROJ-100" },
             ]
         })));
         assert!(out.contains("(dry-run)"));
-        assert!(out.contains("spawn") && out.contains("MADY-1") && out.contains("worker"));
-        assert!(out.contains("launch_captain") && out.contains("MADY-100"), "convoy actions render too");
+        assert!(out.contains("spawn") && out.contains("PROJ-1") && out.contains("worker"));
+        assert!(out.contains("launch_captain") && out.contains("PROJ-100"), "convoy actions render too");
     }
 
     #[test]
     fn require_ticket_rejects_flags_and_non_tickets() {
-        assert_eq!(require_ticket(&["MADY-123".into()], "anchor").unwrap(), "MADY-123");
+        assert_eq!(require_ticket(&["PROJ-123".into()], "anchor").unwrap(), "PROJ-123");
         // a mistyped flag swallowed as a "ticket" is the bug — must error, not no-op.
         let e = require_ticket(&["--cog".into()], "anchor").unwrap_err().to_string();
         assert!(e.contains("unexpected flag"), "{e}");
         // typos fail loudly too.
-        assert!(require_ticket(&["mady-5".into()], "sink").is_err(), "lowercase");
-        assert!(require_ticket(&["MADY-".into()], "sink").is_err(), "no number");
-        assert!(require_ticket(&["MADY-12x".into()], "sink").is_err(), "trailing junk");
+        assert!(require_ticket(&["proj-5".into()], "sink").is_err(), "lowercase");
+        assert!(require_ticket(&["PROJ-".into()], "sink").is_err(), "no number");
+        assert!(require_ticket(&["PROJ-12x".into()], "sink").is_err(), "trailing junk");
         assert!(require_ticket(&[], "weigh").is_err(), "missing");
     }
 
@@ -691,19 +691,19 @@ mod tests {
             require_cog_target(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "anchor")
         };
         // valid: each cog with its right key.
-        assert_eq!(a(&["--cog", "worker", "--ticket", "MADY-1"]).unwrap().cog, "worker");
+        assert_eq!(a(&["--cog", "worker", "--ticket", "PROJ-1"]).unwrap().cog, "worker");
         assert_eq!(
-            a(&["--cog", "captain", "--convoy", "MADY-100"]).unwrap().convoy.as_deref(),
-            Some("MADY-100")
+            a(&["--cog", "captain", "--convoy", "PROJ-100"]).unwrap().convoy.as_deref(),
+            Some("PROJ-100")
         );
         assert!(a(&["--cog", "lookout"]).unwrap().ticket.is_none());
         // errors — all loud, never silent.
-        assert!(a(&["--ticket", "MADY-1"]).is_err(), "missing --cog");
+        assert!(a(&["--ticket", "PROJ-1"]).is_err(), "missing --cog");
         assert!(a(&["--cog", "worker"]).is_err(), "worker needs --ticket");
         assert!(a(&["--cog", "captain"]).is_err(), "captain needs --convoy");
-        assert!(a(&["--cog", "lookout", "--ticket", "MADY-1"]).is_err(), "lookout takes no key");
-        assert!(a(&["--cog", "worker", "--convoy", "MADY-100"]).is_err(), "worker can't use --convoy");
-        assert!(a(&["--cog", "foreman", "--ticket", "MADY-1"]).is_err(), "unknown cog");
+        assert!(a(&["--cog", "lookout", "--ticket", "PROJ-1"]).is_err(), "lookout takes no key");
+        assert!(a(&["--cog", "worker", "--convoy", "PROJ-100"]).is_err(), "worker can't use --convoy");
+        assert!(a(&["--cog", "foreman", "--ticket", "PROJ-1"]).is_err(), "unknown cog");
     }
 
     #[test]
@@ -716,12 +716,12 @@ mod tests {
     fn render_plan_marks_live_applied_and_failed() {
         let out = render_plan(&tick(serde_json::json!({
             "dry_run": false,
-            "applied": [ { "action": "reap", "ticket": "MADY-2" } ],
-            "failed": [ { "action": { "action": "spawn", "ticket": "MADY-3" }, "error": "no worktree" } ]
+            "applied": [ { "action": "reap", "ticket": "PROJ-2" } ],
+            "failed": [ { "action": { "action": "spawn", "ticket": "PROJ-3" }, "error": "no worktree" } ]
         })));
         assert!(out.contains("(live)"));
-        assert!(out.contains("✓") && out.contains("reap") && out.contains("MADY-2"));
-        assert!(out.contains("✗") && out.contains("MADY-3") && out.contains("no worktree"));
+        assert!(out.contains("✓") && out.contains("reap") && out.contains("PROJ-2"));
+        assert!(out.contains("✗") && out.contains("PROJ-3") && out.contains("no worktree"));
     }
 
     fn sess(kind: CrewKind, ticket: Option<&str>, convoy: Option<&str>, worktree: &str, hid: Option<&str>) -> domain::Session {
@@ -742,9 +742,9 @@ mod tests {
     #[test]
     fn transcript_path_uses_the_stored_session_id() {
         // A non-existent worktree → canonicalize falls back to the raw path, encoded `/`→`-`.
-        let s = sess(CrewKind::Worker, Some("MADY-1"), None, "/wt/MADY-1", Some("abc-123"));
+        let s = sess(CrewKind::Worker, Some("PROJ-1"), None, "/wt/PROJ-1", Some("abc-123"));
         let got = transcript_path(&s).unwrap();
-        let want = format!("{}/.claude/projects/-wt-MADY-1/abc-123.jsonl", std::env::var("HOME").unwrap());
+        let want = format!("{}/.claude/projects/-wt-PROJ-1/abc-123.jsonl", std::env::var("HOME").unwrap());
         assert_eq!(got.to_string_lossy(), want);
     }
 
@@ -755,19 +755,19 @@ mod tests {
             ticket: ticket.map(Into::into),
             convoy: convoy.map(Into::into),
         };
-        assert!(matches_target(&sess(CrewKind::Worker, Some("MADY-1"), None, "/wt", None), &ct("worker", Some("MADY-1"), None)));
-        assert!(!matches_target(&sess(CrewKind::Worker, Some("MADY-2"), None, "/wt", None), &ct("worker", Some("MADY-1"), None)));
-        assert!(matches_target(&sess(CrewKind::Captain, None, Some("MADY-100"), "/hub", None), &ct("captain", None, Some("MADY-100"))));
+        assert!(matches_target(&sess(CrewKind::Worker, Some("PROJ-1"), None, "/wt", None), &ct("worker", Some("PROJ-1"), None)));
+        assert!(!matches_target(&sess(CrewKind::Worker, Some("PROJ-2"), None, "/wt", None), &ct("worker", Some("PROJ-1"), None)));
+        assert!(matches_target(&sess(CrewKind::Captain, None, Some("PROJ-100"), "/hub", None), &ct("captain", None, Some("PROJ-100"))));
         assert!(matches_target(&sess(CrewKind::Lookout, None, None, "/hub", None), &ct("lookout", None, None)));
     }
 
     #[test]
     fn parse_send_takes_the_target_flags_and_the_message_positional() {
         let a = |args: &[&str]| parse_send(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-        let p = a(&["--cog", "worker", "--ticket", "MADY-1", "handle the edge case"]).unwrap();
+        let p = a(&["--cog", "worker", "--ticket", "PROJ-1", "handle the edge case"]).unwrap();
         assert_eq!(
             (p.cog.as_str(), p.ticket.as_deref(), p.convoy, p.message.as_str()),
-            ("worker", Some("MADY-1"), None, "handle the edge case")
+            ("worker", Some("PROJ-1"), None, "handle the edge case")
         );
         // lookout takes the message, no key.
         assert_eq!(a(&["--cog", "lookout", "look again"]).unwrap().message, "look again");

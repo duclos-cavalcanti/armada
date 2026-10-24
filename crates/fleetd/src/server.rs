@@ -525,12 +525,12 @@ mod tests {
         let sock = spawn_server(snapshot, tx, "status");
 
         // A valid report is relayed and acked.
-        let body = r#"{"cog":"worker","ticket":"MADY-1","state":"concluded","last_action":null}"#;
+        let body = r#"{"cog":"worker","ticket":"PROJ-1","state":"concluded","last_action":null}"#;
         let req = format!("POST /status HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len());
         assert!(roundtrip(&sock, req.as_bytes()).contains("200 OK"));
 
         // An invalid state for the cog is rejected at the edge (never reaches the writer).
-        let bad = r#"{"cog":"worker","ticket":"MADY-1","state":"finishing","last_action":null}"#;
+        let bad = r#"{"cog":"worker","ticket":"PROJ-1","state":"finishing","last_action":null}"#;
         let req = format!("POST /status HTTP/1.1\r\nContent-Length: {}\r\n\r\n{bad}", bad.len());
         assert!(roundtrip(&sock, req.as_bytes()).contains("400 Bad Request"));
 
@@ -565,7 +565,7 @@ mod tests {
         });
         let sock = spawn_server(snapshot, tx, "dispatch");
 
-        let body = r#"{"ticket":"MADY-1","auto_impl":true,"auto_review":false,"fork_from":"origin/master","ac_summary":"do it","park_at":null}"#;
+        let body = r#"{"ticket":"PROJ-1","auto_impl":true,"auto_review":false,"fork_from":"origin/master","ac_summary":"do it","park_at":null}"#;
         let req = format!("POST /dispatch HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len());
         assert!(roundtrip(&sock, req.as_bytes()).contains("200 OK"));
 

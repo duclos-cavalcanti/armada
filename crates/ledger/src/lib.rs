@@ -488,34 +488,34 @@ mod tests {
     #[test]
     fn ticket_round_trips_with_edges_and_cache() {
         let db = Ledger::in_memory().unwrap();
-        let mut t = bare_ticket("MADY-1");
+        let mut t = bare_ticket("PROJ-1");
         t.title = Some("Do X".into());
         t.assignee = Some("me".into());
         t.status = Some(TicketStatus::InProgress);
         t.synced_at = Some("t".into());
         TicketRepo::upsert(&db, &t).unwrap();
-        TicketRepo::upsert(&db, &bare_ticket("MADY-2")).unwrap(); // FK target for the edge
+        TicketRepo::upsert(&db, &bare_ticket("PROJ-2")).unwrap(); // FK target for the edge
 
-        db.set_blocked_by(&TicketKey("MADY-1".into()), &[TicketKey("MADY-2".into())])
+        db.set_blocked_by(&TicketKey("PROJ-1".into()), &[TicketKey("PROJ-2".into())])
             .unwrap();
 
-        let got = TicketRepo::get(&db, &TicketKey("MADY-1".into())).unwrap().unwrap();
+        let got = TicketRepo::get(&db, &TicketKey("PROJ-1".into())).unwrap().unwrap();
         assert_eq!(got.title.as_deref(), Some("Do X"));
         assert_eq!(got.status, Some(TicketStatus::InProgress));
-        assert_eq!(got.blocked_by, vec![TicketKey("MADY-2".into())]);
+        assert_eq!(got.blocked_by, vec![TicketKey("PROJ-2".into())]);
         assert_eq!(db.board().unwrap().len(), 2);
     }
 
     #[test]
     fn upsert_updates_the_cache_in_place() {
         let db = Ledger::in_memory().unwrap();
-        TicketRepo::upsert(&db, &bare_ticket("MADY-1")).unwrap();
-        let mut t = bare_ticket("MADY-1");
+        TicketRepo::upsert(&db, &bare_ticket("PROJ-1")).unwrap();
+        let mut t = bare_ticket("PROJ-1");
         t.status = Some(TicketStatus::Done);
         TicketRepo::upsert(&db, &t).unwrap(); // second upsert = update, not a dup
         assert_eq!(db.board().unwrap().len(), 1);
         assert_eq!(
-            TicketRepo::get(&db, &TicketKey("MADY-1".into())).unwrap().unwrap().status,
+            TicketRepo::get(&db, &TicketKey("PROJ-1".into())).unwrap().unwrap().status,
             Some(TicketStatus::Done)
         );
     }
@@ -523,8 +523,8 @@ mod tests {
     #[test]
     fn session_start_live_end_roundtrip() {
         let db = Ledger::in_memory().unwrap();
-        TicketRepo::upsert(&db, &bare_ticket("MADY-1")).unwrap();
-        let id = db.start(&worker_on("MADY-1")).unwrap().expect("a new session");
+        TicketRepo::upsert(&db, &bare_ticket("PROJ-1")).unwrap();
+        let id = db.start(&worker_on("PROJ-1")).unwrap().expect("a new session");
         assert_eq!(db.live().unwrap().len(), 1);
         assert_eq!(SessionRepo::get(&db, &id).unwrap().unwrap().kind, CrewKind::Worker);
         db.end(&id, "t2").unwrap();
@@ -535,15 +535,15 @@ mod tests {
     #[test]
     fn spawn_lock_skips_a_second_live_worker() {
         let db = Ledger::in_memory().unwrap();
-        TicketRepo::upsert(&db, &bare_ticket("MADY-1")).unwrap();
-        let id = db.start(&worker_on("MADY-1")).unwrap().expect("a new session");
+        TicketRepo::upsert(&db, &bare_ticket("PROJ-1")).unwrap();
+        let id = db.start(&worker_on("PROJ-1")).unwrap().expect("a new session");
         assert!(
-            db.start(&worker_on("MADY-1")).unwrap().is_none(),
+            db.start(&worker_on("PROJ-1")).unwrap().is_none(),
             "a 2nd live worker is skipped by the lock (None), not an error"
         );
         db.end(&id, "t2").unwrap();
         assert!(
-            db.start(&worker_on("MADY-1")).unwrap().is_some(),
+            db.start(&worker_on("PROJ-1")).unwrap().is_some(),
             "respawn ok once the first ended"
         );
     }
@@ -558,17 +558,17 @@ mod tests {
     fn captain_starts_ticketless_on_a_convoy() {
         // No ticket row needed: a captain has no ticket (and convoy carries no FK).
         let db = Ledger::in_memory().unwrap();
-        let id = db.start(&captain_on("MADY-100")).unwrap().expect("a captain session");
+        let id = db.start(&captain_on("PROJ-100")).unwrap().expect("a captain session");
         let got = SessionRepo::get(&db, &id).unwrap().unwrap();
         assert_eq!(got.kind, CrewKind::Captain);
         assert!(got.ticket.is_none(), "a captain carries no ticket");
-        assert_eq!(got.convoy, Some(ConvoyKey("MADY-100".into())));
+        assert_eq!(got.convoy, Some(ConvoyKey("PROJ-100".into())));
     }
 
     #[test]
     fn check_rejects_a_ticketless_worker() {
         let db = Ledger::in_memory().unwrap();
-        let mut s = worker_on("MADY-1");
+        let mut s = worker_on("PROJ-1");
         s.ticket = None; // the per-kind CHECK fires before any FK check
         assert!(db.start(&s).is_err(), "a worker with no ticket violates the per-kind CHECK");
     }
@@ -576,7 +576,7 @@ mod tests {
     #[test]
     fn check_rejects_a_convoyless_captain() {
         let db = Ledger::in_memory().unwrap();
-        let mut s = captain_on("MADY-100");
+        let mut s = captain_on("PROJ-100");
         s.convoy = None;
         assert!(db.start(&s).is_err(), "a captain with no convoy violates the per-kind CHECK");
     }
@@ -584,18 +584,18 @@ mod tests {
     #[test]
     fn one_live_captain_per_convoy() {
         let db = Ledger::in_memory().unwrap();
-        let id = db.start(&captain_on("MADY-100")).unwrap().expect("first captain");
+        let id = db.start(&captain_on("PROJ-100")).unwrap().expect("first captain");
         assert!(
-            db.start(&captain_on("MADY-100")).unwrap().is_none(),
+            db.start(&captain_on("PROJ-100")).unwrap().is_none(),
             "a 2nd live captain on the same convoy is skipped by the lock (None)"
         );
         assert!(
-            db.start(&captain_on("MADY-200")).unwrap().is_some(),
+            db.start(&captain_on("PROJ-200")).unwrap().is_some(),
             "a different convoy is an independent slot"
         );
         db.end(&id, "t2").unwrap();
         assert!(
-            db.start(&captain_on("MADY-100")).unwrap().is_some(),
+            db.start(&captain_on("PROJ-100")).unwrap().is_some(),
             "respawn ok once the first captain ended"
         );
     }
@@ -603,20 +603,20 @@ mod tests {
     #[test]
     fn convoy_open_is_active_and_close_deactivates() {
         let db = Ledger::in_memory().unwrap();
-        db.open(&ConvoyKey("MADY-100".into()), Some("auth"), "t1").unwrap();
+        db.open(&ConvoyKey("PROJ-100".into()), Some("auth"), "t1").unwrap();
         let active = db.active().unwrap();
         assert_eq!(active.len(), 1);
-        assert_eq!(active[0].key, ConvoyKey("MADY-100".into()));
+        assert_eq!(active[0].key, ConvoyKey("PROJ-100".into()));
         assert_eq!(active[0].title.as_deref(), Some("auth"));
 
-        db.close(&ConvoyKey("MADY-100".into()), "t2").unwrap();
+        db.close(&ConvoyKey("PROJ-100".into()), "t2").unwrap();
         assert!(db.active().unwrap().is_empty(), "a closed convoy drops out of active");
     }
 
     #[test]
     fn convoy_reopen_clears_ended_at() {
         let db = Ledger::in_memory().unwrap();
-        let k = ConvoyKey("MADY-100".into());
+        let k = ConvoyKey("PROJ-100".into());
         db.open(&k, None, "t1").unwrap();
         db.close(&k, "t2").unwrap();
         db.open(&k, Some("revived"), "t3").unwrap();
@@ -628,7 +628,7 @@ mod tests {
     #[test]
     fn convoy_open_and_close_log_cdc_events_and_a_noop_close_logs_nothing() {
         let db = Ledger::in_memory().unwrap();
-        let k = ConvoyKey("MADY-100".into());
+        let k = ConvoyKey("PROJ-100".into());
         db.open(&k, None, "t1").unwrap();
         db.close(&k, "t2").unwrap();
         db.close(&k, "t3").unwrap(); // already closed → no-op
@@ -644,8 +644,8 @@ mod tests {
     #[test]
     fn anchor_sets_the_flag_weigh_clears_it_and_both_log_cdc_once() {
         let db = Ledger::in_memory().unwrap();
-        TicketRepo::upsert(&db, &bare_ticket("MADY-1")).unwrap();
-        let id = db.start(&worker_on("MADY-1")).unwrap().expect("a session");
+        TicketRepo::upsert(&db, &bare_ticket("PROJ-1")).unwrap();
+        let id = db.start(&worker_on("PROJ-1")).unwrap().expect("a session");
 
         SessionRepo::anchor(&db, &id, "t1").unwrap();
         assert!(SessionRepo::get(&db, &id).unwrap().unwrap().anchored_at.is_some());
@@ -671,8 +671,8 @@ mod tests {
     #[test]
     fn set_held_flips_the_flag_logs_cdc_once_each_way_and_carries_the_reason() {
         let db = Ledger::in_memory().unwrap();
-        TicketRepo::upsert(&db, &bare_ticket("MADY-1")).unwrap();
-        let key = TicketKey("MADY-1".into());
+        TicketRepo::upsert(&db, &bare_ticket("PROJ-1")).unwrap();
+        let key = TicketKey("PROJ-1".into());
 
         TicketRepo::set_held(&db, &key, true, Some("needs grooming"), "t1").unwrap();
         assert!(TicketRepo::get(&db, &key).unwrap().unwrap().held);
@@ -693,8 +693,8 @@ mod tests {
     #[test]
     fn report_keeps_latest_and_logs_history() {
         let db = Ledger::in_memory().unwrap();
-        TicketRepo::upsert(&db, &bare_ticket("MADY-1")).unwrap();
-        let id = db.start(&worker_on("MADY-1")).unwrap().expect("a new session");
+        TicketRepo::upsert(&db, &bare_ticket("PROJ-1")).unwrap();
+        let id = db.start(&worker_on("PROJ-1")).unwrap().expect("a new session");
 
         db.record(&Report {
             session: id.clone(),
@@ -1183,10 +1183,10 @@ mod repo_tests {
 
     #[test]
     fn ship_and_snapshot_round_trip() {
-        let db = db_with("MADY-1");
+        let db = db_with("PROJ-1");
         let ship = Ship {
             id: ShipId(0),
-            ticket: Some(TicketKey("MADY-1".into())),
+            ticket: Some(TicketKey("PROJ-1".into())),
             iid: 42,
             url: "u".into(),
             target: "master".into(),
@@ -1233,19 +1233,19 @@ mod repo_tests {
 
     #[test]
     fn order_round_trips_and_cancels() {
-        let db = db_with("MADY-1");
+        let db = db_with("PROJ-1");
         let order = Order {
-            ticket: TicketKey("MADY-1".into()),
+            ticket: TicketKey("PROJ-1".into()),
             auto_impl: true,
             auto_review: false,
             fork_from: "origin/master".into(),
             ac_summary: "do the thing".into(),
             park_at: None,
-            worktree_path: Some("/wt/MADY-1".into()),
+            worktree_path: Some("/wt/PROJ-1".into()),
             created_at: "t".into(),
         };
         db.dispatch(&order).unwrap();
-        let got = OrderRepo::get(&db, &TicketKey("MADY-1".into())).unwrap().unwrap();
+        let got = OrderRepo::get(&db, &TicketKey("PROJ-1".into())).unwrap().unwrap();
         assert!(got.auto_impl && !got.auto_review);
         assert_eq!(db.queue().unwrap().len(), 1);
 
@@ -1253,20 +1253,20 @@ mod repo_tests {
         let ev = db.since(Seq(0)).unwrap();
         let d = ev.iter().find(|e| e.kind == EventKind::Dispatched).expect("a Dispatched event");
         assert_eq!(d.entity_kind, EntityKind::Ticket);
-        assert_eq!(d.entity_ref, "MADY-1");
+        assert_eq!(d.entity_ref, "PROJ-1");
         assert_eq!(d.payload["auto_impl"], true);
         assert_eq!(d.payload["auto_review"], false);
 
-        db.cancel(&TicketKey("MADY-1".into())).unwrap();
+        db.cancel(&TicketKey("PROJ-1".into())).unwrap();
         assert!(db.queue().unwrap().is_empty());
     }
 
     #[test]
     fn escalation_raise_resolve() {
-        let db = db_with("MADY-1");
+        let db = db_with("PROJ-1");
         let esc = Escalation {
             id: EscalationId(0),
-            ticket: TicketKey("MADY-1".into()),
+            ticket: TicketKey("PROJ-1".into()),
             raised_by: CrewKind::Worker,
             summary: "blocked on X".into(),
             evidence: vec!["auth.rs:407".into(), "E0050".into()],
@@ -1312,7 +1312,7 @@ mod repo_tests {
         TicketRepo::upsert(
             &db,
             &Ticket {
-                key: TicketKey("MADY-1".into()),
+                key: TicketKey("PROJ-1".into()),
                 convoy: None,
                 held: true,
                 created_at: "orig".into(),
@@ -1328,7 +1328,7 @@ mod repo_tests {
         // A tracker sync refreshes the cache fields...
         db.sync(
             &TrackerTicket {
-                key: TicketKey("MADY-1".into()),
+                key: TicketKey("PROJ-1".into()),
                 title: "new title".into(),
                 status: TicketStatus::InProgress,
                 assignee: Some("me".into()),
@@ -1339,7 +1339,7 @@ mod repo_tests {
         )
         .unwrap();
 
-        let got = TicketRepo::get(&db, &TicketKey("MADY-1".into())).unwrap().unwrap();
+        let got = TicketRepo::get(&db, &TicketKey("PROJ-1".into())).unwrap().unwrap();
         assert_eq!(got.title.as_deref(), Some("new title")); // cache updated
         assert_eq!(got.status, Some(TicketStatus::InProgress));
         assert_eq!(got.assignee.as_deref(), Some("me"));
@@ -1349,7 +1349,7 @@ mod repo_tests {
         // A sync for an unseen ticket inserts it (held defaults false).
         db.sync(
             &TrackerTicket {
-                key: TicketKey("MADY-2".into()),
+                key: TicketKey("PROJ-2".into()),
                 title: "fresh".into(),
                 status: TicketStatus::Todo,
                 assignee: None,
@@ -1359,7 +1359,7 @@ mod repo_tests {
             "t3",
         )
         .unwrap();
-        let fresh = TicketRepo::get(&db, &TicketKey("MADY-2".into())).unwrap().unwrap();
+        let fresh = TicketRepo::get(&db, &TicketKey("PROJ-2".into())).unwrap().unwrap();
         assert!(!fresh.held);
         assert_eq!(fresh.created_at, "t3");
     }
@@ -1375,18 +1375,18 @@ mod repo_tests {
             convoy: None,
             blocked_by: blocked_by.into_iter().map(|b| TicketKey(b.into())).collect(),
         };
-        // MADY-2 is tracked; MADY-99 is not. MADY-1 claims both as blockers.
-        db.sync(&tt("MADY-2", vec![]), "t").unwrap();
-        db.sync(&tt("MADY-1", vec!["MADY-2", "MADY-99"]), "t").unwrap();
+        // PROJ-2 is tracked; PROJ-99 is not. PROJ-1 claims both as blockers.
+        db.sync(&tt("PROJ-2", vec![]), "t").unwrap();
+        db.sync(&tt("PROJ-1", vec!["PROJ-2", "PROJ-99"]), "t").unwrap();
         assert_eq!(
-            TicketRepo::get(&db, &TicketKey("MADY-1".into())).unwrap().unwrap().blocked_by,
-            vec![TicketKey("MADY-2".into())],
-            "known blocker wired; dangling MADY-99 skipped (no FK trip)"
+            TicketRepo::get(&db, &TicketKey("PROJ-1".into())).unwrap().unwrap().blocked_by,
+            vec![TicketKey("PROJ-2".into())],
+            "known blocker wired; dangling PROJ-99 skipped (no FK trip)"
         );
-        // Re-sync MADY-1 with no blockers → the stale edge clears (Jira is authoritative).
-        db.sync(&tt("MADY-1", vec![]), "t2").unwrap();
+        // Re-sync PROJ-1 with no blockers → the stale edge clears (Jira is authoritative).
+        db.sync(&tt("PROJ-1", vec![]), "t2").unwrap();
         assert!(
-            TicketRepo::get(&db, &TicketKey("MADY-1".into())).unwrap().unwrap().blocked_by.is_empty(),
+            TicketRepo::get(&db, &TicketKey("PROJ-1".into())).unwrap().unwrap().blocked_by.is_empty(),
             "an emptied blocked_by clears the stale edge"
         );
     }

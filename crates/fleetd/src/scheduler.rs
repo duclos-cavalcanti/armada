@@ -529,9 +529,9 @@ mod tests {
         // An off-sprint ticket isn't in the ledger; ensure_ticket pulls it from the tracker so the
         // order FK holds.
         let db = Ledger::in_memory().unwrap();
-        let key = TicketKey("MADY-9".into());
+        let key = TicketKey("PROJ-9".into());
         assert!(TicketRepo::get(&db, &key).unwrap().is_none(), "not synced yet");
-        ensure_ticket(&db, &FakeTracker(vec![tt("MADY-9", TicketStatus::Todo)]), &key).unwrap();
+        ensure_ticket(&db, &FakeTracker(vec![tt("PROJ-9", TicketStatus::Todo)]), &key).unwrap();
         assert_eq!(TicketRepo::get(&db, &key).unwrap().unwrap().status, Some(TicketStatus::Todo));
     }
 
@@ -539,8 +539,8 @@ mod tests {
     fn ensure_ticket_leaves_a_synced_ticket_untouched() {
         // Already in the ledger → no refetch (the empty tracker's get() would error if called).
         let db = Ledger::in_memory().unwrap();
-        let key = TicketKey("MADY-9".into());
-        sync::sync_board(&db, &FakeTracker(vec![tt("MADY-9", TicketStatus::InProgress)]), "now").unwrap();
+        let key = TicketKey("PROJ-9".into());
+        sync::sync_board(&db, &FakeTracker(vec![tt("PROJ-9", TicketStatus::InProgress)]), "now").unwrap();
         ensure_ticket(&db, &FakeTracker(vec![]), &key).unwrap();
         assert_eq!(TicketRepo::get(&db, &key).unwrap().unwrap().status, Some(TicketStatus::InProgress));
     }
@@ -550,7 +550,7 @@ mod tests {
         let db = Ledger::in_memory().unwrap();
         let forge = FakeForge(vec![]);
         let tracker = FakeTracker(vec![TrackerTicket {
-            key: TicketKey("MADY-1".into()),
+            key: TicketKey("PROJ-1".into()),
             title: "T".into(),
             status: TicketStatus::Todo,
             assignee: None,
@@ -613,14 +613,14 @@ mod tests {
         }
     }
 
-    /// A ledger with one live worker on MADY-1; returns (db, its session id).
+    /// A ledger with one live worker on PROJ-1; returns (db, its session id).
     fn db_with_live_worker() -> (Ledger, SessionId) {
         use domain::ports::TicketRepo;
         let db = Ledger::in_memory().unwrap();
         TicketRepo::upsert(
             &db,
             &Ticket {
-                key: TicketKey("MADY-1".into()),
+                key: TicketKey("PROJ-1".into()),
                 convoy: None,
                 held: false,
                 created_at: "t".into(),
@@ -637,10 +637,10 @@ mod tests {
             &Session {
                 id: SessionId(0),
                 kind: CrewKind::Worker,
-                ticket: Some(TicketKey("MADY-1".into())),
+                ticket: Some(TicketKey("PROJ-1".into())),
                 convoy: None,
                 worktree_path: "/wt".into(),
-                tmux_session: "worker-MADY-1".into(),
+                tmux_session: "worker-PROJ-1".into(),
                 harness_session_id: None,
                 created_at: "t".into(),
                 ended_at: None,
@@ -653,7 +653,7 @@ mod tests {
     }
 
     fn worker_target() -> ControlTarget {
-        ControlTarget::Cog { cog: CrewKind::Worker, ticket: TicketKey("MADY-1".into()) }
+        ControlTarget::Cog { cog: CrewKind::Worker, ticket: TicketKey("PROJ-1".into()) }
     }
 
     #[test]
@@ -671,7 +671,7 @@ mod tests {
         let (db, id) = db_with_live_worker();
         let host = FakeHost::new();
         send(&db, &host, &worker_target(), "handle the edge case").unwrap();
-        assert_eq!(host.sent.borrow().as_slice(), &["worker-MADY-1".to_string()], "reached the pane");
+        assert_eq!(host.sent.borrow().as_slice(), &["worker-PROJ-1".to_string()], "reached the pane");
         assert!(host.killed.borrow().is_empty(), "send never kills");
         assert!(
             SessionRepo::get(&db, &id).unwrap().unwrap().anchored_at.is_none(),
@@ -685,7 +685,7 @@ mod tests {
         let host = FakeHost::new();
         control(&db, &host, Verb::Sink, &worker_target()).unwrap();
         assert!(SessionRepo::get(&db, &id).unwrap().unwrap().ended_at.is_some(), "session ended");
-        assert_eq!(host.killed.borrow().as_slice(), &["worker-MADY-1".to_string()]);
+        assert_eq!(host.killed.borrow().as_slice(), &["worker-PROJ-1".to_string()]);
         let ev = db.since(Seq(0)).unwrap();
         assert!(ev.iter().any(|e| e.kind == EventKind::SessionEnded && e.payload["reason"] == "sink"));
     }
@@ -723,27 +723,27 @@ mod tests {
     #[test]
     fn captain_anchor_holds_the_convoy_gate_and_weigh_lifts_it() {
         let db = Ledger::in_memory().unwrap();
-        ConvoyRepo::open(&db, &ConvoyKey("MADY-100".into()), None, "t").unwrap();
+        ConvoyRepo::open(&db, &ConvoyKey("PROJ-100".into()), None, "t").unwrap();
         let host = FakeHost::new();
-        let cap = ControlTarget::Captain { convoy: ConvoyKey("MADY-100".into()) };
+        let cap = ControlTarget::Captain { convoy: ConvoyKey("PROJ-100".into()) };
         // The hold lives on the convoy (the trigger source), with no live captain to touch.
         control(&db, &host, Verb::Anchor, &cap).unwrap();
-        assert!(anchored_convoy(&db, "MADY-100"), "anchor sets the convoy gate");
+        assert!(anchored_convoy(&db, "PROJ-100"), "anchor sets the convoy gate");
         assert!(host.killed.borrow().is_empty(), "no live captain → nothing scuttled");
         control(&db, &host, Verb::Weigh, &cap).unwrap();
-        assert!(!anchored_convoy(&db, "MADY-100"), "weigh lifts it");
+        assert!(!anchored_convoy(&db, "PROJ-100"), "weigh lifts it");
     }
 
     #[test]
     fn captain_sink_anchors_the_convoy_and_scuttles_the_live_captain() {
         let db = Ledger::in_memory().unwrap();
-        ConvoyRepo::open(&db, &ConvoyKey("MADY-100".into()), None, "t").unwrap();
-        let id = start_ticketless(&db, CrewKind::Captain, Some("MADY-100"), "captain-MADY-100");
+        ConvoyRepo::open(&db, &ConvoyKey("PROJ-100".into()), None, "t").unwrap();
+        let id = start_ticketless(&db, CrewKind::Captain, Some("PROJ-100"), "captain-PROJ-100");
         let host = FakeHost::new();
-        control(&db, &host, Verb::Sink, &ControlTarget::Captain { convoy: ConvoyKey("MADY-100".into()) }).unwrap();
-        assert!(anchored_convoy(&db, "MADY-100"), "sink holds the gate too (no relaunch)");
+        control(&db, &host, Verb::Sink, &ControlTarget::Captain { convoy: ConvoyKey("PROJ-100".into()) }).unwrap();
+        assert!(anchored_convoy(&db, "PROJ-100"), "sink holds the gate too (no relaunch)");
         assert!(SessionRepo::get(&db, &id).unwrap().unwrap().ended_at.is_some(), "captain session ended");
-        assert_eq!(host.killed.borrow().as_slice(), &["captain-MADY-100".to_string()]);
+        assert_eq!(host.killed.borrow().as_slice(), &["captain-PROJ-100".to_string()]);
     }
 
     #[test]
@@ -774,7 +774,7 @@ mod tests {
         TicketRepo::upsert(
             &db,
             &Ticket {
-                key: TicketKey("MADY-1".into()),
+                key: TicketKey("PROJ-1".into()),
                 convoy: None,
                 held: false,
                 created_at: "t".into(),
@@ -789,7 +789,7 @@ mod tests {
         OrderRepo::dispatch(
             &db,
             &Order {
-                ticket: TicketKey("MADY-1".into()),
+                ticket: TicketKey("PROJ-1".into()),
                 auto_impl: true,
                 auto_review: true,
                 fork_from: "origin/master".into(),
@@ -804,7 +804,7 @@ mod tests {
             &db,
             &Ship {
                 id: ShipId(0),
-                ticket: Some(TicketKey("MADY-1".into())),
+                ticket: Some(TicketKey("PROJ-1".into())),
                 iid: 7,
                 url: "u".into(),
                 target: "master".into(),
@@ -832,11 +832,11 @@ mod tests {
         })
         .unwrap();
 
-        let p = build_packet(&db, &TicketKey("MADY-1".into())).unwrap();
+        let p = build_packet(&db, &TicketKey("PROJ-1".into())).unwrap();
         assert_eq!(p.order.unwrap().ac_summary, "do it");
         assert_eq!(p.ship.unwrap().iid, 7);
         assert_eq!(p.snapshot.unwrap().state, ShipState::Open);
-        assert_eq!(p.ticket.unwrap().key, TicketKey("MADY-1".into()));
+        assert_eq!(p.ticket.unwrap().key, TicketKey("PROJ-1".into()));
     }
 
     #[test]
@@ -854,16 +854,16 @@ mod tests {
             status: Some(status),
             synced_at: None,
         };
-        TicketRepo::upsert(&db, &t("MADY-1", "MADY-100", TicketStatus::Todo)).unwrap(); // ready, undispatched
-        TicketRepo::upsert(&db, &t("MADY-2", "MADY-100", TicketStatus::Done)).unwrap(); // not ready
-        TicketRepo::upsert(&db, &t("MADY-9", "MADY-200", TicketStatus::Todo)).unwrap(); // other convoy
+        TicketRepo::upsert(&db, &t("PROJ-1", "PROJ-100", TicketStatus::Todo)).unwrap(); // ready, undispatched
+        TicketRepo::upsert(&db, &t("PROJ-2", "PROJ-100", TicketStatus::Done)).unwrap(); // not ready
+        TicketRepo::upsert(&db, &t("PROJ-9", "PROJ-200", TicketStatus::Todo)).unwrap(); // other convoy
 
-        let view = build_convoy_view(&db, &ConvoyKey("MADY-100".into())).unwrap();
+        let view = build_convoy_view(&db, &ConvoyKey("PROJ-100".into())).unwrap();
         assert_eq!(view.tickets.len(), 2, "scoped to the convoy");
-        let a = view.tickets.iter().find(|x| x.key == TicketKey("MADY-1".into())).unwrap();
+        let a = view.tickets.iter().find(|x| x.key == TicketKey("PROJ-1".into())).unwrap();
         assert_eq!(a.classification, Some(Classification::Clean), "To Do + unblocked");
         assert!(!a.dispatched, "no order");
-        let b = view.tickets.iter().find(|x| x.key == TicketKey("MADY-2".into())).unwrap();
+        let b = view.tickets.iter().find(|x| x.key == TicketKey("PROJ-2".into())).unwrap();
         assert_eq!(b.classification, None, "Done is past the frontier");
         assert_eq!(b.status, Some(TicketStatus::Done));
     }
@@ -877,19 +877,19 @@ mod tests {
         };
         // worker/sailor/hand → a ticket.
         assert!(matches!(
-            ControlTarget::from_wire(ct("worker", Some("MADY-1"), None)),
+            ControlTarget::from_wire(ct("worker", Some("PROJ-1"), None)),
             Ok(ControlTarget::Cog { cog: CrewKind::Worker, .. })
         ));
         assert!(ControlTarget::from_wire(ct("sailor", None, None)).is_err(), "needs a ticket");
         // captain → a convoy.
         assert!(matches!(
-            ControlTarget::from_wire(ct("captain", None, Some("MADY-100"))),
+            ControlTarget::from_wire(ct("captain", None, Some("PROJ-100"))),
             Ok(ControlTarget::Captain { .. })
         ));
         assert!(ControlTarget::from_wire(ct("captain", None, None)).is_err(), "needs a convoy");
         // lookout → neither.
         assert!(matches!(ControlTarget::from_wire(ct("lookout", None, None)), Ok(ControlTarget::Lookout)));
         // unknown cog → a clear error, never a silent accept.
-        assert!(ControlTarget::from_wire(ct("foreman", Some("MADY-1"), None)).is_err());
+        assert!(ControlTarget::from_wire(ct("foreman", Some("PROJ-1"), None)).is_err());
     }
 }

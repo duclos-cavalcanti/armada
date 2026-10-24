@@ -241,16 +241,16 @@ mod tests {
 
     // Real jira --raw / REST field shape (trimmed).
     const SAMPLE: &str = r#"{"issues":[
-      {"key":"MADY-6192","fields":{"summary":"Capture body","status":{"name":"In Progress"},"assignee":{"displayName":"Jack Shannon"}}},
-      {"key":"MADY-6168","fields":{"summary":"Relocate","status":{"name":"To Do"},"assignee":null}},
-      {"key":"MADY-5000","fields":{"summary":"weird","status":{"name":"Backlog"},"assignee":null}}
+      {"key":"PROJ-6192","fields":{"summary":"Capture body","status":{"name":"In Progress"},"assignee":{"displayName":"Jack Shannon"}}},
+      {"key":"PROJ-6168","fields":{"summary":"Relocate","status":{"name":"To Do"},"assignee":null}},
+      {"key":"PROJ-5000","fields":{"summary":"weird","status":{"name":"Backlog"},"assignee":null}}
     ]}"#;
 
     #[test]
     fn parses_issues_and_maps_status() {
         let ts = parse_jira_issues(SAMPLE).unwrap();
         assert_eq!(ts.len(), 2); // "Backlog" is unknown → dropped
-        assert_eq!(ts[0].key, TicketKey("MADY-6192".into()));
+        assert_eq!(ts[0].key, TicketKey("PROJ-6192".into()));
         assert_eq!(ts[0].status, TicketStatus::InProgress);
         assert_eq!(ts[0].assignee.as_deref(), Some("Jack Shannon"));
         assert_eq!(ts[1].status, TicketStatus::Todo);
@@ -260,22 +260,22 @@ mod tests {
     // The live --raw shape (probed): `parent` = the epic; `issueLinks` (camelCase) carries the
     // Blocks edges — inwardIssue = a blocker of this ticket, outwardIssue = one this ticket blocks.
     const LINKED: &str = r#"{"issues":[
-      {"key":"MADY-4160","fields":{"summary":"the blocked one","status":{"name":"To Do"},"parent":{"key":"MADY-280"},
-        "issueLinks":[{"type":{"name":"Blocks","inward":"is blocked by","outward":"blocks"},"inwardIssue":{"key":"MADY-6412"}}]}},
-      {"key":"MADY-6412","fields":{"summary":"the blocker","status":{"name":"In Progress"},"parent":{"key":"MADY-280"},
+      {"key":"PROJ-4160","fields":{"summary":"the blocked one","status":{"name":"To Do"},"parent":{"key":"PROJ-280"},
+        "issueLinks":[{"type":{"name":"Blocks","inward":"is blocked by","outward":"blocks"},"inwardIssue":{"key":"PROJ-6412"}}]}},
+      {"key":"PROJ-6412","fields":{"summary":"the blocker","status":{"name":"In Progress"},"parent":{"key":"PROJ-280"},
         "issueLinks":[
-          {"type":{"name":"Blocks","inward":"is blocked by","outward":"blocks"},"outwardIssue":{"key":"MADY-4160"}},
-          {"type":{"name":"Relates","inward":"relates to","outward":"relates to"},"inwardIssue":{"key":"MADY-9999"}}]}}
+          {"type":{"name":"Blocks","inward":"is blocked by","outward":"blocks"},"outwardIssue":{"key":"PROJ-4160"}},
+          {"type":{"name":"Relates","inward":"relates to","outward":"relates to"},"inwardIssue":{"key":"PROJ-9999"}}]}}
     ]}"#;
 
     #[test]
     fn maps_convoy_from_parent_and_blocked_by_from_inward_blocks_links() {
         let ts = parse_jira_issues(LINKED).unwrap();
-        let blocked = ts.iter().find(|t| t.key == TicketKey("MADY-4160".into())).unwrap();
-        assert_eq!(blocked.convoy, Some(ConvoyKey("MADY-280".into())), "convoy = the epic (parent)");
-        assert_eq!(blocked.blocked_by, vec![TicketKey("MADY-6412".into())], "inward Blocks link = a blocker");
-        let blocker = ts.iter().find(|t| t.key == TicketKey("MADY-6412".into())).unwrap();
-        assert_eq!(blocker.convoy, Some(ConvoyKey("MADY-280".into())));
+        let blocked = ts.iter().find(|t| t.key == TicketKey("PROJ-4160".into())).unwrap();
+        assert_eq!(blocked.convoy, Some(ConvoyKey("PROJ-280".into())), "convoy = the epic (parent)");
+        assert_eq!(blocked.blocked_by, vec![TicketKey("PROJ-6412".into())], "inward Blocks link = a blocker");
+        let blocker = ts.iter().find(|t| t.key == TicketKey("PROJ-6412".into())).unwrap();
+        assert_eq!(blocker.convoy, Some(ConvoyKey("PROJ-280".into())));
         assert!(
             blocker.blocked_by.is_empty(),
             "the outward 'blocks' edge is the reverse (carried on the blocked ticket); Relates is ignored"

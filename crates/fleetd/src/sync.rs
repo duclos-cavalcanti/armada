@@ -136,7 +136,7 @@ mod tests {
         TicketRepo::upsert(
             &db,
             &Ticket {
-                key: TicketKey("MADY-1".into()),
+                key: TicketKey("PROJ-1".into()),
                 convoy: None,
                 held: false,
                 created_at: "t".into(),
@@ -149,24 +149,24 @@ mod tests {
         )
         .unwrap();
 
-        let forge = FakeForge(vec![fs(1, Some("MADY-1")), fs(2, Some("MADY-999")), fs(3, None)]);
+        let forge = FakeForge(vec![fs(1, Some("PROJ-1")), fs(2, Some("PROJ-999")), fs(3, None)]);
         let n = sync_armada(&db, &forge, "now").unwrap();
 
         assert_eq!(n, 3);
         assert_eq!(ShipRepo::armada(&db).unwrap().len(), 3);
-        // MADY-1 is tracked → linked; MADY-999 unknown → None; iid 3 had no ticket.
+        // PROJ-1 is tracked → linked; PROJ-999 unknown → None; iid 3 had no ticket.
         assert_eq!(
             ShipRepo::get_by_iid(&db, 1).unwrap().unwrap().ticket,
-            Some(TicketKey("MADY-1".into()))
+            Some(TicketKey("PROJ-1".into()))
         );
         assert_eq!(ShipRepo::get_by_iid(&db, 2).unwrap().unwrap().ticket, None);
         // and a snapshot was written.
         let id = ShipRepo::get_by_iid(&db, 1).unwrap().unwrap().id;
         assert!(db.snapshot(&id).unwrap().is_some());
 
-        // OUR ship (MADY-1, tracked) is enriched; the unknown/allied ships are not.
+        // OUR ship (PROJ-1, tracked) is enriched; the unknown/allied ships are not.
         assert_eq!(db.snapshot(&id).unwrap().unwrap().approvals, Approvals { current: 1, required: 1 });
-        let ally = ShipRepo::get_by_iid(&db, 2).unwrap().unwrap().id; // MADY-999, untracked
+        let ally = ShipRepo::get_by_iid(&db, 2).unwrap().unwrap().id; // PROJ-999, untracked
         assert_eq!(db.snapshot(&ally).unwrap().unwrap().approvals, Approvals { current: 0, required: 0 });
     }
 
@@ -216,14 +216,14 @@ mod tests {
     fn sync_board_upserts_the_sprint() {
         let db = Ledger::in_memory().unwrap();
         let tracker = FakeTracker(vec![
-            tt("MADY-1", TicketStatus::InProgress),
-            tt("MADY-2", TicketStatus::Todo),
+            tt("PROJ-1", TicketStatus::InProgress),
+            tt("PROJ-2", TicketStatus::Todo),
         ]);
         let n = sync_board(&db, &tracker, "now").unwrap();
         assert_eq!(n, 2);
         assert_eq!(TicketRepo::board(&db).unwrap().len(), 2);
         assert_eq!(
-            TicketRepo::get(&db, &TicketKey("MADY-1".into())).unwrap().unwrap().status,
+            TicketRepo::get(&db, &TicketKey("PROJ-1".into())).unwrap().unwrap().status,
             Some(TicketStatus::InProgress)
         );
     }
@@ -231,13 +231,13 @@ mod tests {
     #[test]
     fn board_then_armada_links_ship_tickets() {
         let db = Ledger::in_memory().unwrap();
-        // board first → MADY-1 exists
-        sync_board(&db, &FakeTracker(vec![tt("MADY-1", TicketStatus::InProgress)]), "now").unwrap();
-        // then armada → the ship for MADY-1 links its FK
-        sync_armada(&db, &FakeForge(vec![fs(1, Some("MADY-1"))]), "now").unwrap();
+        // board first → PROJ-1 exists
+        sync_board(&db, &FakeTracker(vec![tt("PROJ-1", TicketStatus::InProgress)]), "now").unwrap();
+        // then armada → the ship for PROJ-1 links its FK
+        sync_armada(&db, &FakeForge(vec![fs(1, Some("PROJ-1"))]), "now").unwrap();
         assert_eq!(
             ShipRepo::get_by_iid(&db, 1).unwrap().unwrap().ticket,
-            Some(TicketKey("MADY-1".into()))
+            Some(TicketKey("PROJ-1".into()))
         );
     }
 }

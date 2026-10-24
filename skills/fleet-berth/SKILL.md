@@ -16,8 +16,8 @@ fleetd's spawn claims the ticket when it launches the cog.
 
 | Token | Required | Example | Effect |
 |---|---|---|---|
-| `<ticket>` | yes | `MADY-321` | The issue to create a worktree for |
-| `<fork-base-branch>` | no (default `master`) | `chore/MADY-100-foo` | Branch to fork off. `master` for READY-CLEAN; the parent MR's source branch for a READY-STACKED dispatch, so the worktree builds on the parent's in-flight work rather than stale master. |
+| `<ticket>` | yes | `PROJ-321` | The issue to create a worktree for |
+| `<fork-base-branch>` | no (default `master`) | `chore/PROJ-100-foo` | Branch to fork off. `master` for READY-CLEAN; the parent MR's source branch for a READY-STACKED dispatch, so the worktree builds on the parent's in-flight work rather than stale master. |
 
 ---
 
@@ -68,7 +68,7 @@ calls):
    - **branch** = `<prefix>/<ticket>-<slug>`.
    - **path** — under the factory's `worktrees/` (beside the `master` hub), named
      `<branch-with-"/"-as-"-">`. E.g. hub `…/worktrees/master` + branch
-     `chore/MADY-944-block-hmac-key` → `…/worktrees/chore-MADY-944-block-hmac-key`:
+     `chore/PROJ-944-block-hmac-key` → `…/worktrees/chore-PROJ-944-block-hmac-key`:
      ```bash
      LEAF="<prefix>-<ticket>-<slug>"        # branch with "/" → "-"
      WORKTREE_PATH="$(dirname "$REPO")/$LEAF"

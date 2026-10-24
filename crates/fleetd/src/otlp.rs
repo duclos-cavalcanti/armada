@@ -116,7 +116,7 @@ mod tests {
                 "resource": { "attributes": [
                     {"key":"service.name","value":{"stringValue":"fleet-worker"}},
                     {"key":"fleet.role","value":{"stringValue":"worker"}},
-                    {"key":"fleet.ticket","value":{"stringValue":"MADY-1"}},
+                    {"key":"fleet.ticket","value":{"stringValue":"PROJ-1"}},
                     {"key":"session.id","value":{"stringValue":"sess-1"}}
                 ]},
                 "scopeLogs": [{ "logRecords": [{
@@ -137,7 +137,7 @@ mod tests {
         assert_eq!(r.event, "claude_code.api_request");
         assert_eq!(r.service.as_deref(), Some("fleet-worker"));
         assert_eq!(r.role.as_deref(), Some("worker"));
-        assert_eq!(r.ticket.as_deref(), Some("MADY-1"));
+        assert_eq!(r.ticket.as_deref(), Some("PROJ-1"));
         assert_eq!(r.session_id.as_deref(), Some("sess-1"));
         assert_eq!(r.cost_usd, Some(1.5));
         assert_eq!(r.model.as_deref(), Some("claude-opus"));

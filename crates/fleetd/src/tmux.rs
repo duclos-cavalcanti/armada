@@ -113,9 +113,9 @@ mod tests {
 
     #[test]
     fn attribution_tags_role_and_ticket_from_the_session_name() {
-        let env: HashMap<_, _> = otel_attribution("worker-MADY-1").into_iter().collect();
+        let env: HashMap<_, _> = otel_attribution("worker-PROJ-1").into_iter().collect();
         assert_eq!(env["OTEL_SERVICE_NAME"], "fleet-worker");
-        assert_eq!(env["OTEL_RESOURCE_ATTRIBUTES"], "fleet.role=worker,fleet.ticket=MADY-1");
+        assert_eq!(env["OTEL_RESOURCE_ATTRIBUTES"], "fleet.role=worker,fleet.ticket=PROJ-1");
     }
 
     #[test]

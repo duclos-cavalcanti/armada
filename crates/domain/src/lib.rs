@@ -758,7 +758,7 @@ mod liveness_tests {
 
     #[test]
     fn ticket_key_parse_accepts_only_the_prefix_dash_number_shape() {
-        for ok in ["PROJ-1", "MADY-6127", "T-12", "AB2-7"] {
+        for ok in ["PROJ-1", "PROJ-6127", "T-12", "AB2-7"] {
             assert!(TicketKey::parse(ok).is_ok(), "{ok}");
         }
         for bad in ["proj-1", "PROJ-", "-1", "PROJ1", "PROJ-1a", "2AB-1", "PROJ-1-2", "", "--flag"] {

@@ -175,7 +175,7 @@ mod tests {
         TicketRepo::upsert(
             &db,
             &Ticket {
-                key: TicketKey("MADY-1".into()),
+                key: TicketKey("PROJ-1".into()),
                 convoy: None,
                 held: false,
                 created_at: "t".into(),
@@ -192,10 +192,10 @@ mod tests {
             &Session {
                 id: SessionId(0),
                 kind: CrewKind::Worker,
-                ticket: Some(TicketKey("MADY-1".into())),
+                ticket: Some(TicketKey("PROJ-1".into())),
                 convoy: None,
                 worktree_path: "/wt".into(),
-                tmux_session: "worker-MADY-1".into(),
+                tmux_session: "worker-PROJ-1".into(),
                 harness_session_id: None,
                 created_at: "t".into(),
                 ended_at: None,

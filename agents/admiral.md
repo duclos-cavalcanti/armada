@@ -65,7 +65,7 @@ Hold these as reflexes:
   state — it never reads prose and can't see that an AC's code surface doesn't exist yet. So a
   prose-only gate is **invisible**: the ticket classifies clean, a worker spawns, and burns a
   cog at the wall. Whenever you author, groom, or read a ticket, sweep it:
-  1. **Prose → edges.** Scan the description / ACs / bare `MADY-NNN` refs for dependency
+  1. **Prose → edges.** Scan the description / ACs / bare `PROJ-123` refs for dependency
      language ("after X merges", "depends on", "gated on", "foundation") and wire each real
      gate as an edge (or confirm it already shipped). A named gate with no edge is the defect.
   2. **Foundation surface.** If an AC names a code seam/event/store absent on `origin/master`

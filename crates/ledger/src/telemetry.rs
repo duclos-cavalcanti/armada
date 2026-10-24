@@ -124,18 +124,18 @@ mod tests {
     #[test]
     fn records_a_row_and_returns_its_id() {
         let db = TelemetryStore::in_memory().unwrap();
-        let id = db.record(&row("worker", "MADY-1", "2026-10-13T00:00:00Z", 0.5)).unwrap();
+        let id = db.record(&row("worker", "PROJ-1", "2026-10-13T00:00:00Z", 0.5)).unwrap();
         assert!(id > 0);
     }
 
     #[test]
     fn cost_by_role_sums_within_the_window_and_sorts_by_spend() {
         let db = TelemetryStore::in_memory().unwrap();
-        db.record(&row("worker", "MADY-1", "2026-10-13T01:00:00Z", 1.0)).unwrap();
-        db.record(&row("worker", "MADY-2", "2026-10-13T02:00:00Z", 2.0)).unwrap();
-        db.record(&row("sailor", "MADY-1", "2026-10-13T03:00:00Z", 0.5)).unwrap();
+        db.record(&row("worker", "PROJ-1", "2026-10-13T01:00:00Z", 1.0)).unwrap();
+        db.record(&row("worker", "PROJ-2", "2026-10-13T02:00:00Z", 2.0)).unwrap();
+        db.record(&row("sailor", "PROJ-1", "2026-10-13T03:00:00Z", 0.5)).unwrap();
         // older than the window → excluded.
-        db.record(&row("worker", "MADY-9", "2026-10-12T00:00:00Z", 99.0)).unwrap();
+        db.record(&row("worker", "PROJ-9", "2026-10-12T00:00:00Z", 99.0)).unwrap();
 
         let got = db.cost_by_role("2026-10-13T00:00:00Z").unwrap();
         assert_eq!(got, vec![("worker".to_string(), 3.0), ("sailor".to_string(), 0.5)]);
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn a_null_role_rolls_up_under_interactive() {
         let db = TelemetryStore::in_memory().unwrap();
-        db.record(&row("worker", "MADY-1", "2026-10-14T01:00:00Z", 1.0)).unwrap();
+        db.record(&row("worker", "PROJ-1", "2026-10-14T01:00:00Z", 1.0)).unwrap();
         let mut one_off = row("x", "x", "2026-10-14T02:00:00Z", 2.0); // a bare `claude`
         one_off.role = None;
         one_off.ticket = None;
