@@ -63,7 +63,7 @@ pub enum Command {
 /// cadences + thresholds injected from `Config`. Between tickers it drains client
 /// write `Command`s off `cmds` — the only place writes happen (single-writer).
 pub fn run(ledger: Ledger, host: TmuxHost, snapshot: Snapshot, cfg: Config, cmds: Receiver<Command>) {
-    let forge = GlabForge::new(cfg.gitlab_project.clone());
+    let forge = GlabForge::new(cfg.forge.project.clone());
     let tracker = JiraTracker::new();
     let (mut next_poll, mut next_sync, mut next_reconcile) =
         (Instant::now(), Instant::now(), Instant::now());

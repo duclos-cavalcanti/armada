@@ -12,6 +12,7 @@
 //! one place, injected at startup. Extend by adding a field + a default + (optionally)
 //! an env override — the same pattern serves every future lever.
 
+use anyhow::{ensure, Context, Result};
 use domain::LivenessThresholds;
 use serde::Deserialize;
 
@@ -29,13 +30,30 @@ pub struct Config {
     pub dry_run: bool,
     pub active_secs: i64,
     pub quiet_secs: i64,
-    pub gitlab_project: String,
+    /// `[forge]` — whose MRs form the armada. Deployment-specific: no default project, so
+    /// `load` fails fast without one.
+    pub forge: ForgeConfig,
     /// The telemetry DB path (separate from the ledger) + the OTLP/HTTP receiver bind addr.
     pub telemetry_db: String,
     pub otel_addr: String,
     /// The hub — the main-repo working dir where standing crew (captains, and later
     /// auditor/shipwright) launch. Captains carry no per-ticket worktree, so they run here.
     pub hub: String,
+}
+
+/// `[forge]` in fleet.toml — which forge adapter, and the project on it.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ForgeConfig {
+    pub kind: Option<ForgeKind>,
+    /// The forge's project id (GitLab: the numeric project id).
+    pub project: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ForgeKind {
+    Gitlab,
 }
 
 impl Default for Config {
@@ -49,7 +67,7 @@ impl Default for Config {
             dry_run: false,
             active_secs: domain::LIVENESS_ACTIVE_SECS,
             quiet_secs: domain::LIVENESS_QUIET_SECS,
-            gitlab_project: "12345678".into(),
+            forge: ForgeConfig::default(),
             telemetry_db: wire::default_telemetry_db(),
             otel_addr: "127.0.0.1:4318".into(),
             hub: ".".into(),
@@ -58,9 +76,10 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Defaults, overlaid by the TOML file (if present), overlaid by env vars.
-    pub fn load() -> Self {
-        let mut c = read_file().unwrap_or_default();
+    /// Defaults, overlaid by the TOML file (if present), overlaid by env vars — then validated.
+    /// A malformed file or a missing `[forge]` is fatal: fleetd never runs on a guessed target.
+    pub fn load() -> Result<Self> {
+        let mut c = read_file()?.unwrap_or_default();
         if let Ok(v) = std::env::var("FLEET_LEDGER") {
             c.ledger = v;
         }
@@ -85,8 +104,8 @@ impl Config {
         if let Some(v) = env_num("FLEET_QUIET_SECS") {
             c.quiet_secs = v as i64;
         }
-        if let Ok(v) = std::env::var("FLEET_GITLAB_PROJECT") {
-            c.gitlab_project = v;
+        if let Ok(v) = std::env::var("FLEET_FORGE_PROJECT") {
+            c.forge.project = v;
         }
         if let Ok(v) = std::env::var("FLEET_TELEMETRY_DB") {
             c.telemetry_db = v;
@@ -97,7 +116,15 @@ impl Config {
         if let Ok(v) = std::env::var("FLEET_HUB") {
             c.hub = v;
         }
-        c
+        c.validate()?;
+        Ok(c)
+    }
+
+    fn validate(&self) -> Result<()> {
+        let path = config_path();
+        ensure!(self.forge.kind.is_some(), "{path}: [forge] kind is required (\"gitlab\")");
+        ensure!(!self.forge.project.is_empty(), "{path}: [forge] project is required (or FLEET_FORGE_PROJECT)");
+        Ok(())
     }
 
     pub fn thresholds(&self) -> LivenessThresholds {
@@ -112,16 +139,16 @@ fn config_path() -> String {
     std::env::var("FLEET_CONFIG").unwrap_or_else(|_| "fleet.toml".into())
 }
 
-fn read_file() -> Option<Config> {
+/// The parsed file, or `None` when there is none. A file that exists but won't read or
+/// parse is an error — never silently ignored.
+fn read_file() -> Result<Option<Config>> {
     let path = config_path();
-    let text = std::fs::read_to_string(&path).ok()?;
-    match toml::from_str(&text) {
-        Ok(c) => Some(c),
-        Err(e) => {
-            eprintln!("fleetd: ignoring bad config {path}: {e}");
-            None
-        }
-    }
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("reading {path}")),
+    };
+    toml::from_str(&text).map(Some).with_context(|| format!("parsing {path}"))
 }
 
 /// Read a numeric env var. `pub(crate)` so the live `settings` overlay resolves env the same way.
@@ -172,6 +199,27 @@ mod tests {
         assert_eq!(c.sync_secs, 300); // default preserved
         assert_eq!(c.quiet_secs, 1800); // default preserved
         assert!(!c.dry_run); // default preserved (absent from the file)
+    }
+
+    #[test]
+    fn forge_table_parses_and_validates() {
+        let c: Config = toml::from_str("[forge]\nkind = \"gitlab\"\nproject = \"42\"\n").unwrap();
+        assert_eq!(c.forge.kind, Some(ForgeKind::Gitlab));
+        assert_eq!(c.forge.project, "42");
+        assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn forge_is_required() {
+        // No built-in default target: the empty config, or a kind without a project, fails.
+        assert!(Config::default().validate().is_err());
+        let c: Config = toml::from_str("[forge]\nkind = \"gitlab\"\n").unwrap();
+        assert!(c.validate().is_err(), "a forge without a project");
+    }
+
+    #[test]
+    fn unknown_forge_kind_is_a_parse_error() {
+        assert!(toml::from_str::<Config>("[forge]\nkind = \"bitbucket\"\nproject = \"1\"\n").is_err());
     }
 
     #[test]

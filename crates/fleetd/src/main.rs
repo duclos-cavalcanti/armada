@@ -81,18 +81,18 @@ fn main() -> Result<()> {
 /// One-shot: pull the armada from the forge into the ledger. The scheduler will run
 /// this on a slow cadence later; `fleetd sync` lets an operator trigger it now.
 fn run_sync() -> Result<()> {
-    let cfg = config::Config::load();
+    let cfg = config::Config::load()?;
     let ledger = Ledger::open(&cfg.ledger)?;
     let now = now_rfc3339();
     // Board first so ships can link their ticket FK.
     let tickets = sync::sync_board(&ledger, &tracker::JiraTracker::new(), &now)?;
-    let ships = sync::sync_armada(&ledger, &forge::GlabForge::new(cfg.gitlab_project), &now)?;
+    let ships = sync::sync_armada(&ledger, &forge::GlabForge::new(cfg.forge.project), &now)?;
     println!("fleetd sync: {tickets} tickets + {ships} ships synced to the ledger");
     Ok(())
 }
 
 fn run_daemon() -> Result<()> {
-    let cfg = config::Config::load();
+    let cfg = config::Config::load()?;
     let ledger = Ledger::open(&cfg.ledger)?;
     let host = TmuxHost::new();
 
@@ -127,7 +127,7 @@ fn run_daemon() -> Result<()> {
         settings::poll_secs(&cfg, &ledger),
         settings::sync_secs(&cfg, &ledger),
         settings::reconcile_secs(&cfg, &ledger),
-        cfg.gitlab_project,
+        cfg.forge.project,
     );
     std::thread::spawn(move || scheduler::run(ledger, host, sched_snapshot, cfg, cmd_rx));
 

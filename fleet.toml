@@ -1,4 +1,4 @@
-# fleetd config — the fleet's levers (PLAN §config). Lives in the repo and is read
+# fleetd config — the fleet's levers. Lives in the repo and is read
 # there by fleetd (the only reader; `make run` points it via $FLEET_CONFIG). Not stowed.
 #
 # Precedence: built-in defaults < THIS file < live settings < env vars. The values below
@@ -8,7 +8,7 @@
 # Six levers here are LIVE — the cadences, dry_run, and the liveness thresholds. Overwrite them
 # on a running daemon with `fleetc settings set <key> <value>` (stored in the ledger, read each
 # tick, NO restart); `fleetc settings list` shows each lever's effective value + source. To revert
-# a lever, set it back to the value you want. The rest (paths, socket, telemetry, forge target)
+# a lever, set it back to the value you want. The rest (paths, socket, telemetry, [forge])
 # are structural — startup-only.
 
 # --- state + transport (paths) ---
@@ -24,20 +24,23 @@ sync_secs      = 300  # external sync: pull the Jira board + GitLab armada → l
 reconcile_secs = 60   # reconcile cadence: compute the dispatch/… plan every N seconds  (FLEET_RECONCILE_SECS)
 
 # --- reconcile mode ---
-# true  = compute + LOG the plan, execute nothing (safe default — observe beside converge)
-# false = APPLY the plan through the ports (the Gate D flip; only after the dry-run plan is
-#         validated as equivalent to converge). Flip here or with FLEET_DRY_RUN=0.
+# true  = compute + LOG the plan, execute nothing (a dry look at what reconcile would do)
+# false = APPLY the plan through the ports — fleetd drives the line (the default).
 dry_run = false
 
 # --- liveness thresholds (seconds) ---
 active_secs = 120  # activity younger than this => Active                     (FLEET_ACTIVE_SECS)
 quiet_secs  = 1800 # between active_secs and this => Quiet; beyond => Parked  (FLEET_QUIET_SECS)
 
-# --- forge ---
-gitlab_project = "12345678"  # the b2b-api GitLab project — whose MRs form the armada (FLEET_GITLAB_PROJECT)
-
 # Telemetry is configured in ~/.claude/settings.json `env` (enable + OTLP endpoint) so it covers
 # every claude session, not just fleet cogs; fleetd injects only the per-cog attribution at spawn,
 # and runs the built-in OTLP collector (these default from $HOME / localhost):
 #   telemetry_db = "/abs/path/telemetry.db"  # FLEET_TELEMETRY_DB (default: $HOME/.fleet/telemetry.db)
 #   otel_addr    = "127.0.0.1:4318"          # FLEET_OTEL_ADDR    (OTLP/HTTP receiver bind)
+
+# --- forge (REQUIRED) — whose MRs form the armada ---
+# Deployment-specific, so there is no built-in default: fleetd refuses to start without it.
+# Kept last — every key after a `[table]` header belongs to that table.
+[forge]
+kind    = "gitlab"    # the forge adapter (only "gitlab" so far)
+project = "12345678"  # the forge's project id (FLEET_FORGE_PROJECT)

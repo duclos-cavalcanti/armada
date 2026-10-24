@@ -73,12 +73,15 @@ make dashboard    # build + run the TUI dashboard
 armada/
 ├── crates/      the fleet — domain, ledger, wire, fleetd (daemon), fleetc (client)
 ├── apps/        standalone TUIs — crew, dashboard
-├── .claude/     kit's Claude surface (agents + skills), stowed to ~/.claude/
+├── agents/      the cogs + standing collaborators, stowed to ~/.claude/agents/
+├── skills/      the kit's skills, stowed to ~/.claude/skills/
+├── .claude/     Claude config (settings, CLAUDE.md, scripts), stowed to ~/.claude/
+├── harness/     apply.sh + gitignored per-deployment settings profiles
 ├── demos/       architecture decks (open-slide)
 ├── Brewfile     dependency manifest
 ├── install.sh   install / --uninstall (gates on Brewfile + stows)
 ├── Makefile     one-word wrappers (run `make` for the cheat sheet)
-├── fleet.toml   fleetd config (cadences, dry_run, gitlab_project)
+├── fleet.toml   fleetd config (cadences, dry_run, [forge])
 ├── TODO.md      the forward backlog
 └── worktrees/   product overlay — master hub clone + ticket worktrees (gitignored)
 ```
