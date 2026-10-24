@@ -92,10 +92,14 @@ fn handle_status(request: &str, cmds: &Sender<Command>) -> String {
         }
     };
 
+    let ticket = match parse_ticket(&dto.ticket) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
     let cmd = Command::RecordStatus {
         cog: kind,
-        ticket: TicketKey(dto.ticket),
+        ticket,
         state,
         last_action: dto.last_action,
         reply: reply_tx,
@@ -110,6 +114,12 @@ fn handle_status(request: &str, cmds: &Sender<Command>) -> String {
     }
 }
 
+/// Parse a client-sent ticket key — or the `400` response to return. Keys are validated at
+/// the edge (`<PREFIX>-<n>`), never passed through raw.
+fn parse_ticket(s: &str) -> Result<TicketKey, String> {
+    TicketKey::parse(s).map_err(|e| http_response("400 Bad Request", "text/plain", &e.to_string()))
+}
+
 /// `POST /dispatch` — parse the order packet, stamp `created_at`, relay to the writer.
 /// The ledger's FK (ticket must exist on the board) is the authoritative check.
 fn handle_dispatch(request: &str, cmds: &Sender<Command>) -> String {
@@ -118,8 +128,12 @@ fn handle_dispatch(request: &str, cmds: &Sender<Command>) -> String {
         Ok(d) => d,
         Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
     };
+    let ticket = match parse_ticket(&dto.ticket) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
     let order = Order {
-        ticket: TicketKey(dto.ticket),
+        ticket,
         auto_impl: dto.auto_impl,
         auto_review: dto.auto_review,
         fork_from: dto.fork_from,
@@ -183,7 +197,7 @@ fn handle_convoy(request: &str, cmds: &Sender<Command>, open: bool) -> String {
     }
 }
 
-/// `GET /context?convoy=MADY-N` — relay a convoy-view read to the writer and return the convoy's
+/// `GET /context?convoy=PROJ-N` — relay a convoy-view read to the writer and return the convoy's
 /// ticket slice (each with `ready`/`dispatched`) as JSON. The captain's boot read.
 fn handle_convoy_view(cmds: &Sender<Command>, path: &str) -> String {
     let convoy = path
@@ -208,7 +222,7 @@ fn handle_convoy_view(cmds: &Sender<Command>, path: &str) -> String {
     }
 }
 
-/// `GET /packet?ticket=MADY-N` — relay a packet read to the writer (it owns the ledger) and
+/// `GET /packet?ticket=PROJ-N` — relay a packet read to the writer (it owns the ledger) and
 /// return the composed `{order, ship, snapshot, ticket}` as JSON. The sailor's boot read.
 fn handle_packet(cmds: &Sender<Command>, path: &str) -> String {
     let ticket = path
@@ -218,8 +232,12 @@ fn handle_packet(cmds: &Sender<Command>, path: &str) -> String {
     if ticket.is_empty() {
         return http_response("400 Bad Request", "text/plain", "missing ?ticket=");
     }
+    let ticket = match parse_ticket(ticket) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    let cmd = Command::GetPacket { ticket: TicketKey(ticket.to_string()), reply: reply_tx };
+    let cmd = Command::GetPacket { ticket, reply: reply_tx };
     if cmds.send(cmd).is_err() {
         return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
     }
@@ -378,9 +396,13 @@ fn handle_set_held(request: &str, cmds: &Sender<Command>, held: bool) -> String 
         Ok(d) => d,
         Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
     };
+    let ticket = match parse_ticket(&dto.ticket) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
     let cmd = Command::SetHeld {
-        ticket: TicketKey(dto.ticket),
+        ticket,
         held,
         reason: if held { dto.reason } else { None },
         reply: reply_tx,

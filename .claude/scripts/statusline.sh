@@ -17,7 +17,7 @@ eval "$(jq -r '
 # --- Label: ticket from branch, else branch, else folder ---
 TICKET="" DESC=""
 BRANCH=$(git -C "$DIR" symbolic-ref --short HEAD 2>/dev/null) || true
-if [[ "$BRANCH" =~ (MADY-[0-9]+) ]]; then
+if [[ "$BRANCH" =~ ([A-Z][A-Z0-9]*-[0-9]+) ]]; then
   TICKET="${BASH_REMATCH[1]}"
   DESC="${BRANCH##*"$TICKET"}"
   DESC="${DESC#-}"

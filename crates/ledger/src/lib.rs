@@ -107,6 +107,11 @@ fn require<T>(o: Option<T>, col: usize, what: &str) -> rusqlite::Result<T> {
     })
 }
 
+/// Re-check a stored ticket key's `<PREFIX>-<n>` shape on read — never silently coerced.
+fn ticket_key(s: String) -> rusqlite::Result<TicketKey> {
+    require(TicketKey::parse(&s).ok(), 0, "ticket key")
+}
+
 // ── tickets ─────────────────────────────────────────────────────────────────────
 
 fn row_to_ticket(r: &rusqlite::Row) -> rusqlite::Result<Ticket> {
@@ -116,7 +121,7 @@ fn row_to_ticket(r: &rusqlite::Row) -> rusqlite::Result<Ticket> {
         None => None,
     };
     Ok(Ticket {
-        key: TicketKey(r.get("key")?),
+        key: ticket_key(r.get("key")?)?,
         convoy: r.get::<_, Option<String>>("convoy")?.map(ConvoyKey),
         held: r.get::<_, i64>("held")? != 0,
         created_at: r.get("created_at")?,
@@ -133,7 +138,7 @@ impl Ledger {
         let mut stmt = self
             .conn
             .prepare("SELECT blocked_by FROM ticket_blocks WHERE ticket = ?1 ORDER BY blocked_by")?;
-        let rows = stmt.query_map(params![key.0], |r| Ok(TicketKey(r.get(0)?)))?;
+        let rows = stmt.query_map(params![key.0], |r| ticket_key(r.get(0)?))?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 }
@@ -265,7 +270,7 @@ fn row_to_session(r: &rusqlite::Row) -> rusqlite::Result<Session> {
     Ok(Session {
         id: SessionId(r.get("id")?),
         kind: require(CrewKind::parse(&kind), 1, "session kind")?,
-        ticket: r.get::<_, Option<String>>("ticket")?.map(TicketKey),
+        ticket: r.get::<_, Option<String>>("ticket")?.map(ticket_key).transpose()?,
         convoy: r.get::<_, Option<String>>("convoy")?.map(ConvoyKey),
         worktree_path: r.get("worktree_path")?,
         tmux_session: r.get("tmux_session")?,
@@ -729,7 +734,7 @@ mod tests {
 fn row_to_ship(r: &rusqlite::Row) -> rusqlite::Result<Ship> {
     Ok(Ship {
         id: ShipId(r.get("id")?),
-        ticket: r.get::<_, Option<String>>("ticket")?.map(TicketKey),
+        ticket: r.get::<_, Option<String>>("ticket")?.map(ticket_key).transpose()?,
         iid: r.get("iid")?,
         url: r.get("url")?,
         target: r.get("target")?,
@@ -852,7 +857,7 @@ impl ShipRepo for Ledger {
 
 fn row_to_order(r: &rusqlite::Row) -> rusqlite::Result<Order> {
     Ok(Order {
-        ticket: TicketKey(r.get("ticket")?),
+        ticket: ticket_key(r.get("ticket")?)?,
         auto_impl: r.get::<_, i64>("auto_impl")? != 0,
         auto_review: r.get::<_, i64>("auto_review")? != 0,
         fork_from: r.get("fork_from")?,
@@ -1068,7 +1073,7 @@ fn row_to_escalation(r: &rusqlite::Row) -> rusqlite::Result<Escalation> {
     let evidence_json: String = r.get("evidence_json")?;
     Ok(Escalation {
         id: EscalationId(r.get("id")?),
-        ticket: TicketKey(r.get("ticket")?),
+        ticket: ticket_key(r.get("ticket")?)?,
         raised_by: require(CrewKind::parse(&raised), 2, "raised_by")?,
         summary: r.get("summary")?,
         evidence: serde_json::from_str(&evidence_json).unwrap_or_default(),

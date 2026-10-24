@@ -4,6 +4,7 @@
 
 use anyhow::{ensure, Result};
 use domain::ports::SessionHost;
+use domain::TicketKey;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -27,14 +28,16 @@ impl Default for TmuxHost {
 }
 
 /// The per-cog OpenTelemetry attribution injected at spawn: `OTEL_SERVICE_NAME` + the
-/// `fleet.role`/`fleet.ticket` resource attributes, parsed from the session name (`worker-MADY-1`
-/// → role=worker, ticket=MADY-1; a standing cog like `foreman` → role only). Always injected —
+/// `fleet.role`/`fleet.ticket` resource attributes, parsed from the session name (`worker-PROJ-1`
+/// → role=worker, ticket=PROJ-1; a standing cog like `lookout` → role only). Always injected —
 /// inert when telemetry is off. A one-off `claude` gets none → NULL role at the collector (the
 /// "interactive" bucket). This is the one piece settings.json can't provide (it's static).
 fn otel_attribution(session_name: &str) -> Vec<(&'static str, String)> {
-    let (role, ticket) = match session_name.split_once("-MADY-") {
-        Some((role, num)) => (role.to_string(), Some(format!("MADY-{num}"))),
-        None => (session_name.to_string(), None),
+    // `<role>-<rest>`: roles never contain a dash, so the role is everything before the first
+    // one; the rest is the ticket when it is key-shaped (a ticketless hand's dir name isn't).
+    let (role, ticket) = match session_name.split_once('-') {
+        Some((role, rest)) => (role, TicketKey::parse(rest).ok().map(|k| k.0)),
+        None => (session_name, None),
     };
     let mut attrs = format!("fleet.role={role}");
     if let Some(t) = &ticket {
@@ -117,8 +120,11 @@ mod tests {
 
     #[test]
     fn attribution_for_a_standing_cog_has_role_but_no_ticket() {
-        let env: HashMap<_, _> = otel_attribution("foreman").into_iter().collect();
-        assert_eq!(env["OTEL_SERVICE_NAME"], "fleet-foreman");
-        assert_eq!(env["OTEL_RESOURCE_ATTRIBUTES"], "fleet.role=foreman");
+        let env: HashMap<_, _> = otel_attribution("lookout").into_iter().collect();
+        assert_eq!(env["OTEL_SERVICE_NAME"], "fleet-lookout");
+        assert_eq!(env["OTEL_RESOURCE_ATTRIBUTES"], "fleet.role=lookout");
+        // a ticketless hand is named after its worktree dir — role only, no ticket
+        let env: HashMap<_, _> = otel_attribution("hand-scratch-pad").into_iter().collect();
+        assert_eq!(env["OTEL_RESOURCE_ATTRIBUTES"], "fleet.role=hand");
     }
 }

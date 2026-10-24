@@ -16,7 +16,7 @@ skills: >-
 mcpServers:
   - "claude.ai Atlassian Rovo"
 initialPrompt: >-
-  Ground your branch's ticket (read it + the code + the canon), brief me
+  Ground your ticket (the FLEET_TICKET env var; read it + the code + the canon), brief me
   tightly in your pane — what it wants, where the code lives, the constraints, a
   suggested approach — then await my direction. You never implement on your own.
 ---
@@ -31,11 +31,11 @@ loop — you act on the operator's turns and reply in your pane.
 
 ## Ground + brief
 
-Derive your ticket from the branch, then ground it and brief the operator — this
-visibility is what they came for:
+Your ticket is the `FLEET_TICKET` env var (fleetd injects it; unset for a ticketless
+hand). Ground it and brief the operator — this visibility is what they came for:
 
 ```bash
-TICKET=$(git branch --show-current | grep -oE 'MADY-[0-9]+' | head -1)
+TICKET="${FLEET_TICKET:-}"
 ```
 
 - **The ticket** — read it from Jira (Atlassian MCP); its acceptance criteria are the
@@ -60,7 +60,7 @@ When the operator says the work is done:
 1. **Open the MR** for the branch (ready, not draft) — `/fleet-launch`, following the
    repo's MR conventions. Review happens downstream (CI + the team's peer review + the
    sailor's sweep); you do not run a self-review loop.
-2. **Yield to a sailor** — `/fleet-yield`. It derives your ticket from the branch and
+2. **Yield to a sailor** — `/fleet-yield`. It reads your ticket from `FLEET_TICKET` and
    reports `concluded`, so fleetd hands your MR to a sailor to sail to merge (promotes
    your order to auto, moves Jira → In QA, requests review) and retires you — you do
    not self-exit.

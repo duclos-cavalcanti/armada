@@ -542,7 +542,7 @@ fn spawn<T: Tracker, H: SessionHost>(
         None => return Ok(()),
     };
 
-    host.spawn(&tmux_session, Path::new(&worktree), &launch_cmd(kind, Some(&hid)))?;
+    host.spawn(&tmux_session, Path::new(&worktree), &ticket_launch_cmd(kind, ticket, Some(&hid)))?;
 
     ledger.append(
         &now_rfc3339(),
@@ -738,7 +738,7 @@ fn heal<H: SessionHost>(ledger: &Ledger, host: &H, ticket: &str, kind: &str) -> 
         .ok_or_else(|| anyhow!("heal {ticket}: no live {kind} session to respawn"))?;
     // Relaunch with the session's OWN id so the transcript stays one continuous file across the
     // crash (`None` for a pre-capture session → a plain launch; it resolves by convention).
-    let cmd = launch_cmd(kind, session.harness_session_id.as_deref());
+    let cmd = ticket_launch_cmd(kind, ticket, session.harness_session_id.as_deref());
     host.spawn(&session.tmux_session, Path::new(&session.worktree_path), &cmd)?;
     Ok(())
 }
@@ -940,7 +940,7 @@ fn launch_sailor<H: SessionHost, F: Forge>(
         None => return Ok(()), // a live sailor already holds the lock — benign skip
     };
 
-    host.spawn(&sailor_tmux, Path::new(&worktree), &launch_cmd("sailor", Some(&hid)))?;
+    host.spawn(&sailor_tmux, Path::new(&worktree), &ticket_launch_cmd("sailor", ticket, Some(&hid)))?;
     ledger.append(
         &now_rfc3339(),
         EventKind::SessionStarted,
@@ -1036,6 +1036,13 @@ fn launch_cmd(kind: &str, session_id: Option<&str>) -> String {
         Some(id) => format!("claude --session-id {id} --agent {kind}"),
         None => format!("claude --agent {kind}"),
     }
+}
+
+/// `launch_cmd` for a ticketed cog (worker / sailor / hand): the ticket rides in as `FLEET_TICKET`
+/// (as a captain's convoy rides in `FLEET_CONVOY`), so the cog never infers it from its branch.
+/// The key is `<PREFIX>-<n>`-validated on the way in, so it is shell-safe here.
+fn ticket_launch_cmd(kind: &str, ticket: &str, session_id: Option<&str>) -> String {
+    format!("FLEET_TICKET={ticket} {}", launch_cmd(kind, session_id))
 }
 
 /// Mint a fresh harness session id — a v4 UUID fleetd hands to `claude --session-id` so the
@@ -1688,7 +1695,7 @@ mod tests {
         assert_eq!(name, "worker-MADY-1");
         assert_eq!(cwd, "/wt/MADY-1");
         assert!(
-            cmd.starts_with("claude --session-id ") && cmd.ends_with(" --agent worker"),
+            cmd.starts_with("FLEET_TICKET=MADY-1 claude --session-id ") && cmd.ends_with(" --agent worker"),
             "cmd was: {cmd}"
         );
         // a SessionStarted CDC event was emitted for the ticket.
@@ -2038,7 +2045,7 @@ mod tests {
         let (name, cwd, cmd) = &spawned[0];
         assert_eq!((name.as_str(), cwd.as_str()), ("sailor-MADY-1", "/wt/MADY-1"));
         assert!(
-            cmd.starts_with("claude --session-id ") && cmd.ends_with(" --agent sailor"),
+            cmd.starts_with("FLEET_TICKET=MADY-1 claude --session-id ") && cmd.ends_with(" --agent sailor"),
             "cmd was: {cmd}"
         );
         // the fresh poll was written to the ledger (pipeline now Failed, head_sha advanced).
@@ -2245,7 +2252,7 @@ mod tests {
         // the tmux was relaunched in place (same session name, same worktree).
         assert_eq!(
             host.spawned.borrow().as_slice(),
-            &[("worker-MADY-1".to_string(), "/wt".to_string(), "claude --agent worker".to_string())]
+            &[("worker-MADY-1".to_string(), "/wt".to_string(), "FLEET_TICKET=MADY-1 claude --agent worker".to_string())]
         );
         // the session row stays LIVE — the cog resumes from its status drop.
         let sessions = SessionRepo::for_ticket(&db, &TicketKey("MADY-1".into())).unwrap();

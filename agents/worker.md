@@ -12,7 +12,7 @@ tools: >-
   mcp__claude_ai_Atlassian_Rovo__*
 mcpServers:
   - "claude.ai Atlassian Rovo"
-initialPrompt: /goal Deliver your branch's ticket: implemented to its acceptance criteria, tests passing, MR open.
+initialPrompt: /goal Deliver your ticket (the FLEET_TICKET env var): implemented to its acceptance criteria, tests passing, MR open.
 ---
 
 # Worker
@@ -23,11 +23,11 @@ is delivered — you are **not** a loop and you do not self-schedule.
 
 ## Your ticket + context
 
-Derive your ticket from the branch, then read it and the project's canon before
-you write any code:
+Your ticket is the `FLEET_TICKET` env var (fleetd injects it at spawn). Read it and
+the project's canon before you write any code:
 
 ```bash
-TICKET=$(git branch --show-current | grep -oE 'MADY-[0-9]+' | head -1)
+TICKET="$FLEET_TICKET"
 ```
 
 - **The ticket** — read it from Jira (Atlassian MCP). Its acceptance criteria are

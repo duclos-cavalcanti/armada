@@ -277,7 +277,8 @@ impl ControlTarget {
         match cog {
             CrewKind::Worker | CrewKind::Sailor | CrewKind::Hand => {
                 let ticket = t.ticket.ok_or_else(|| format!("--cog {} needs --ticket", cog.as_str()))?;
-                Ok(ControlTarget::Cog { cog, ticket: TicketKey(ticket) })
+                let ticket = TicketKey::parse(&ticket).map_err(|e| e.to_string())?;
+                Ok(ControlTarget::Cog { cog, ticket })
             }
             CrewKind::Captain => {
                 let convoy = t.convoy.ok_or_else(|| "--cog captain needs --convoy".to_string())?;

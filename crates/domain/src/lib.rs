@@ -26,8 +26,35 @@ macro_rules! id_newtype {
         pub struct $name(pub $inner);
     };
 }
-id_newtype!(/// `MADY-1234` — the work order's natural key.
+id_newtype!(/// `PROJ-1234` — the work order's natural key: `<PREFIX>-<n>`, the one shape
+            /// every tracker mints (Jira natively; others map onto it).
             TicketKey, String);
+
+impl TicketKey {
+    /// Parse a `<PREFIX>-<n>` key — an uppercase-led `[A-Z][A-Z0-9]*` prefix, a dash, digits.
+    /// Used wherever a key enters (client input, ledger reads): never silently coerced.
+    pub fn parse(s: &str) -> anyhow::Result<Self> {
+        let shaped = s.split_once('-').is_some_and(|(prefix, num)| {
+            prefix.starts_with(|c: char| c.is_ascii_uppercase())
+                && prefix.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+                && !num.is_empty()
+                && num.bytes().all(|b| b.is_ascii_digit())
+        });
+        anyhow::ensure!(shaped, "{s:?} is not a ticket key (expected <PREFIX>-<n>, e.g. PROJ-123)");
+        Ok(Self(s.to_string()))
+    }
+
+    /// The first `<prefix>-<n>` key in free text (a branch name, an MR title), on a word
+    /// boundary. Takes the tracker's prefix: the generic shape would also match `UTF-8`.
+    pub fn find_in(text: &str, prefix: &str) -> Option<Self> {
+        let needle = format!("{prefix}-");
+        text.match_indices(&needle).find_map(|(i, _)| {
+            let bounded = text[..i].chars().next_back().is_none_or(|c| !c.is_ascii_alphanumeric());
+            let digits: String = text[i + needle.len()..].chars().take_while(char::is_ascii_digit).collect();
+            (bounded && !digits.is_empty()).then(|| Self(format!("{needle}{digits}")))
+        })
+    }
+}
 id_newtype!(/// The convoy a ticket belongs to — the adapter-neutral grouping key a
             /// captain commands (Jira: the epic's key; filesystem: the folder name).
             /// NOT a ticket — each adapter supplies its own identifier.
@@ -727,5 +754,25 @@ mod liveness_tests {
         assert_eq!(Liveness::classify(true, Some(30), &t), Liveness::Quiet);
         assert_eq!(Liveness::classify(true, Some(120), &t), Liveness::Idle);
         assert_eq!(Liveness::classify(true, None, &t), Liveness::Idle);
+    }
+
+    #[test]
+    fn ticket_key_parse_accepts_only_the_prefix_dash_number_shape() {
+        for ok in ["PROJ-1", "MADY-6127", "T-12", "AB2-7"] {
+            assert!(TicketKey::parse(ok).is_ok(), "{ok}");
+        }
+        for bad in ["proj-1", "PROJ-", "-1", "PROJ1", "PROJ-1a", "2AB-1", "PROJ-1-2", "", "--flag"] {
+            assert!(TicketKey::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn ticket_key_find_in_scans_for_the_prefix_on_a_word_boundary() {
+        let k = |s: &str| TicketKey::find_in(s, "PROJ").map(|t| t.0);
+        assert_eq!(k("feature/PROJ-12-add-forge").as_deref(), Some("PROJ-12"));
+        assert_eq!(k("Bump SHA-256 (PROJ-7)").as_deref(), Some("PROJ-7"));
+        assert_eq!(k("XPROJ-3 then PROJ-4").as_deref(), Some("PROJ-4"), "word boundary");
+        assert_eq!(k("PROJ-x"), None);
+        assert_eq!(k("Fix UTF-8 decoding"), None, "other prefixes never match");
     }
 }

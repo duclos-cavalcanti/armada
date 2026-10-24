@@ -77,8 +77,8 @@ Then invoke `/ci-failures` with `$PIPELINE_ID` via the Skill tool. Capture:
 Three inputs inform the fix:
 
 - **Ticket ACs** — fetch via `mcp__claude_ai_Atlassian_Rovo__getJiraIssue` if not
-  already in conversation. The ticket key is parseable from the branch name
-  (e.g. `chore/MADY-321-...` → `MADY-321`).
+  already in conversation. The ticket key is `$FLEET_TICKET` (fleetd injects it into
+  every ticketed cog).
 - **MR description + scope decisions** — `glab api
   "projects/:fullpath/merge_requests/${MR_IID}"` (the `MR_IID` discovered in
   Step 0).

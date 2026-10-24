@@ -182,7 +182,7 @@ impl Forge for GlabForge {
     }
 
     fn request_review(&self, ticket: &TicketKey) -> Result<Vec<String>> {
-        // Resolve the ticket's open MR from the armada (its branch/title carries the MADY key) —
+        // Resolve the ticket's open MR from the armada (its branch/title carries the ticket key) —
         // the MR exists on the forge even if our sync hasn't picked it up yet.
         let ship = self
             .armada()?
@@ -339,11 +339,12 @@ fn ship_state(gitlab_state: &str, draft: bool) -> ShipState {
     }
 }
 
-/// Pull the first `MADY-<n>` out of a string (branch name or title).
+/// The tracker's key prefix — the one remaining hardcode; step 3 reads it from fleet.toml.
+const TICKET_PREFIX: &str = "MADY";
+
+/// Pull the first `<prefix>-<n>` key out of a string (branch name or title).
 fn extract_ticket(s: &str) -> Option<TicketKey> {
-    let i = s.find("MADY-")?;
-    let digits: String = s[i + 5..].chars().take_while(|c| c.is_ascii_digit()).collect();
-    (!digits.is_empty()).then(|| TicketKey(format!("MADY-{digits}")))
+    TicketKey::find_in(s, TICKET_PREFIX)
 }
 
 #[cfg(test)]
@@ -377,7 +378,7 @@ mod tests {
         assert_eq!(a.merge_status.as_deref(), Some("ci_must_pass")); // detailed_merge_status captured
 
         let b = &ships[1];
-        assert_eq!(b.ticket, None); // no MADY key in branch/title
+        assert_eq!(b.ticket, None); // no ticket key in branch/title
         assert_eq!(b.state, ShipState::Draft); // draft=true
         assert!(b.has_conflicts);
     }

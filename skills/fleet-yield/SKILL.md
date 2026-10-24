@@ -1,6 +1,6 @@
 ---
-description: Yield a hand's work to a sailor — the operator's "pawn it off" handoff. Derives the hand's ticket from its worktree branch and, if there is one, reports `concluded` via fleetc so fleetd hands the open MR to a sailor (promotes the order to auto, moves Jira → In QA, requests review, reaps the hand). A ticketless hand has no sailor to yield to. Run from the hand's worktree.
-argument-hint: (none — reads the current branch)
+description: Yield a hand's work to a sailor — the operator's "pawn it off" handoff. Reads the hand's ticket from `FLEET_TICKET` (fleetd injects it at spawn) and, if there is one, reports `concluded` via fleetc so fleetd hands the open MR to a sailor (promotes the order to auto, moves Jira → In QA, requests review, reaps the hand). A ticketless hand has no sailor to yield to. Run from the hand's worktree.
+argument-hint: (none — reads $FLEET_TICKET)
 ---
 
 # Skill: fleet-yield
@@ -14,16 +14,16 @@ the handoff signal.
 
 - An **open MR** must already exist for your work — the sailor sails an *existing*
   ship; if nothing's pushed, there's nothing to yield.
-- Run from your **worktree** (your cwd), so the branch resolves to your ticket.
+- Run inside the hand's session, so `FLEET_TICKET` (injected by fleetd) is set.
 
 ## Step 0 — Derive the ticket + yield
 
 Run in one Bash invocation (from your worktree):
 
 ```bash
-TICKET=$(git branch --show-current | grep -oE 'MADY-[0-9]+' | head -1)
+TICKET="${FLEET_TICKET:-}"
 if [ -z "$TICKET" ]; then
-  echo "no ticket on this branch — a ticketless hand has no sailor to yield to; nothing to do."
+  echo "no FLEET_TICKET — a ticketless hand has no sailor to yield to; nothing to do."
   exit 0
 fi
 fleetc status --cog hand --ticket "$TICKET" --state concluded \
@@ -39,5 +39,5 @@ auto, moves Jira In Progress → In QA, requests the team's review, reaps you, a
 ## Checklist
 
 - [ ] An open MR exists (there's a ship for the sailor to sail)
-- [ ] Ticket derived from the branch; if none, reported "nothing to yield" and stopped
+- [ ] Ticket read from FLEET_TICKET; if unset, reported "nothing to yield" and stopped
 - [ ] `fleetc status … --state concluded` sent (ticketed hand only)

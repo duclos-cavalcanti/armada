@@ -37,20 +37,20 @@ fn run() -> Result<()> {
         _ => {
             eprintln!(
                 "usage:\n  \
-                 fleetc status   --cog <worker|sailor|hand> --ticket <MADY-N> --state <state> [--last-action <text>]\n  \
-                 fleetc dispatch --ticket <MADY-N> --ac <summary> [--hand] [--hold] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
+                 fleetc status   --cog <worker|sailor|hand> --ticket <KEY-N> --state <state> [--last-action <text>]\n  \
+                 fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--hold] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
                  fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
                  fleetc convoy   <open|close> <KEY> [--title <text>]\n  \
-                 fleetc anchor   --cog <kind> [--ticket <MADY-N>|--convoy <KEY>]   (graceful stop & hold)\n  \
-                 fleetc weigh    --cog <kind> [--ticket <MADY-N>|--convoy <KEY>]   (resume)\n  \
-                 fleetc sink     --cog <kind> [--ticket <MADY-N>|--convoy <KEY>]   (scuttle — hard teardown)\n  \
-                 fleetc send     --cog <kind> [--ticket <MADY-N>|--convoy <KEY>] <message>   (message into the cog's pane)\n  \
-                 fleetc hold     <MADY-N> [--reason <why>]  (hold off the dispatch frontier)\n  \
-                 fleetc unhold   <MADY-N>          (release back onto the frontier)\n  \
-                 fleetc packet   <MADY-N>          (the cog's work-packet: order + ship + ticket)\n  \
+                 fleetc anchor   --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (graceful stop & hold)\n  \
+                 fleetc weigh    --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (resume)\n  \
+                 fleetc sink     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (scuttle — hard teardown)\n  \
+                 fleetc send     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] <message>   (message into the cog's pane)\n  \
+                 fleetc hold     <KEY-N> [--reason <why>]  (hold off the dispatch frontier)\n  \
+                 fleetc unhold   <KEY-N>          (release back onto the frontier)\n  \
+                 fleetc packet   <KEY-N>          (the cog's work-packet: order + ship + ticket)\n  \
                  fleetc context  --convoy <KEY> [--format table]   (a captain's convoy slice)\n  \
                  fleetc plan     [--db <path>]     (fleetd's latest reconcile plan — the parity lens)\n  \
-                 fleetc transcript --cog <kind> [--ticket <MADY-N>|--convoy <KEY>] [--open]   (resolve a cog's transcript)\n  \
+                 fleetc transcript --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] [--open]   (resolve a cog's transcript)\n  \
                  fleetc review   --iid <N>         (an MR's fresh review surface: open-thread count + floating notes)\n  \
                  fleetc rebase   --iid <N>         (server-side rebase an MR)\n  \
                  fleetc settings [list | set <key> <value>]   (live config levers; no restart)\n  \
@@ -77,7 +77,7 @@ fn status(args: &[String]) -> Result<()> {
         }
     }
     let cog = cog.ok_or_else(|| anyhow!("--cog required"))?;
-    let ticket = ticket.ok_or_else(|| anyhow!("--ticket required"))?;
+    let ticket = ticket_key(&ticket.ok_or_else(|| anyhow!("--ticket required"))?, "status")?;
     let state = state.ok_or_else(|| anyhow!("--state required"))?;
 
     let kind = CrewKind::parse(&cog).ok_or_else(|| anyhow!("invalid --cog: {cog}"))?;
@@ -111,7 +111,7 @@ fn dispatch(args: &[String]) -> Result<()> {
             other => bail!("unknown flag: {other}"),
         }
     }
-    let ticket = ticket.ok_or_else(|| anyhow!("--ticket required"))?;
+    let ticket = ticket_key(&ticket.ok_or_else(|| anyhow!("--ticket required"))?, "dispatch")?;
     // A worker implements against its AC (the goal); a hand is operator-driven with no
     // autonomous goal, so --ac is optional for --hand — default it to a legible sentinel.
     let ac_summary = match (ac, auto_impl) {
@@ -193,7 +193,7 @@ fn sink(args: &[String]) -> Result<()> {
     submit("/sink", &require_cog_target(args, "sink")?)
 }
 
-/// `fleetc hold <MADY-N> --reason <why>` — hold the ticket off the dispatch frontier (the captain's
+/// `fleetc hold <KEY-N> --reason <why>` — hold the ticket off the dispatch frontier (the captain's
 /// groom-gate decision, or an operator lever). `--reason` rides on the `TicketHeld` event.
 fn hold(args: &[String]) -> Result<()> {
     let ticket = require_ticket(args, "hold")?;
@@ -208,13 +208,13 @@ fn hold(args: &[String]) -> Result<()> {
     submit("/hold", &wire::HoldCmd { ticket, reason })
 }
 
-/// `fleetc unhold <MADY-N>` — release a held ticket back onto the frontier.
+/// `fleetc unhold <KEY-N>` — release a held ticket back onto the frontier.
 fn unhold(args: &[String]) -> Result<()> {
     let ticket = require_ticket(args, "unhold")?;
     submit("/unhold", &wire::HoldCmd { ticket, reason: None })
 }
 
-/// `fleetc packet <MADY-N>` — read the cog's composed work-packet (order + ship + snapshot +
+/// `fleetc packet <KEY-N>` — read the cog's composed work-packet (order + ship + snapshot +
 /// ticket) from fleetd and print it as JSON. The sailor's boot read; also handy for an operator.
 fn packet(args: &[String]) -> Result<()> {
     let ticket = require_ticket(args, "packet")?;
@@ -283,24 +283,20 @@ fn render_convoy_table(json: &str) -> Result<String> {
     Ok(out)
 }
 
-/// The required `<MADY-N>` positional. Rejects a flag-looking arg (a mistyped flag silently
+/// The required `<KEY-N>` positional. Rejects a flag-looking arg (a mistyped flag silently
 /// swallowed as a "ticket" is a no-op downstream — the bug this guards) and a non-ticket string,
 /// so operator error fails loudly instead of no-op'ing.
 fn require_ticket(args: &[String], verb: &str) -> Result<String> {
-    let t = args.first().ok_or_else(|| anyhow!("{verb} needs <MADY-N>"))?;
+    let t = args.first().ok_or_else(|| anyhow!("{verb} needs <KEY-N>"))?;
     if t.starts_with('-') {
-        bail!("{verb}: unexpected flag {t:?} — expected a ticket <MADY-N>");
+        bail!("{verb}: unexpected flag {t:?} — expected a ticket <KEY-N>");
     }
-    if !is_ticket(t) {
-        bail!("{verb}: {t:?} is not a MADY ticket (expected MADY-<n>)");
-    }
-    Ok(t.clone())
+    ticket_key(t, verb)
 }
 
-/// A `MADY-<digits>` key (ticket / convoy shape).
-fn is_ticket(s: &str) -> bool {
-    s.strip_prefix("MADY-")
-        .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+/// Validate a ticket key at the edge — the domain's `<PREFIX>-<n>` parse, tagged with the verb.
+fn ticket_key(t: &str, verb: &str) -> Result<String> {
+    domain::TicketKey::parse(t).map(|k| k.0).map_err(|e| anyhow!("{verb}: {e}"))
 }
 
 /// Parse + validate the uniform cog target for a control verb (§A): `--cog <kind>` is required, and
@@ -328,10 +324,8 @@ fn require_cog_target(args: &[String], verb: &str) -> Result<wire::CogTarget> {
 fn validate_cog_target(cog: &str, ticket: Option<&str>, convoy: Option<&str>, verb: &str) -> Result<()> {
     match cog {
         "worker" | "sailor" | "hand" => {
-            let t = ticket.ok_or_else(|| anyhow!("{verb} --cog {cog} needs --ticket <MADY-N>"))?;
-            if !is_ticket(t) {
-                bail!("{verb}: {t:?} is not a MADY ticket (expected MADY-<n>)");
-            }
+            let t = ticket.ok_or_else(|| anyhow!("{verb} --cog {cog} needs --ticket <KEY-N>"))?;
+            ticket_key(t, verb)?;
             if convoy.is_some() {
                 bail!("{verb} --cog {cog}: --convoy is not valid — use --ticket");
             }

@@ -27,11 +27,11 @@ ship changes again, fleetd spawns a fresh sweep.
 
 ## Read your packet
 
-Derive your ticket from the branch, then read the work-packet fleetd composed for
-you — don't re-assemble state by hand:
+Your ticket is the `FLEET_TICKET` env var (fleetd injects it at spawn). Read the
+work-packet fleetd composed for you — don't re-assemble state by hand:
 
 ```bash
-TICKET=$(git branch --show-current | grep -oE 'MADY-[0-9]+' | head -1)
+TICKET="$FLEET_TICKET"
 fleetc packet "$TICKET"
 ```
 
