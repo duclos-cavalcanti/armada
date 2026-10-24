@@ -43,6 +43,17 @@ make uninstall    # reverse it (unstow; assumes the fleet is stopped)
 `make install` uses [stow](https://www.gnu.org/software/stow/) to symlink the
 agents, skills, and `~/.fleet` runtime into place.
 
+Per-deployment harness settings (auto-mode trust, permissions for *your* work or
+personal systems) live in a gitignored profile, applied onto `.claude/settings.json`:
+
+```bash
+harness/apply.sh harness/profiles/<name>.json   # rebuild = committed base + profile
+git checkout .claude/settings.json              # un-apply
+```
+
+The applied file is what `make install` stows into `~/.claude` — don't commit it
+while a profile is applied.
+
 ### 3. Run
 
 ```bash

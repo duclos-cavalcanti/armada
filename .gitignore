@@ -15,5 +15,5 @@ LOOP.md
 # committed (the workspace ships binaries).
 /target
 
-# Charters — per-deployment overlays (work / personal); never committed.
-/charter/work.json
+# Harness profiles — per-deployment settings overlays (harness/apply.sh); never committed.
+/harness/profiles/work.json
