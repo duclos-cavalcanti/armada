@@ -11,6 +11,9 @@ LOOP.md
 # (install.sh stow_claude_global ignores it too).
 .claude/settings.local.json
 
-# Rust workspace build output (the fleet daemon — see PLAN.md). Cargo.lock IS
+# Rust workspace build output (the fleet crates + apps). Cargo.lock IS
 # committed (the workspace ships binaries).
 /target
+
+# Charters — per-deployment overlays (work / personal); never committed.
+/charter/

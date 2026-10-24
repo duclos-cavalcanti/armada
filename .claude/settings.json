@@ -84,14 +84,6 @@
     "<redacted>": true,
     "<redacted>": true
   },
-  "extraKnownMarketplaces": {
-    "<redacted>": {
-      "source": {
-        "source": "git",
-        "url": "<redacted>"
-      }
-    }
-  },
   "effortLevel": "high",
   "autoUpdatesChannel": "latest",
   "tui": "fullscreen",
@@ -101,19 +93,5 @@
   },
   "skipWorkflowUsageWarning": true,
   "skipAutoPermissionPrompt": true,
-  "voiceEnabled": true,
-  "autoMode": {
-    "environment": [
-      "$defaults",
-      "<redacted>",
-      "<redacted>",
-      "<redacted>",
-      "<redacted>",
-      "<redacted>",
-      "<redacted>",
-      "<redacted>",
-      "<redacted>",
-      "<redacted>"
-    ]
-  }
+  "voiceEnabled": true
 }
