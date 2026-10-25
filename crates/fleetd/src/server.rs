@@ -16,8 +16,10 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
 
 /// Bind the socket (clearing any stale file) and serve forever. `cmds` is the write
-/// channel to the scheduler; each connection gets its own clone.
-pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>) -> Result<()> {
+/// channel to the scheduler; each connection gets its own clone. `project` is the resolved
+/// `[project] path` (startup config, read-only — served without touching the writer).
+pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, project: String) -> Result<()> {
+    let project: std::sync::Arc<str> = project.into();
     let _ = std::fs::remove_file(path); // a leftover socket from a crash would block bind
     let listener = UnixListener::bind(path)?;
     for stream in listener.incoming() {
@@ -25,8 +27,9 @@ pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>) -> Result<()
             Ok(mut s) => {
                 let snapshot = snapshot.clone();
                 let cmds = cmds.clone();
+                let project = project.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = handle(&mut s, &snapshot, &cmds) {
+                    if let Err(e) = handle(&mut s, &snapshot, &cmds, &project) {
                         eprintln!("fleetd: connection error: {e}");
                     }
                 });
@@ -37,7 +40,7 @@ pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>) -> Result<()
     Ok(())
 }
 
-fn handle(stream: &mut UnixStream, snapshot: &Snapshot, cmds: &Sender<Command>) -> std::io::Result<()> {
+fn handle(stream: &mut UnixStream, snapshot: &Snapshot, cmds: &Sender<Command>, project: &str) -> std::io::Result<()> {
     let mut buf = [0u8; 2048];
     let n = stream.read(&mut buf)?;
     let request = String::from_utf8_lossy(&buf[..n]);
@@ -51,6 +54,7 @@ fn handle(stream: &mut UnixStream, snapshot: &Snapshot, cmds: &Sender<Command>) 
             http_response("200 OK", "application/json", &body)
         }
         (Some("GET"), Some("/health")) => http_response("200 OK", "text/plain", "ok"),
+        (Some("GET"), Some("/project")) => http_response("200 OK", "text/plain", project),
         (Some("POST"), Some("/status")) => handle_status(&request, cmds),
         (Some("POST"), Some("/dispatch")) => handle_dispatch(&request, cmds),
         (Some("POST"), Some("/hand")) => handle_hand(&request, cmds),
@@ -466,7 +470,7 @@ mod tests {
         let sock = format!("/tmp/fleetd-test-{}-{tag}.sock", std::process::id());
         let sock2 = sock.clone();
         std::thread::spawn(move || {
-            let _ = serve(&sock2, snapshot, cmds);
+            let _ = serve(&sock2, snapshot, cmds, "/wt/project".into());
         });
         for _ in 0..100 {
             if std::path::Path::new(&sock).exists() {
@@ -494,6 +498,10 @@ mod tests {
         let resp = roundtrip(&sock, b"GET /context HTTP/1.1\r\n\r\n");
         assert!(resp.contains("200 OK"), "resp: {resp}");
         assert!(resp.contains("application/json"));
+
+        // the project checkout path, served from startup config (no writer round-trip)
+        let proj = roundtrip(&sock, b"GET /project HTTP/1.1\r\n\r\n");
+        assert!(proj.contains("200 OK") && proj.ends_with("\r\n\r\n/wt/project"), "resp: {proj}");
         assert!(resp.trim_end().ends_with("[]"));
 
         let resp = roundtrip(&sock, b"GET /nope HTTP/1.1\r\n\r\n");

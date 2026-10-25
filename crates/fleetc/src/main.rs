@@ -33,6 +33,7 @@ fn run() -> Result<()> {
         Some("review") => review(&args[1..]),
         Some("rebase") => rebase(&args[1..]),
         Some("settings") => settings(&args[1..]),
+        Some("project") => project(),
         Some("cost") => cost(&args[1..]),
         _ => {
             eprintln!(
@@ -54,6 +55,7 @@ fn run() -> Result<()> {
                  fleetc review   --iid <N>         (an MR's fresh review surface: open-thread count + floating notes)\n  \
                  fleetc rebase   --iid <N>         (server-side rebase an MR)\n  \
                  fleetc settings [list | set <key> <value>]   (live config levers; no restart)\n  \
+                 fleetc project                   (the project checkout's path, from fleet.toml)\n  \
                  fleetc cost     [--since <RFC3339>] [--db <path>]"
             );
             std::process::exit(2);
@@ -583,6 +585,18 @@ fn settings(args: &[String]) -> Result<()> {
         }
         Some(other) => bail!("usage: fleetc settings [list | set <key> <value>]  (got {other:?})"),
     }
+}
+
+/// `fleetc project` — print the project checkout's path (fleet.toml `[project] path`, as fleetd
+/// resolved it). How skills (fleet-berth) find the project from any cwd, for anyone.
+fn project() -> Result<()> {
+    let socket = std::env::var("FLEET_SOCK").unwrap_or_else(|_| wire::default_socket());
+    let (code, body) = wire::get_json(&socket, "/project")?;
+    if code != 200 {
+        bail!("fleetd ({code}): {body}");
+    }
+    println!("{body}");
+    Ok(())
 }
 
 /// `fleetc settings list` — fetch every live lever's effective value + source and render a table.

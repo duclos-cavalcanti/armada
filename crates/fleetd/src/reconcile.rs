@@ -953,7 +953,7 @@ fn launch_sailor<H: SessionHost, F: Forge>(
 
 /// LaunchLookout — the SINGLETON allied-ship review cold-loop. Review ONE allied ship (an MR we don't own).
 /// fleetd has picked the iid (the next unreviewed ally); fresh-poll it, mark it `reviewed = head_sha`
-/// at dispatch (sailor-style — the head this pass reviews), then launch the one lookout AT THE HUB
+/// at dispatch (sailor-style — the head this pass reviews), then launch the one lookout in the project checkout
 /// with the MR's iid injected via `FLEET_SHIP` (no worktree — an allied MR isn't ours; `/mr-review`
 /// fetches by SHA). The `one_live_lookout` lock makes a duplicate a benign skip.
 fn launch_lookout<H: SessionHost, F: Forge>(
