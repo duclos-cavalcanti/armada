@@ -12,7 +12,7 @@ plan, cogs, transcripts, and cost. `fleetd` owns the state and drives the line;
 
 Forward backlog: [`TODO.md`](TODO.md).
 
-![title](demos/assets/fleet-overview.png)
+![Fleet overview — operator → fleetc → fleetd → crew → project, with the skills, external systems, ledger and dashboard](demos/assets/fleet-overview.png)
 
 ---
 
