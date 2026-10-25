@@ -127,7 +127,7 @@
             "steps": [
               "Recompute context(): over ledger.live(), probe host.alive + host.last_activity (#{window_activity}) per session.",
               "Classify Liveness { Active · Quiet · Idle · Dead } from age-of-activity vs thresholds.",
-              "Overwrite the snapshot mutex that GET /context reads lock-free; a class change emits an event."
+              "Overwrite the snapshot mutex that GET /context reads lock-free — read-only: tick_liveness writes no ledger row and emits no event."
             ],
             "guarantees": [
               "No DB writes — a restart just re-polls; the snapshot is memoized, never trusted stale."

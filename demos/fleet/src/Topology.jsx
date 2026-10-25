@@ -220,6 +220,64 @@ function ItemCard({ item, accent }) {
   )
 }
 
+// PoC: a small inline-SVG state machine for the side-pane — reveals the
+// intricate internal loop an "opaque" node hides on the diagram surface.
+// spec: { note?, w, h, states:[{id,label,sub?,x,y,w,h,accent?}],
+//         transitions:[{from,to,label?,bidir?}] }
+function StateMachine({ spec, accent }) {
+  const by = Object.fromEntries(spec.states.map((s) => [s.id, s]))
+  const center = (s) => ({ x: s.x + s.w / 2, y: s.y + s.h / 2 })
+  // point on box border along the ray toward (tx,ty)
+  const border = (s, tx, ty) => {
+    const c = center(s), dx = tx - c.x, dy = ty - c.y
+    const sx = dx ? (s.w / 2 + 4) / Math.abs(dx) : Infinity
+    const sy = dy ? (s.h / 2 + 4) / Math.abs(dy) : Infinity
+    const t = Math.min(sx, sy)
+    return { x: c.x + dx * t, y: c.y + dy * t }
+  }
+  return (
+    <div style={{ marginTop: 10 }}>
+      <svg viewBox={`0 0 ${spec.w} ${spec.h}`} width="100%" style={{ display: 'block' }}>
+        <defs>
+          <marker id="sm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--muted)" />
+          </marker>
+        </defs>
+        {spec.transitions.map((t, i) => {
+          const a = by[t.from], b = by[t.to]
+          const ca = center(a), cb = center(b)
+          const pa = border(a, cb.x, cb.y), pb = border(b, ca.x, ca.y)
+          const mx = (pa.x + pb.x) / 2, my = (pa.y + pb.y) / 2
+          const wLbl = (t.label?.length ?? 0) * 4.6 + 8
+          return (
+            <g key={i}>
+              <line x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y} stroke="var(--muted)" strokeWidth="1.1"
+                markerEnd="url(#sm-arrow)" markerStart={t.bidir ? 'url(#sm-arrow)' : undefined} />
+              {t.label && (
+                <>
+                  <rect x={mx - wLbl / 2} y={my - 7} width={wLbl} height={14} rx={3} fill="var(--bg)" stroke="var(--border)" />
+                  <text x={mx} y={my + 3} textAnchor="middle" fill="var(--muted)" style={{ font: `8px ${MONO}` }}>{t.label}</text>
+                </>
+              )}
+            </g>
+          )
+        })}
+        {spec.states.map((s) => {
+          const c = s.accent ?? accent
+          return (
+            <g key={s.id}>
+              <rect x={s.x} y={s.y} width={s.w} height={s.h} rx={8} fill="var(--panel)" stroke={c} strokeWidth="1.5" />
+              <text x={s.x + s.w / 2} y={s.y + (s.sub ? s.h / 2 - 2 : s.h / 2 + 3)} textAnchor="middle" fill={c} style={{ font: `700 10px ${MONO}` }}>{s.label}</text>
+              {s.sub && <text x={s.x + s.w / 2} y={s.y + s.h / 2 + 10} textAnchor="middle" fill="var(--dim)" style={{ font: `8px ${MONO}` }}>{s.sub}</text>}
+            </g>
+          )
+        })}
+      </svg>
+      {spec.note && <div style={{ font: '11px/1.5 sans-serif', color: 'var(--dim)', marginTop: 6 }}>{spec.note}</div>}
+    </div>
+  )
+}
+
 // right-hand inspector: a clicked component's modes + what happens inside
 function DetailPane({ node, mode, setMode, onClose }) {
   const k = KIND[node.kind] ?? KIND.config
@@ -239,6 +297,13 @@ function DetailPane({ node, mode, setMode, onClose }) {
       <div style={{ marginTop: 12, color: k.c, font: `700 16px ${MONO}` }}>{k.g} {node.label}</div>
       <div style={{ color: 'var(--muted)', font: '12px sans-serif', marginTop: 3 }}>{d?.type ?? node.sub}</div>
       {d?.summary && <div style={{ color: 'var(--text)', font: '12px/1.6 sans-serif', marginTop: 14 }}>{d.summary}</div>}
+
+      {d?.stateMachine && (
+        <div style={{ marginTop: 16 }}>
+          <div style={PANE_H}>INTERNAL STATE MACHINE</div>
+          <StateMachine spec={d.stateMachine} accent={k.c} />
+        </div>
+      )}
 
       {d?.modes && (
         <div style={{ display: 'flex', gap: 6, marginTop: 16, flexWrap: 'wrap' }}>
