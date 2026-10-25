@@ -3,7 +3,7 @@
 #   $ brew bundle --file=Brewfile
 #
 # Covers install.sh's stowing, the fleet's runtime (fleetd drives tmux, glab,
-# and Jira), and the day-to-day GitLab / Jira / AWS workflow the skills rely on.
+# gh, and Jira), and the day-to-day GitLab / Jira / AWS workflow the skills rely on.
 # Anything not on Homebrew is listed in comments below with an install pointer.
 
 cask "claude-code@latest"   # auto-updating variant — plain "claude-code" is a distinct, pinned cask
@@ -14,8 +14,9 @@ brew "stow"            # symlink farm manager — used by install.sh
 brew "tmux"            # terminal multiplexer — fleetd hosts every cog in a tmux session
 brew "jq"              # JSON wrangling in skill bodies + the statusline
 
-# --- GitLab / Jira ---
+# --- Forges + trackers (fleet.toml picks which) ---
 brew "glab"            # GitLab CLI — MR finish, pipeline polling, threads
+brew "gh"              # GitHub CLI — the GitHub forge adapter
 brew "jira-cli"        # Jira CLI (ankitpokhrel/jira-cli) — reads a ticket's type/summary
                        # for branch naming (fleet-berth), and a fallback when the
                        # Atlassian MCP isn't bound (`claude --print` / shell); fleetd's
