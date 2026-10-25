@@ -126,7 +126,7 @@ fn dispatch(args: &[String]) -> Result<()> {
         ticket,
         auto_impl,
         auto_merge,
-        fork_from: fork_from.unwrap_or_else(|| "origin/master".into()),
+        fork_from,
         ac_summary,
         park_at,
         worktree_path: worktree,

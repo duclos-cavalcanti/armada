@@ -1,5 +1,5 @@
 ---
-description: Create a git worktree + branch for a ticket under the factory's worktrees/ dir, forked off a given base (default origin/master) of the project checkout, which it locates via `fleetc project` — so anyone can run it from any directory. Pure worktree creation — no Jira lifecycle. The operator or captain runs this when producing a dispatch, then passes the emitted path to `fleetc dispatch --worktree`; fleetd's reconcile spawns the cog there (reconcile never creates worktrees).
+description: Create a git worktree + branch for a ticket under the factory's worktrees/ dir, forked off a given base (default: origin's default branch) of the project checkout, which it locates via `fleetc project` — so anyone can run it from any directory. Pure worktree creation — no Jira lifecycle. The operator or captain runs this when producing a dispatch, then passes the emitted path to `fleetc dispatch --worktree`; fleetd's reconcile spawns the cog there (reconcile never creates worktrees).
 argument-hint: <ticket> [<fork-base-branch>]
 ---
 
@@ -17,7 +17,7 @@ fleetd's spawn claims the ticket when it launches the cog.
 | Token | Required | Example | Effect |
 |---|---|---|---|
 | `<ticket>` | yes | `PROJ-321` | The issue to create a worktree for |
-| `<fork-base-branch>` | no (default `master`) | `chore/PROJ-100-foo` | Branch to fork off. `master` for READY-CLEAN; the parent MR's source branch for a READY-STACKED dispatch, so the worktree builds on the parent's in-flight work rather than stale master. |
+| `<fork-base-branch>` | no (default: origin's default branch) | `chore/PROJ-100-foo` | Branch to fork off. The default branch for READY-CLEAN; the parent MR's source branch for a READY-STACKED dispatch, so the worktree builds on the parent's in-flight work rather than the stale default branch. |
 
 ---
 
@@ -27,7 +27,7 @@ This skill is **read-only against the project checkout's working tree and Jira**
 side effects, in order:
 
 1. **Git fetch** — `git -C "$REPO" fetch origin <base>` advances the project checkout's
-   remote-tracking ref only (no master-fetch cron keeps it fresh anymore, so the
+   remote-tracking ref only (no fetch cron keeps it fresh anymore, so the
    skill refreshes it itself). Never touches the checkout's working tree or any local
    branch.
 2. **Git worktree** — `git worktree add` creates a NEW directory + branch under
@@ -74,9 +74,11 @@ calls):
      WORKTREE_PATH="$(dirname "$REPO")/$LEAF"
      ```
 4. Refresh the fork base + create the worktree off the checkout (base = the 2nd arg,
-   default `master`):
+   default: origin's default branch, which `git clone` recorded as `origin/HEAD`):
    ```bash
-   BASE="<fork-base-branch>"               # default: master
+   BASE="<fork-base-branch>"               # empty → origin's default branch
+   [ -n "$BASE" ] || BASE="$(git -C "$REPO" symbolic-ref --short refs/remotes/origin/HEAD)"
+   BASE="${BASE#origin/}"
    git -C "$REPO" fetch origin "$BASE" --quiet --no-tags
    git -C "$REPO" worktree add -b "<branch>" "$WORKTREE_PATH" "origin/$BASE"
    ```

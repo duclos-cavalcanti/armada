@@ -15,12 +15,21 @@ use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
 
+/// The deployment facts fixed at startup, answered without touching the writer: the project
+/// checkout (`GET /project`) and the defaults a dispatch that omits them inherits.
+pub struct Deployment {
+    /// The resolved `[project] path`.
+    pub project: String,
+    /// `[forge] auto_merge`.
+    pub auto_merge: bool,
+    /// origin's default branch (`origin/main`), read from the project checkout at boot.
+    pub default_branch: String,
+}
+
 /// Bind the socket (clearing any stale file) and serve forever. `cmds` is the write
-/// channel to the scheduler; each connection gets its own clone. `project` is the resolved
-/// `[project] path` (startup config, read-only — served without touching the writer);
-/// `auto_merge` is the `[forge] auto_merge` default a dispatch that doesn't say inherits.
-pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, project: String, auto_merge: bool) -> Result<()> {
-    let project: std::sync::Arc<str> = project.into();
+/// channel to the scheduler; each connection gets its own clone.
+pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, deployment: Deployment) -> Result<()> {
+    let deployment = std::sync::Arc::new(deployment);
     let _ = std::fs::remove_file(path); // a leftover socket from a crash would block bind
     let listener = UnixListener::bind(path)?;
     for stream in listener.incoming() {
@@ -28,9 +37,9 @@ pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, project: Str
             Ok(mut s) => {
                 let snapshot = snapshot.clone();
                 let cmds = cmds.clone();
-                let project = project.clone();
+                let deployment = deployment.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = handle(&mut s, &snapshot, &cmds, &project, auto_merge) {
+                    if let Err(e) = handle(&mut s, &snapshot, &cmds, &deployment) {
                         eprintln!("fleetd: connection error: {e}");
                     }
                 });
@@ -45,8 +54,7 @@ fn handle(
     stream: &mut UnixStream,
     snapshot: &Snapshot,
     cmds: &Sender<Command>,
-    project: &str,
-    auto_merge: bool,
+    deployment: &Deployment,
 ) -> std::io::Result<()> {
     let mut buf = [0u8; 2048];
     let n = stream.read(&mut buf)?;
@@ -61,9 +69,9 @@ fn handle(
             http_response("200 OK", "application/json", &body)
         }
         (Some("GET"), Some("/health")) => http_response("200 OK", "text/plain", "ok"),
-        (Some("GET"), Some("/project")) => http_response("200 OK", "text/plain", project),
+        (Some("GET"), Some("/project")) => http_response("200 OK", "text/plain", &deployment.project),
         (Some("POST"), Some("/status")) => handle_status(&request, cmds),
-        (Some("POST"), Some("/dispatch")) => handle_dispatch(&request, cmds, auto_merge),
+        (Some("POST"), Some("/dispatch")) => handle_dispatch(&request, cmds, deployment),
         (Some("POST"), Some("/hand")) => handle_hand(&request, cmds),
         (Some("POST"), Some("/convoy-open")) => handle_convoy(&request, cmds, true),
         (Some("POST"), Some("/convoy-close")) => handle_convoy(&request, cmds, false),
@@ -133,7 +141,7 @@ fn parse_ticket(s: &str) -> Result<TicketKey, String> {
 
 /// `POST /dispatch` — parse the order packet, stamp `created_at`, relay to the writer.
 /// The ledger's FK (ticket must exist on the board) is the authoritative check.
-fn handle_dispatch(request: &str, cmds: &Sender<Command>, auto_merge: bool) -> String {
+fn handle_dispatch(request: &str, cmds: &Sender<Command>, deployment: &Deployment) -> String {
     let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
     let dto: wire::DispatchOrder = match serde_json::from_str(body) {
         Ok(d) => d,
@@ -146,8 +154,8 @@ fn handle_dispatch(request: &str, cmds: &Sender<Command>, auto_merge: bool) -> S
     let order = Order {
         ticket,
         auto_impl: dto.auto_impl,
-        auto_merge: dto.auto_merge.unwrap_or(auto_merge),
-        fork_from: dto.fork_from,
+        auto_merge: dto.auto_merge.unwrap_or(deployment.auto_merge),
+        fork_from: dto.fork_from.unwrap_or_else(|| deployment.default_branch.clone()),
         ac_summary: dto.ac_summary,
         park_at: dto.park_at,
         worktree_path: dto.worktree_path,
@@ -477,7 +485,9 @@ mod tests {
         let sock = format!("/tmp/fleetd-test-{}-{tag}.sock", std::process::id());
         let sock2 = sock.clone();
         std::thread::spawn(move || {
-            let _ = serve(&sock2, snapshot, cmds, "/wt/project".into(), true);
+            let deployment =
+                Deployment { project: "/wt/project".into(), auto_merge: true, default_branch: "origin/main".into() };
+            let _ = serve(&sock2, snapshot, cmds, deployment);
         });
         for _ in 0..100 {
             if std::path::Path::new(&sock).exists() {
@@ -563,12 +573,12 @@ mod tests {
     fn post_dispatch_relays_the_order_to_the_writer() {
         let snapshot: Snapshot = Arc::new(Mutex::new(Vec::new()));
         let (tx, rx) = std::sync::mpsc::channel::<Command>();
-        let (seen_tx, seen) = std::sync::mpsc::channel::<bool>(); // each relayed order's auto_merge
+        let (seen_tx, seen) = std::sync::mpsc::channel::<(bool, String)>(); // each relayed order's (auto_merge, fork_from)
         std::thread::spawn(move || {
             for cmd in rx {
                 match cmd {
                     Command::Dispatch { order, reply } => {
-                        let _ = seen_tx.send(order.auto_merge);
+                        let _ = seen_tx.send((order.auto_merge, order.fork_from));
                         let _ = reply.send(Ok(()));
                     }
                     Command::RecordStatus { reply, .. }
@@ -594,13 +604,13 @@ mod tests {
         let body = r#"{"ticket":"PROJ-1","auto_impl":true,"auto_merge":false,"fork_from":"origin/master","ac_summary":"do it","park_at":null}"#;
         let req = format!("POST /dispatch HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len());
         assert!(roundtrip(&sock, req.as_bytes()).contains("200 OK"));
-        assert!(!seen.recv().unwrap(), "an explicit hold is kept");
+        assert_eq!(seen.recv().unwrap(), (false, "origin/master".into()), "explicit values are kept");
 
-        // No auto_merge on the wire → the deployment default (true here).
-        let body = r#"{"ticket":"PROJ-1","auto_impl":true,"fork_from":"origin/master","ac_summary":"do it","park_at":null}"#;
+        // No auto_merge / fork_from on the wire → the deployment defaults.
+        let body = r#"{"ticket":"PROJ-1","auto_impl":true,"ac_summary":"do it","park_at":null}"#;
         let req = format!("POST /dispatch HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len());
         assert!(roundtrip(&sock, req.as_bytes()).contains("200 OK"));
-        assert!(seen.recv().unwrap(), "an unset auto_merge inherits [forge] auto_merge");
+        assert_eq!(seen.recv().unwrap(), (true, "origin/main".into()), "unset values inherit the deployment's");
 
         // Malformed JSON is rejected at the edge.
         let req = "POST /dispatch HTTP/1.1\r\nContent-Length: 3\r\n\r\n{ x";

@@ -45,7 +45,7 @@ DAG, the blockers, the holds — and handed you a verdict per ticket:
 
 - **`classification`** — fleetd's dispatch verdict (`null` once a ticket is past the
   frontier, i.e. no longer To Do):
-  - **`clean`** — unblocked; dispatch it off master. **Your frontier.**
+  - **`clean`** — unblocked; dispatch it off the default branch. **Your frontier.**
   - **`stacked`** — blocked by one in-flight parent that has an open MR to fork from;
     dispatch it *stacked* — fork off the parent's branch, don't wait for the parent to
     merge. **Also your frontier.**
@@ -62,7 +62,7 @@ can't — a grooming glance — then act on it:
 
 1. **Read it** (Jira) and judge it: are the acceptance criteria clear enough to build?
 2. **Well-formed** → dispatch it, forking off the right base:
-   - **`clean`** → fork master: `/fleet-berth <TICKET>` emits the path, then
+   - **`clean`** → fork the default branch: `/fleet-berth <TICKET>` emits the path, then
      `fleetc dispatch --ticket <TICKET> --ac "<summary>" --worktree <path>`.
    - **`stacked`** → fork the **parent's branch**. Resolve it — the child's single
      `blocked_by` ticket, its open MR's `source_branch`
@@ -70,7 +70,7 @@ can't — a grooming glance — then act on it:
      `/fleet-berth <TICKET> <parent-branch>` (cuts the worktree off the parent) and
      `fleetc dispatch --ticket <TICKET> --ac "<summary>" --fork-from <parent-branch> --worktree <path>`.
      The child's MR targets the parent branch; fleetd declares the block, the sailor
-     keeps it rebased on the parent, and it unwinds onto master when the parent merges —
+     keeps it rebased on the parent, and it unwinds onto the default branch when the parent merges —
      all automatic.
    - Defaults are the normal path (a worker + the deployment's merge policy); your
      policy calls are `--hand` (operator-driven, no worker) and `--hold` (the sailor

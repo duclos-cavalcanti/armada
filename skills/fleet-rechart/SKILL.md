@@ -75,7 +75,7 @@ For each conflicting file (`git diff --name-only --diff-filter=U`):
   One file at a time — never batch-resolve blindly.
 - `git rebase --continue`. If a later commit conflicts, repeat.
 - If `git rebase` stops on an **empty / already-applied** commit (common when
-  unwinding a stacked MR onto master — the parent's commits are already there,
+  unwinding a stacked MR onto the default branch — the parent's commits are already there,
   especially after a squash-merge), that is **not** a conflict to resolve: `git
   rebase --skip` it and continue. Resolving hunks only applies to genuine
   content conflicts.

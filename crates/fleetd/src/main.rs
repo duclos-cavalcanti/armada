@@ -139,7 +139,11 @@ fn run_daemon() -> Result<()> {
     // client write Commands off this channel; the server is the only sender.
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
     let socket = cfg.socket.clone();
-    let (project, auto_merge) = (cfg.project.path.clone(), cfg.forge.auto_merge);
+    let deployment = server::Deployment {
+        project: cfg.project.path.clone(),
+        auto_merge: cfg.forge.auto_merge,
+        default_branch: git::GitWorktrees::new(&cfg.project.path).default_branch()?, // preflight checked it
+    };
     let sched_snapshot = snapshot.clone();
 
     // Online banner — the one line that says "up, and here's what I'll do", before the
@@ -160,7 +164,7 @@ fn run_daemon() -> Result<()> {
     std::thread::spawn(move || scheduler::run(ledger, host, forge, tracker, sched_snapshot, cfg, cmd_rx));
 
     println!("fleetd: serving context on {socket}");
-    server::serve(&socket, snapshot, cmd_tx, project, auto_merge) // blocks forever
+    server::serve(&socket, snapshot, cmd_tx, deployment) // blocks forever
 }
 
 #[cfg(test)]

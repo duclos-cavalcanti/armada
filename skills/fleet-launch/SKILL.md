@@ -9,9 +9,10 @@ You are opening a Merge Request for the current branch. This skill is a thin
 wrapper around `/create-mr` that adds the missing push step — `/create-mr`
 assumes the branch is already on the remote, so this skill pushes first.
 
-**Argument:** `target_branch` — forwarded to `/create-mr`; defaults to `master`.
+**Argument:** `target_branch` — forwarded to `/create-mr`; defaults to origin's
+default branch (`git symbolic-ref --short refs/remotes/origin/HEAD`, minus `origin/`).
 A stacked-MR child passes its parent's source branch here (the dispatching caller
-knows it from the ticket's `is blocked by` edge); everything else targets `master`.
+knows it from the ticket's `is blocked by` edge); everything else takes the default.
 
 ---
 
@@ -35,8 +36,8 @@ surface the error and exit non-zero. Do not retry blindly.
 
 ## Step 2 — Invoke /create-mr
 
-Invoke `/create-mr` with the target branch (the argument, or `master` by
-default). `/create-mr` drafts the MR description, opens the MR via
+Invoke `/create-mr` with the target branch (the argument, or the default
+branch). `/create-mr` drafts the MR description, opens the MR via
 `glab mr create --draft`, and displays the MR link.
 
 The MR is left in draft (per `/create-mr`'s default).

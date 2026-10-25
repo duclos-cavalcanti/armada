@@ -2,7 +2,7 @@
 //! Single surface: `git`. Worktree *creation* is the dispatcher's `/fleet-berth` skill; this is
 //! only the teardown. Runs from the project checkout — the main checkout that owns the worktrees.
 
-use anyhow::{ensure, Result};
+use anyhow::{anyhow, ensure, Result};
 use std::path::Path;
 use std::process::Command;
 
@@ -15,7 +15,8 @@ impl GitWorktrees {
         Self { project: project.into() }
     }
 
-    /// Preflight: the project checkout exists, is a git work tree, and has an `origin` remote.
+    /// Preflight: the project checkout exists, is a git work tree, has an `origin` remote, and knows
+    /// origin's default branch.
     pub fn preflight(&self) -> Result<String> {
         ensure!(
             Path::new(&self.project).is_dir(),
@@ -24,7 +25,16 @@ impl GitWorktrees {
         );
         crate::preflight::cli("git", &["-C", &self.project, "rev-parse", "--is-inside-work-tree"])?;
         let origin = crate::preflight::cli("git", &["-C", &self.project, "remote", "get-url", "origin"])?;
-        Ok(format!("{} (origin {origin})", self.project))
+        Ok(format!("{} (origin {origin}) · default {}", self.project, self.default_branch()?))
+    }
+
+    /// origin's default branch as a fork ref (`origin/main`), read from the clone's `origin/HEAD` —
+    /// recorded by `git clone` and shared by every ticket worktree, so no forge call is needed.
+    pub fn default_branch(&self) -> Result<String> {
+        crate::preflight::cli("git", &["-C", &self.project, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+            .map_err(|_| {
+                anyhow!("origin's default branch is unknown — set it: git -C {} remote set-head origin -a", self.project)
+            })
     }
 
     /// Remove the worktree at `path` and delete its local branch. NEVER `--force`: a dirty worktree
@@ -53,5 +63,30 @@ impl GitWorktrees {
             let _ = Command::new("git").args(["-C", &self.project, "branch", "-D", &b]).output();
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn git(dir: &Path, args: &[&str]) {
+        assert!(Command::new("git").arg("-C").arg(dir).args(args).output().unwrap().status.success(), "git {args:?}");
+    }
+
+    #[test]
+    fn default_branch_reads_origin_head_or_says_how_to_set_it() {
+        let dir = std::env::temp_dir().join(format!("fleetd-git-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git(&dir, &["init", "-q"]);
+        let wt = GitWorktrees::new(dir.to_string_lossy());
+
+        let e = wt.default_branch().unwrap_err().to_string();
+        assert!(e.contains("remote set-head origin -a"), "{e}");
+
+        git(&dir, &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+        assert_eq!(wt.default_branch().unwrap(), "origin/main");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

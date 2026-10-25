@@ -43,9 +43,9 @@ open the MR for your branch (ready, not draft), following the repo's MR
 conventions. **Target the branch you were forked from** — read
 `fleetc packet "$TICKET"` → `order.fork_from`, strip any `origin/` prefix, and
 pass it as the MR target (`glab mr create --target-branch <base>`). For a normal
-ticket that's `master`; for a *stacked* child it's the parent's branch — so your
-diff stays scoped to your own change, and GitLab retargets you to master when the
-parent merges. **Review happens downstream** (CI + the team's peer review) — you
+ticket that's the default branch; for a *stacked* child it's the parent's branch — so
+your diff stays scoped to your own change, and GitLab retargets you to the default
+branch when the parent merges. **Review happens downstream** (CI + the team's peer review) — you
 do not run a self-review loop.
 
 ## Voice your judgment (fleetc)

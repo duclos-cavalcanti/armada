@@ -31,7 +31,9 @@ pub struct DispatchOrder {
     /// `[forge] auto_merge` default, filled in by fleetd.
     #[serde(default)]
     pub auto_merge: Option<bool>,
-    pub fork_from: String,
+    /// The ref to fork off; `None` = origin's default branch, filled in by fleetd.
+    #[serde(default)]
+    pub fork_from: Option<String>,
     pub ac_summary: String,
     pub park_at: Option<String>,
     #[serde(default)]
