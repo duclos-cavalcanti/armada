@@ -28,7 +28,7 @@ canonical list. The installer gates on it.
 # 2. Install every Brewfile entry (idempotent):
 brew bundle --file=./Brewfile
 
-# 3. The armada needs a master hub clone, which is the project to work on.
+# 3. Clone the project to work on — `[project] path` in fleet.toml (default worktrees/master).
 git clone git@gitlab.com:<project> worktrees/master
 
 # 4. Third-party backends live in third-party/
@@ -70,6 +70,7 @@ git checkout .claude/settings.json
 ### 3. Run
 
 ```bash
+make preflight    # check the setup (project checkout, CLI auth, tmux + claude); `make run` gates on it
 make run          # build + run fleetd in the foreground (open a tmux pane first; Ctrl-C stops)
 make stop         # stop the fleet daemon
 make dashboard    # build + run the TUI dashboard
@@ -94,7 +95,7 @@ armada/
 ├── Brewfile     dependency manifest
 ├── install.sh   install / --uninstall (gates on Brewfile + stows)
 ├── Makefile     one-word wrappers (run `make` for the cheat sheet)
-├── fleet.toml   fleetd config (cadences, dry_run, [forge])
+├── fleet.toml   fleetd config (cadences, dry_run, [project], [forge], [tracker])
 ├── TODO.md      the forward backlog
-└── worktrees/   product overlay — master hub clone + ticket worktrees (gitignored)
+└── worktrees/   product overlay — project checkout + ticket worktrees (gitignored)
 ```

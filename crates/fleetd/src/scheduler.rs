@@ -62,15 +62,21 @@ pub enum Command {
 /// Own the ledger (single writer) + drivers and pace the tickers forever, with the
 /// cadences + thresholds injected from `Config`. Between tickers it drains client
 /// write `Command`s off `cmds` — the only place writes happen (single-writer).
-pub fn run(ledger: Ledger, host: TmuxHost, snapshot: Snapshot, cfg: Config, cmds: Receiver<Command>) {
-    let forge = GlabForge::new(&cfg.forge.project, cfg.ticket_prefix());
-    let tracker = JiraTracker::new(&cfg.tracker.project, cfg.tracker.claim_label.clone());
+pub fn run(
+    ledger: Ledger,
+    host: TmuxHost,
+    forge: GlabForge,
+    tracker: JiraTracker,
+    snapshot: Snapshot,
+    cfg: Config,
+    cmds: Receiver<Command>,
+) {
     let (mut next_poll, mut next_sync, mut next_reconcile) =
         (Instant::now(), Instant::now(), Instant::now());
 
     // The cadences + thresholds + dry_run are LIVE levers (`settings` overlay): each tick re-reads
     // the effective value off the ledger, so a `fleetc settings set` takes effect with no restart.
-    // Only the startup-bound config (socket, forge target, hub) is captured once above.
+    // Only the startup-bound config (socket, forge target, project) is captured once above.
     loop {
         let now = Instant::now();
         if now >= next_poll {
@@ -89,7 +95,7 @@ pub fn run(ledger: Ledger, host: TmuxHost, snapshot: Snapshot, cfg: Config, cmds
             // extra tmux fan-out).
             let dry_run = settings::dry_run(&cfg, &ledger);
             let cogs = snapshot.lock().unwrap().clone();
-            match reconcile::tick(&ledger, &tracker, &host, &forge, &cogs, &cfg.hub, dry_run) {
+            match reconcile::tick(&ledger, &tracker, &host, &forge, &cogs, &cfg.project.path, dry_run) {
                 Ok(n) if n > 0 => {
                     let mode = if dry_run { "dry-run" } else { "live" };
                     eprintln!("fleetd: reconcile ({mode}) {n} actions");
@@ -460,6 +466,9 @@ mod tests {
 
     struct FakeForge(Vec<ForgeShip>);
     impl Forge for FakeForge {
+        fn preflight(&self) -> Result<String> {
+            Ok("fake".into())
+        }
         fn armada(&self) -> Result<Vec<ForgeShip>> {
             Ok(self.0.clone())
         }
@@ -485,6 +494,9 @@ mod tests {
 
     struct FakeTracker(Vec<TrackerTicket>);
     impl Tracker for FakeTracker {
+        fn preflight(&self) -> Result<String> {
+            Ok("fake".into())
+        }
         fn active_sprint(&self) -> Result<Vec<TrackerTicket>> {
             Ok(self.0.clone())
         }
@@ -592,6 +604,9 @@ mod tests {
         }
     }
     impl SessionHost for FakeHost {
+        fn preflight(&self) -> Result<String> {
+            Ok("fake".into())
+        }
         fn spawn(&self, _: &str, _: &Path, _: &str) -> Result<()> {
             Ok(())
         }
@@ -700,7 +715,7 @@ mod tests {
                 kind,
                 ticket: None,
                 convoy: convoy.map(|c| ConvoyKey(c.into())),
-                worktree_path: "/hub".into(),
+                worktree_path: "/project".into(),
                 tmux_session: tmux.into(),
                 harness_session_id: None,
                 created_at: "t".into(),

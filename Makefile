@@ -8,7 +8,7 @@
 # `make` with no target prints the help summary.
 
 .DEFAULT_GOAL := help
-.PHONY: help install uninstall run stop dashboard
+.PHONY: help install uninstall preflight run stop dashboard
 
 help:                            ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / { printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -21,9 +21,12 @@ uninstall:                       ## Uninstall the kit and remove fleetc
 	-cargo uninstall fleetc
 	./install.sh --uninstall
 
+preflight:                       ## Check the setup: project checkout, forge + tracker CLIs (auth), tmux + claude
+	FLEET_CONFIG=$(CURDIR)/fleet.toml cargo run -q -p fleetd -- preflight
+
 run:                             ## Build + run the fleet daemon in the foreground (open a pane first; Ctrl-C to stop)
 	@if pgrep -x fleetd >/dev/null; then echo "fleetd already running — make stop first"; exit 1; fi
-	FLEET_HUB=$(CURDIR)/worktrees/master FLEET_CONFIG=$(CURDIR)/fleet.toml cargo run -p fleetd
+	FLEET_CONFIG=$(CURDIR)/fleet.toml cargo run -p fleetd
 
 stop:                            ## Stop the fleet daemon
 	@pkill -x fleetd && echo "fleetd stopped" || echo "fleetd not running"

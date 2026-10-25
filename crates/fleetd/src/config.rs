@@ -38,9 +38,23 @@ pub struct Config {
     /// The telemetry DB path (separate from the ledger) + the OTLP/HTTP receiver bind addr.
     pub telemetry_db: String,
     pub otel_addr: String,
-    /// The hub — the main-repo working dir where standing crew (captains, and later
-    /// auditor/shipwright) launch. Captains carry no per-ticket worktree, so they run here.
-    pub hub: String,
+    /// `[project]` — the product's main checkout, which owns the ticket worktrees. Captains and
+    /// the lookout carry no worktree, so they launch here.
+    pub project: ProjectConfig,
+}
+
+/// `[project]` in fleet.toml — the product's main checkout. A relative `path` resolves against
+/// fleet.toml's directory (not fleetd's cwd), so the kit layout `worktrees/master` just works.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ProjectConfig {
+    pub path: String,
+}
+
+impl Default for ProjectConfig {
+    fn default() -> Self {
+        Self { path: "worktrees/master".into() }
+    }
 }
 
 /// `[forge]` in fleet.toml — which forge adapter, and the project on it.
@@ -90,7 +104,7 @@ impl Default for Config {
             tracker: TrackerConfig::default(),
             telemetry_db: wire::default_telemetry_db(),
             otel_addr: "127.0.0.1:4318".into(),
-            hub: ".".into(),
+            project: ProjectConfig::default(),
         }
     }
 }
@@ -136,9 +150,7 @@ impl Config {
         if let Ok(v) = std::env::var("FLEET_OTEL_ADDR") {
             c.otel_addr = v;
         }
-        if let Ok(v) = std::env::var("FLEET_HUB") {
-            c.hub = v;
-        }
+        c.project.path = resolve_project(&c.project.path);
         c.validate()?;
         Ok(c)
     }
@@ -172,6 +184,17 @@ fn config_path() -> String {
     // `make run` sets $FLEET_CONFIG=<repo>/fleet.toml; the cwd-relative fallback covers
     // running fleetd from the repo directly. (~/.fleet holds only runtime state, no config.)
     std::env::var("FLEET_CONFIG").unwrap_or_else(|_| "fleet.toml".into())
+}
+
+/// A relative `[project] path` is relative to fleet.toml's directory. Not canonicalized — the
+/// checkout may not exist yet (preflight reports that, with the clone command).
+fn resolve_project(path: &str) -> String {
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        return path.to_string();
+    }
+    let joined = std::path::Path::new(&config_path()).parent().unwrap_or(std::path::Path::new("")).join(p);
+    std::path::absolute(&joined).unwrap_or(joined).to_string_lossy().into_owned()
 }
 
 /// The parsed file, or `None` when there is none. A file that exists but won't read or
@@ -275,6 +298,13 @@ mod tests {
     #[test]
     fn unknown_forge_kind_is_a_parse_error() {
         assert!(toml::from_str::<Config>("[forge]\nkind = \"bitbucket\"\nproject = \"1\"\n").is_err());
+    }
+
+    #[test]
+    fn project_path_resolves_against_the_config_dir() {
+        assert_eq!(resolve_project("/abs/checkout"), "/abs/checkout");
+        let rel = resolve_project("worktrees/master");
+        assert!(std::path::Path::new(&rel).is_absolute() && rel.ends_with("worktrees/master"), "{rel}");
     }
 
     #[test]

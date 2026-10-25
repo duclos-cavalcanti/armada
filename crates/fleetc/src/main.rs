@@ -761,8 +761,8 @@ mod tests {
         };
         assert!(matches_target(&sess(CrewKind::Worker, Some("PROJ-1"), None, "/wt", None), &ct("worker", Some("PROJ-1"), None)));
         assert!(!matches_target(&sess(CrewKind::Worker, Some("PROJ-2"), None, "/wt", None), &ct("worker", Some("PROJ-1"), None)));
-        assert!(matches_target(&sess(CrewKind::Captain, None, Some("PROJ-100"), "/hub", None), &ct("captain", None, Some("PROJ-100"))));
-        assert!(matches_target(&sess(CrewKind::Lookout, None, None, "/hub", None), &ct("lookout", None, None)));
+        assert!(matches_target(&sess(CrewKind::Captain, None, Some("PROJ-100"), "/project", None), &ct("captain", None, Some("PROJ-100"))));
+        assert!(matches_target(&sess(CrewKind::Lookout, None, None, "/project", None), &ct("lookout", None, None)));
     }
 
     #[test]

@@ -413,7 +413,7 @@ pub fn tick<T: Tracker, H: SessionHost, F: Forge>(
     host: &H,
     forge: &F,
     cogs: &[Cog],
-    hub: &str,
+    project: &str,
     dry_run: bool,
 ) -> Result<usize> {
     let actions = plan(ledger, cogs)?;
@@ -431,7 +431,7 @@ pub fn tick<T: Tracker, H: SessionHost, F: Forge>(
     let mut applied: Vec<Action> = Vec::new();
     let mut failed: Vec<serde_json::Value> = Vec::new();
     for action in &actions {
-        match execute(action, ledger, tracker, host, forge, hub) {
+        match execute(action, ledger, tracker, host, forge, project) {
             Ok(()) => applied.push(action.clone()),
             Err(e) => failed.push(serde_json::json!({ "action": action, "error": format!("{e:#}") })),
         }
@@ -454,18 +454,18 @@ fn execute<T: Tracker, H: SessionHost, F: Forge>(
     tracker: &T,
     host: &H,
     forge: &F,
-    hub: &str,
+    project: &str,
 ) -> Result<()> {
     match action {
         Action::Spawn { ticket, kind } => spawn(ledger, tracker, host, ticket, kind),
         Action::Handoff { ticket } => handoff(ledger, tracker, host, forge, ticket),
-        Action::Reap { ticket } => reap(ledger, tracker, host, hub, ticket),
+        Action::Reap { ticket } => reap(ledger, tracker, host, project, ticket),
         Action::Heal { ticket, kind } => heal(ledger, host, ticket, kind),
         Action::StandDown { ticket, kind } => stand_down(ledger, host, ticket, kind),
-        Action::LaunchCaptain { convoy } => launch_captain(ledger, host, hub, convoy),
+        Action::LaunchCaptain { convoy } => launch_captain(ledger, host, project, convoy),
         Action::StandDownCaptain { convoy } => stand_down_captain(ledger, host, convoy),
         Action::LaunchSailor { ticket } => launch_sailor(ledger, forge, host, ticket),
-        Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, hub, *iid),
+        Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, project, *iid),
         Action::StandDownLookout => stand_down_lookout(ledger, host),
         Action::Block { child_iid, parent_iid } => forge.block_on(*child_iid, *parent_iid),
     }
@@ -657,7 +657,7 @@ fn reap<T: Tracker, H: SessionHost>(
     ledger: &Ledger,
     tracker: &T,
     host: &H,
-    hub: &str,
+    project: &str,
     ticket: &str,
 ) -> Result<()> {
     let tkey = TicketKey(ticket.to_string());
@@ -696,7 +696,7 @@ fn reap<T: Tracker, H: SessionHost>(
     // the reap. Guarded on existence — idempotent, and a no-op in tests (fake paths don't exist).
     if let Some(wt) = worktree {
         if std::path::Path::new(&wt).exists() {
-            if let Err(e) = crate::git::GitWorktrees::new(hub).remove(&wt) {
+            if let Err(e) = crate::git::GitWorktrees::new(project).remove(&wt) {
                 eprintln!("fleetd: reap {ticket}: worktree cleanup failed (non-fatal): {e:#}");
             }
         }
@@ -769,12 +769,12 @@ fn stand_down<H: SessionHost>(ledger: &Ledger, host: &H, ticket: &str, kind: &st
 }
 
 /// LaunchCaptain — the live counterpart to converge's `reconcile_foremen` spawn: launch a captain
-/// at the hub (no ticket, no worktree, no Jira), record the ticketless session, and emit
+/// in the project checkout (no ticket, no worktree, no Jira), record the ticketless session, and emit
 /// `SessionStarted`. The captain self-identifies its convoy from the `FLEET_CONVOY` env var — an
 /// adapter-agnostic contract (no tmux/vendor leak into the agent), injected as a cmd-prefix so
 /// `TmuxHost` stays generic. `Ok(None)` from the `one_live_captain_per_convoy` lock means the slot
 /// is already held → a benign skip.
-fn launch_captain<H: SessionHost>(ledger: &Ledger, host: &H, hub: &str, convoy: &str) -> Result<()> {
+fn launch_captain<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, convoy: &str) -> Result<()> {
     let tmux_session = format!("captain-{convoy}");
     let hid = new_session_id();
     let session_id = match SessionRepo::start(
@@ -784,7 +784,7 @@ fn launch_captain<H: SessionHost>(ledger: &Ledger, host: &H, hub: &str, convoy: 
             kind: CrewKind::Captain,
             ticket: None,
             convoy: Some(ConvoyKey(convoy.to_string())),
-            worktree_path: hub.to_string(),
+            worktree_path: project.to_string(),
             tmux_session: tmux_session.clone(),
             harness_session_id: Some(hid.clone()),
             created_at: now_rfc3339(),
@@ -797,7 +797,7 @@ fn launch_captain<H: SessionHost>(ledger: &Ledger, host: &H, hub: &str, convoy: 
     };
 
     let cmd = format!("FLEET_CONVOY={convoy} {}", launch_cmd("captain", Some(&hid)));
-    host.spawn(&tmux_session, Path::new(hub), &cmd)?;
+    host.spawn(&tmux_session, Path::new(project), &cmd)?;
 
     ledger.append(
         &now_rfc3339(),
@@ -960,7 +960,7 @@ fn launch_lookout<H: SessionHost, F: Forge>(
     ledger: &Ledger,
     forge: &F,
     host: &H,
-    hub: &str,
+    project: &str,
     iid: i64,
 ) -> Result<()> {
     let ship = ledger
@@ -981,7 +981,7 @@ fn launch_lookout<H: SessionHost, F: Forge>(
             kind: CrewKind::Lookout,
             ticket: None,
             convoy: None,
-            worktree_path: hub.to_string(),
+            worktree_path: project.to_string(),
             tmux_session: lookout_tmux.clone(),
             harness_session_id: Some(hid.clone()),
             created_at: now_rfc3339(),
@@ -994,7 +994,7 @@ fn launch_lookout<H: SessionHost, F: Forge>(
     };
 
     let cmd = format!("FLEET_SHIP={iid} {}", launch_cmd("lookout", Some(&hid)));
-    host.spawn(&lookout_tmux, Path::new(hub), &cmd)?;
+    host.spawn(&lookout_tmux, Path::new(project), &cmd)?;
     ledger.append(
         &now_rfc3339(),
         EventKind::SessionStarted,
@@ -1233,7 +1233,7 @@ mod tests {
                 kind: CrewKind::Lookout,
                 ticket: None,
                 convoy: None,
-                worktree_path: "/hub".into(),
+                worktree_path: "/project".into(),
                 tmux_session: "lookout".into(),
                 harness_session_id: None,
                 created_at: "t".into(),
@@ -1271,7 +1271,7 @@ mod tests {
                 kind: CrewKind::Captain,
                 ticket: None,
                 convoy: Some(ConvoyKey(convoy.into())),
-                worktree_path: "/hub".into(),
+                worktree_path: "/project".into(),
                 tmux_session: format!("captain-{convoy}"),
                 harness_session_id: None,
                 created_at: "t".into(),
@@ -1512,7 +1512,7 @@ mod tests {
 
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
-        let n = tick(&db, &tracker, &host, &FakeForge::new(), &[], "/hub", true).unwrap();
+        let n = tick(&db, &tracker, &host, &FakeForge::new(), &[], "/project", true).unwrap();
         assert_eq!(n, 1);
 
         let ev = db.since(Seq(0)).unwrap();
@@ -1561,6 +1561,9 @@ mod tests {
         }
     }
     impl Tracker for FakeTracker {
+        fn preflight(&self) -> Result<String> {
+            Ok("fake".into())
+        }
         fn active_sprint(&self) -> Result<Vec<TrackerTicket>> {
             Ok(vec![])
         }
@@ -1603,6 +1606,9 @@ mod tests {
         }
     }
     impl Forge for FakeForge {
+        fn preflight(&self) -> Result<String> {
+            Ok("fake".into())
+        }
         fn armada(&self) -> Result<Vec<ForgeShip>> {
             Ok(vec![])
         }
@@ -1638,6 +1644,9 @@ mod tests {
         }
     }
     impl SessionHost for FakeHost {
+        fn preflight(&self) -> Result<String> {
+            Ok("fake".into())
+        }
         fn spawn(&self, name: &str, cwd: &Path, cmd: &str) -> Result<()> {
             self.spawned.borrow_mut().push((name.into(), cwd.display().to_string(), cmd.into()));
             Ok(())
@@ -1668,7 +1677,7 @@ mod tests {
 
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
-        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[], "/hub", false).unwrap(), 1);
+        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[], "/project", false).unwrap(), 1);
 
         // Jira claimed: To Do → In Progress.
         assert_eq!(
@@ -1716,7 +1725,7 @@ mod tests {
 
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
-        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[], "/hub", false).unwrap(), 1);
+        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[], "/project", false).unwrap(), 1);
 
         assert!(tracker.moves.borrow().is_empty(), "a hand never transitions the ticket");
         assert!(tracker.claims.borrow().is_empty(), "a hand runs no claim follow-ons");
@@ -1753,7 +1762,7 @@ mod tests {
 
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
-        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[], "/hub", false).unwrap(), 0, "nothing applied");
+        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[], "/project", false).unwrap(), 0, "nothing applied");
 
         assert!(tracker.moves.borrow().is_empty(), "no Jira claim without a worktree");
         assert!(SessionRepo::for_ticket(&db, &TicketKey("PROJ-1".into())).unwrap().is_empty());
@@ -1771,7 +1780,7 @@ mod tests {
         let db = db();
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
-        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[], "/hub", false).unwrap(), 0);
+        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[], "/project", false).unwrap(), 0);
         assert!(tracker.moves.borrow().is_empty());
         assert!(host.spawned.borrow().is_empty());
     }
@@ -1844,7 +1853,7 @@ mod tests {
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
         let forge = FakeForge::new();
-        assert_eq!(tick(&db, &tracker, &host, &forge, &[w], "/hub", false).unwrap(), 1);
+        assert_eq!(tick(&db, &tracker, &host, &forge, &[w], "/project", false).unwrap(), 1);
 
         // Jira moved In Progress → In QA.
         assert_eq!(tracker.moves.borrow().as_slice(), &[("PROJ-1".to_string(), TicketStatus::InQa)]);
@@ -1876,7 +1885,7 @@ mod tests {
 
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
-        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[h], "/hub", false).unwrap(), 1);
+        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[h], "/project", false).unwrap(), 1);
 
         assert!(
             OrderRepo::get(&db, &TicketKey("PROJ-1".into())).unwrap().unwrap().auto_impl,
@@ -2034,7 +2043,7 @@ mod tests {
         });
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
-        assert_eq!(tick(&db, &tracker, &host, &forge, &[], "/hub", false).unwrap(), 1);
+        assert_eq!(tick(&db, &tracker, &host, &forge, &[], "/project", false).unwrap(), 1);
 
         let sessions = SessionRepo::for_ticket(&db, &TicketKey("PROJ-1".into())).unwrap();
         let sailor = sessions.iter().find(|s| s.kind == CrewKind::Sailor).expect("a sailor");
@@ -2144,17 +2153,17 @@ mod tests {
         });
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
-        assert_eq!(tick(&db, &tracker, &host, &forge, &[], "/hub", false).unwrap(), 1);
+        assert_eq!(tick(&db, &tracker, &host, &forge, &[], "/project", false).unwrap(), 1);
 
-        // the singleton lookout launched at the hub, ticketless, with the allied iid injected.
+        // the singleton lookout launched in the project checkout, ticketless, with the allied iid injected.
         let live = db.live().unwrap();
         let lookout = live.iter().find(|s| s.kind == CrewKind::Lookout).expect("a lookout");
         assert!(lookout.ticket.is_none(), "the lookout is ticketless");
-        assert_eq!(lookout.worktree_path, "/hub");
+        assert_eq!(lookout.worktree_path, "/project");
         let spawned = host.spawned.borrow();
         assert_eq!(spawned.len(), 1);
         let (name, cwd, cmd) = &spawned[0];
-        assert_eq!((name.as_str(), cwd.as_str()), ("lookout", "/hub"));
+        assert_eq!((name.as_str(), cwd.as_str()), ("lookout", "/project"));
         assert!(
             cmd.starts_with("FLEET_SHIP=77 claude --session-id ") && cmd.ends_with(" --agent lookout"),
             "cmd was: {cmd}"
@@ -2174,7 +2183,7 @@ mod tests {
                 kind: CrewKind::Lookout,
                 ticket: None,
                 convoy: None,
-                worktree_path: "/hub".into(),
+                worktree_path: "/project".into(),
                 tmux_session: "lookout".into(),
                 harness_session_id: None,
                 created_at: "t".into(),
@@ -2187,7 +2196,7 @@ mod tests {
         let cog = Cog { session: SessionRepo::get(&db, &id).unwrap().unwrap(), liveness: Liveness::Dead };
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
-        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[cog], "/hub", false).unwrap(), 1);
+        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[cog], "/project", false).unwrap(), 1);
         assert!(db.live().unwrap().is_empty(), "the lookout session ended");
         assert!(host.killed.borrow().iter().any(|n| n == "lookout"));
     }
@@ -2204,7 +2213,7 @@ mod tests {
 
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
-        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[], "/hub", false).unwrap(), 1);
+        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[], "/project", false).unwrap(), 1);
 
         // merged ship on an In QA ticket → Jira driven to Done.
         assert_eq!(tracker.moves.borrow().as_slice(), &[("PROJ-1".to_string(), TicketStatus::Done)]);
@@ -2227,7 +2236,7 @@ mod tests {
 
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
-        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[c], "/hub", false).unwrap(), 1);
+        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[c], "/project", false).unwrap(), 1);
 
         // already Done → no Jira transition.
         assert!(tracker.moves.borrow().is_empty(), "no transition on an already-terminal ticket");
@@ -2247,7 +2256,7 @@ mod tests {
 
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
-        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[w], "/hub", false).unwrap(), 1);
+        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[w], "/project", false).unwrap(), 1);
 
         // the tmux was relaunched in place (same session name, same worktree).
         assert_eq!(
@@ -2401,7 +2410,7 @@ mod tests {
         let s = live_cog(&db, CrewKind::Sailor, "PROJ-1", Liveness::Dead); // finished its sweep
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
-        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[s], "/hub", false).unwrap(), 1);
+        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[s], "/project", false).unwrap(), 1);
 
         let sessions = SessionRepo::for_ticket(&db, &TicketKey("PROJ-1".into())).unwrap();
         assert!(sessions.iter().all(|s| s.ended_at.is_some()), "the sailor stood down");
@@ -2471,7 +2480,7 @@ mod tests {
         *tracker.subtasks.borrow_mut() = vec![TicketStatus::Done, TicketStatus::Done]; // all terminal
         let host = FakeHost::new();
 
-        reap(&db, &tracker, &host, "/hub", "PROJ-101").unwrap();
+        reap(&db, &tracker, &host, "/project", "PROJ-101").unwrap();
 
         let moves = tracker.moves.borrow();
         assert!(moves.contains(&("PROJ-101".to_string(), TicketStatus::Done)), "sub-task closed");
@@ -2487,7 +2496,7 @@ mod tests {
         *tracker.subtasks.borrow_mut() = vec![TicketStatus::Done, TicketStatus::InProgress]; // one still going
         let host = FakeHost::new();
 
-        reap(&db, &tracker, &host, "/hub", "PROJ-101").unwrap();
+        reap(&db, &tracker, &host, "/project", "PROJ-101").unwrap();
 
         assert!(
             !tracker.moves.borrow().iter().any(|(k, _)| k == "PROJ-100"),
@@ -2579,18 +2588,18 @@ mod tests {
         convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::Todo);
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
-        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[], "/hub", false).unwrap(), 1);
+        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[], "/project", false).unwrap(), 1);
 
         let live = db.live().unwrap();
         assert_eq!(live.len(), 1);
         assert_eq!(live[0].kind, CrewKind::Captain);
         assert!(live[0].ticket.is_none(), "a captain is ticketless");
         assert_eq!(live[0].convoy, Some(ConvoyKey("PROJ-100".into())));
-        // launched at the hub (no worktree), convoy identity injected via FLEET_CONVOY, no Jira.
+        // launched in the project checkout (no worktree), convoy identity injected via FLEET_CONVOY, no Jira.
         let spawned = host.spawned.borrow();
         assert_eq!(spawned.len(), 1);
         let (name, cwd, cmd) = &spawned[0];
-        assert_eq!((name.as_str(), cwd.as_str()), ("captain-PROJ-100", "/hub"));
+        assert_eq!((name.as_str(), cwd.as_str()), ("captain-PROJ-100", "/project"));
         assert!(
             cmd.starts_with("FLEET_CONVOY=PROJ-100 claude --session-id ") && cmd.ends_with(" --agent captain"),
             "cmd was: {cmd}"
@@ -2605,11 +2614,11 @@ mod tests {
         convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::Todo);
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
-        tick(&db, &tracker, &host, &FakeForge::new(), &[], "/hub", false).unwrap(); // launches the captain
+        tick(&db, &tracker, &host, &FakeForge::new(), &[], "/project", false).unwrap(); // launches the captain
         db.close(&ConvoyKey("PROJ-100".into()), "t2").unwrap(); // captain signs off → convoy inactive
 
         // live captain + inactive convoy → StandDownCaptain (the real session is found by convoy).
-        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[captain_cog("PROJ-100")], "/hub", false).unwrap(), 1);
+        assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[captain_cog("PROJ-100")], "/project", false).unwrap(), 1);
         assert!(db.live().unwrap().is_empty(), "the captain session ended");
         assert!(host.killed.borrow().iter().any(|n| n == "captain-PROJ-100"));
         assert!(tracker.moves.borrow().is_empty(), "a captain owns no ticket, so no Jira");

@@ -130,6 +130,9 @@ pub trait EventLog {
 // ── external ports (implemented by drivers — a later increment) ──────────────────
 
 pub trait Forge {
+    /// Preflight: verify this adapter can work — its CLI is installed, authenticated, and reaches
+    /// the configured target. `Ok` carries a one-line confirmation for the checklist.
+    fn preflight(&self) -> Result<String>;
     /// Every open MR (ours + allies = the armada), each as a `ForgeShip` DTO.
     fn armada(&self) -> Result<Vec<ForgeShip>>;
     fn snapshot(&self, iid: i64) -> Result<ForgeShip>;
@@ -151,6 +154,9 @@ pub trait Forge {
 }
 
 pub trait Tracker {
+    /// Preflight: verify this adapter can work — its CLI is installed, authenticated, and reaches
+    /// the configured target. `Ok` carries a one-line confirmation for the checklist.
+    fn preflight(&self) -> Result<String>;
     fn active_sprint(&self) -> Result<Vec<TrackerTicket>>; // openSprints()
     fn get(&self, key: &TicketKey) -> Result<TrackerTicket>;
     fn transition(&self, key: &TicketKey, to: TicketStatus) -> Result<()>;
@@ -170,6 +176,9 @@ pub trait Tracker {
 }
 
 pub trait SessionHost {
+    /// Preflight: verify this adapter can work — its CLI is installed, authenticated, and reaches
+    /// the configured target. `Ok` carries a one-line confirmation for the checklist.
+    fn preflight(&self) -> Result<String>;
     fn spawn(&self, name: &str, cwd: &Path, cmd: &str) -> Result<()>;
     fn alive(&self, name: &str) -> Result<bool>;
     /// Last observed activity as a unix epoch (seconds); tmux reads `#{window_activity}`.

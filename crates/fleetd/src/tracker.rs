@@ -57,6 +57,17 @@ impl JiraTracker {
 }
 
 impl Tracker for JiraTracker {
+    fn preflight(&self) -> Result<String> {
+        let me = crate::preflight::cli("jira", &["me"])?; // installed + authenticated (`jira init`)
+        let projects = crate::preflight::cli("jira", &["project", "list"])?;
+        ensure!(
+            projects.split_whitespace().any(|w| w == self.project),
+            "project {} not visible to {me} (jira project list)",
+            self.project
+        );
+        Ok(format!("jira logged in as {me} · project {}", self.project))
+    }
+
     fn active_sprint(&self) -> Result<Vec<TrackerTicket>> {
         self.all_issues("sprint in openSprints()") // `-p` scopes it to the project
     }

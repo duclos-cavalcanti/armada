@@ -56,6 +56,13 @@ fn target(name: &str) -> String {
 }
 
 impl SessionHost for TmuxHost {
+    /// Every cog is `claude` in a tmux session — both must be on PATH.
+    fn preflight(&self) -> Result<String> {
+        let tmux = crate::preflight::cli("tmux", &["-V"])?;
+        let claude = crate::preflight::cli("claude", &["--version"])?;
+        Ok(format!("{tmux} · claude {claude}"))
+    }
+
     fn spawn(&self, name: &str, cwd: &Path, cmd: &str) -> Result<()> {
         // A detached tmux session running `cmd` in `cwd`, plus per-cog OTEL attribution below.
         let mut tmux = Command::new("tmux");

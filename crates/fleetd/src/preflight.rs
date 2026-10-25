@@ -1,0 +1,96 @@
+//! Preflight — before fleetd goes ONLINE (and on `fleetd preflight`), every adapter verifies its own
+//! surface: its CLI is installed, authenticated, and reaches the configured target; the project
+//! checkout exists. One ✓/✗ line per check; any ✗ stops the boot with the whole list, so a broken
+//! setup fails at the door, not mid-sync.
+
+use anyhow::{anyhow, bail, Result};
+use std::process::Command;
+
+/// Run `program args…` and return its trimmed stdout. A missing binary is its own clear error
+/// (`brew install <program>`), distinct from the command failing.
+pub(crate) fn cli(program: &str, args: &[&str]) -> Result<String> {
+    let out = Command::new(program).args(args).output().map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => anyhow!("{program} not found on PATH (brew install {program})"),
+        _ => anyhow!("{program}: {e}"),
+    })?;
+    if !out.status.success() {
+        let err = strip_ansi(&String::from_utf8_lossy(&out.stderr));
+        bail!("{program} {} failed: {}", args.join(" "), headline(&err));
+    }
+    Ok(strip_ansi(&String::from_utf8_lossy(&out.stdout)).trim().to_string())
+}
+
+/// The line of a CLI's stderr that names the problem: the first error-looking one (`x …`, `error`,
+/// `failed`, `token`…), else the first non-empty one. CLIs lead with headers (`gitlab.com`).
+fn headline(err: &str) -> String {
+    const CUES: [&str; 6] = ["error", "fail", "token", "unauthorized", "denied", "not found"];
+    let lines = || err.lines().map(str::trim).filter(|l| !l.is_empty());
+    lines()
+        .find(|l| l.starts_with("x ") || CUES.iter().any(|c| l.to_ascii_lowercase().contains(c)))
+        .or_else(|| lines().next())
+        .unwrap_or("non-zero exit")
+        .to_string()
+}
+
+/// Drop ANSI colour escapes (`ESC [ … letter`) so CLI output reads cleanly in the checklist.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            chars.by_ref().find(|c| c.is_ascii_alphabetic()); // skip to the final letter
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Render the checklist; `Err` (after printing it) if any check failed.
+pub fn report(checks: &[(&str, Result<String>)]) -> Result<()> {
+    print!("{}", render(checks));
+    let failed = checks.iter().filter(|(_, r)| r.is_err()).count();
+    if failed > 0 {
+        bail!("preflight: {failed} of {} checks failed", checks.len());
+    }
+    Ok(())
+}
+
+fn render(checks: &[(&str, Result<String>)]) -> String {
+    checks
+        .iter()
+        .map(|(name, r)| match r {
+            Ok(ok) => format!("  ✓ {name:<8} {ok}\n"),
+            Err(e) => format!("  ✗ {name:<8} {e:#}\n"),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn report_lists_every_check_and_fails_on_any_cross() {
+        let checks = [("forge", Ok("glab · project a/b".to_string())), ("tracker", Err(anyhow!("jira not found on PATH")))];
+        let out = render(&checks);
+        assert!(out.contains("✓ forge") && out.contains("glab · project a/b"));
+        assert!(out.contains("✗ tracker") && out.contains("jira not found on PATH"));
+        assert!(report(&checks).is_err());
+        assert!(report(&checks[..1]).is_ok());
+    }
+
+    #[test]
+    fn headline_picks_the_error_line_and_strips_colour() {
+        let glab = "gitlab.com\n  x gitlab.com: API call failed: 401\n  ✓ Git operations configured";
+        assert_eq!(headline(glab), "x gitlab.com: API call failed: 401");
+        assert_eq!(strip_ansi("\x1b[0;33mThe tool needs a Jira API token\x1b[0m"), "The tool needs a Jira API token");
+        assert_eq!(headline("just one line"), "just one line");
+    }
+
+    #[test]
+    fn cli_reports_a_missing_binary_plainly() {
+        let e = cli("definitely-not-a-real-binary-xyz", &[]).unwrap_err().to_string();
+        assert!(e.contains("not found on PATH"), "{e}");
+    }
+}

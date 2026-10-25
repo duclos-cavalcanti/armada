@@ -10,6 +10,7 @@ mod config;
 mod forge;
 mod git;
 mod otlp;
+mod preflight;
 mod reconcile;
 mod scheduler;
 mod server;
@@ -19,7 +20,7 @@ mod tmux;
 mod tracker;
 
 use anyhow::Result;
-use domain::ports::{SessionHost, SessionRepo};
+use domain::ports::{Forge, SessionHost, SessionRepo, Tracker};
 use domain::{Liveness, LivenessThresholds, Session};
 use ledger::Ledger;
 use serde::Serialize;
@@ -74,8 +75,31 @@ fn now_rfc3339() -> String {
 fn main() -> Result<()> {
     match std::env::args().nth(1).as_deref() {
         Some("sync") => run_sync(),
+        Some("preflight") => {
+            let cfg = config::Config::load()?;
+            preflight(&cfg, &forge(&cfg), &tracker(&cfg), &TmuxHost::new())
+        }
         _ => run_daemon(),
     }
+}
+
+/// The deployment's forge + tracker, built from fleet.toml.
+fn forge(cfg: &config::Config) -> forge::GlabForge {
+    forge::GlabForge::new(&cfg.forge.project, cfg.ticket_prefix())
+}
+fn tracker(cfg: &config::Config) -> tracker::JiraTracker {
+    tracker::JiraTracker::new(&cfg.tracker.project, cfg.tracker.claim_label.clone())
+}
+
+/// Every adapter's preflight + the project checkout, as one checklist (`fleetd preflight`, and
+/// the boot gate before ONLINE).
+fn preflight(cfg: &config::Config, forge: &dyn Forge, tracker: &dyn Tracker, host: &dyn SessionHost) -> Result<()> {
+    preflight::report(&[
+        ("project", git::GitWorktrees::new(&cfg.project.path).preflight()),
+        ("forge", forge.preflight()),
+        ("tracker", tracker.preflight()),
+        ("host", host.preflight()),
+    ])
 }
 
 /// One-shot: pull the armada from the forge into the ledger. The scheduler will run
@@ -85,17 +109,18 @@ fn run_sync() -> Result<()> {
     let ledger = Ledger::open(&cfg.ledger)?;
     let now = now_rfc3339();
     // Board first so ships can link their ticket FK.
-    let tracker = tracker::JiraTracker::new(&cfg.tracker.project, cfg.tracker.claim_label.clone());
-    let tickets = sync::sync_board(&ledger, &tracker, &now)?;
-    let ships = sync::sync_armada(&ledger, &forge::GlabForge::new(&cfg.forge.project, cfg.ticket_prefix()), &now)?;
+    let tickets = sync::sync_board(&ledger, &tracker(&cfg), &now)?;
+    let ships = sync::sync_armada(&ledger, &forge(&cfg), &now)?;
     println!("fleetd sync: {tickets} tickets + {ships} ships synced to the ledger");
     Ok(())
 }
 
 fn run_daemon() -> Result<()> {
     let cfg = config::Config::load()?;
+    let (host, forge, tracker) = (TmuxHost::new(), forge(&cfg), tracker(&cfg));
+    println!("fleetd: preflight");
+    preflight(&cfg, &forge, &tracker, &host)?;
     let ledger = Ledger::open(&cfg.ledger)?;
-    let host = TmuxHost::new();
 
     // Seed the snapshot once so /context isn't empty before the first poll.
     let snapshot: Snapshot = Arc::new(Mutex::new(context(&ledger, &host, &cfg.thresholds())?));
@@ -131,7 +156,7 @@ fn run_daemon() -> Result<()> {
         cfg.forge.project,
         cfg.tracker.project,
     );
-    std::thread::spawn(move || scheduler::run(ledger, host, sched_snapshot, cfg, cmd_rx));
+    std::thread::spawn(move || scheduler::run(ledger, host, forge, tracker, sched_snapshot, cfg, cmd_rx));
 
     println!("fleetd: serving context on {socket}");
     server::serve(&socket, snapshot, cmd_tx) // blocks forever
@@ -151,6 +176,9 @@ mod tests {
         age_secs: Option<i64>,
     }
     impl SessionHost for FakeHost {
+        fn preflight(&self) -> Result<String> {
+            Ok("fake".into())
+        }
         fn spawn(&self, _: &str, _: &Path, _: &str) -> Result<()> {
             Ok(())
         }

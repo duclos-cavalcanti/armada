@@ -82,6 +82,9 @@ mod tests {
 
     struct FakeForge(Vec<ForgeShip>);
     impl Forge for FakeForge {
+        fn preflight(&self) -> Result<String> {
+            Ok("fake".into())
+        }
         fn armada(&self) -> Result<Vec<ForgeShip>> {
             Ok(self.0.clone())
         }
@@ -172,6 +175,9 @@ mod tests {
 
     struct FakeTracker(Vec<TrackerTicket>);
     impl Tracker for FakeTracker {
+        fn preflight(&self) -> Result<String> {
+            Ok("fake".into())
+        }
         fn active_sprint(&self) -> Result<Vec<TrackerTicket>> {
             Ok(self.0.clone())
         }

@@ -38,6 +38,11 @@ quiet_secs  = 1800 # between active_secs and this => Quiet; beyond => Parked  (F
 #   telemetry_db = "/abs/path/telemetry.db"  # FLEET_TELEMETRY_DB (default: $HOME/.fleet/telemetry.db)
 #   otel_addr    = "127.0.0.1:4318"          # FLEET_OTEL_ADDR    (OTLP/HTTP receiver bind)
 
+# --- project — the product's main checkout (owns the ticket worktrees) ---
+# Relative to this file. Clone it once: git clone <remote> worktrees/master
+[project]
+path = "worktrees/master"
+
 # --- forge (REQUIRED) — whose MRs form the armada ---
 # Deployment-specific, so there is no built-in default: fleetd refuses to start without it.
 # Kept last — every key after a `[table]` header belongs to that table.

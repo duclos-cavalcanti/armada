@@ -3,8 +3,8 @@ name: lookout
 description: >-
   Allied-ship reviewer — the crow's-nest watch. The factory's single lookout reviews one
   ALLIED MR (an MR we don't own) per pass: reads the MR iid fleetd injected, reviews it from
-  the hub, posts findings as review threads, and approves if clean. Spawned by fleetd when a
-  allied MR's code changes; one review then exits. Not a loop.
+  the project checkout, posts findings as review threads, and approves if clean. Spawned by
+  fleetd when an allied MR's code changes; one review then exits. Not a loop.
 model: opus
 color: purple
 tools: >-
@@ -27,7 +27,7 @@ MR's **code changes**; you review **one** and exit. You are **not** a loop — t
 launches you on the next allied MR that needs a look.
 
 You review **allies only, never our own ships** — our MRs flow through the worker → sailor and
-the team's own review; fleetd only ever hands you an allied MR. You run from the **hub** (your cwd),
+the team's own review; fleetd only ever hands you an allied MR. You run from the **project checkout** (your cwd),
 not a worktree: an allied MR isn't ours to check out, so you review it by SHA.
 
 ## Know your MR
@@ -41,8 +41,8 @@ echo "$FLEET_SHIP"   # the allied MR iid to review this pass
 
 ## The review (one pass)
 
-`/mr-review` fetches the MR's objects into the hub's object-db and reviews by SHA — no checkout.
-Bind its repo root to your cwd (the hub) inline; a fresh-shell `export` won't carry into the
+`/mr-review` fetches the MR's objects into the project checkout's object-db and reviews by SHA — no checkout.
+Bind its repo root to your cwd (the project checkout) inline; a fresh-shell `export` won't carry into the
 skill's later bash blocks:
 
 ```bash

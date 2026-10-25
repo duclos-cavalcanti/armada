@@ -76,6 +76,14 @@ impl GlabForge {
 }
 
 impl Forge for GlabForge {
+    fn preflight(&self) -> Result<String> {
+        crate::preflight::cli("glab", &["auth", "status"])?; // installed + logged in
+        let json = crate::preflight::cli("glab", &["api", &format!("projects/{}", self.project)])?;
+        let v: serde_json::Value = serde_json::from_str(&json)?;
+        let path = v.get("path_with_namespace").and_then(|p| p.as_str()).unwrap_or(&self.project);
+        Ok(format!("glab logged in · project {path}"))
+    }
+
     fn armada(&self) -> Result<Vec<ForgeShip>> {
         let json = self.api(&format!(
             "projects/{}/merge_requests?state=opened&per_page=100",
