@@ -56,9 +56,7 @@ fn handle(
     cmds: &Sender<Command>,
     deployment: &Deployment,
 ) -> std::io::Result<()> {
-    let mut buf = [0u8; 2048];
-    let n = stream.read(&mut buf)?;
-    let request = String::from_utf8_lossy(&buf[..n]);
+    let request = read_request(stream)?;
     let (method, path) = parse_request_line(&request);
 
     let response = match (method.as_deref(), path.as_deref()) {
@@ -84,6 +82,7 @@ fn handle(
         (Some("GET"), Some(p)) if p.starts_with("/packet") => handle_packet(cmds, p),
         (Some("GET"), Some(p)) if p.starts_with("/review") => handle_review(cmds, p),
         (Some("POST"), Some(p)) if p.starts_with("/rebase") => handle_rebase(cmds, p),
+        (Some("POST"), Some("/launch")) => handle_launch(&request, cmds, deployment),
         (Some("GET"), Some("/settings")) => handle_settings_list(cmds),
         (Some("POST"), Some("/settings")) => handle_setting(&request, cmds),
         _ => http_response("404 Not Found", "text/plain", "not found"),
@@ -135,6 +134,31 @@ fn handle_status(request: &str, cmds: &Sender<Command>) -> String {
 
 /// Parse a client-sent ticket key — or the `400` response to return. Keys are validated at
 /// the edge (`<PREFIX>-<n>`), never passed through raw.
+/// Largest request accepted — far above any real packet (an MR description is a few KB).
+const MAX_REQUEST: usize = 1 << 20;
+
+/// Read one request: the head, then its `Content-Length` body. A single `read` would cut a body
+/// that spans buffers (an MR description); the client keeps its end open, so EOF can't delimit it.
+fn read_request(stream: &mut impl Read) -> std::io::Result<String> {
+    let (mut buf, mut chunk) = (Vec::new(), [0u8; 4096]);
+    loop {
+        let n = stream.read(&mut chunk)?;
+        buf.extend_from_slice(&chunk[..n]);
+        let done = buf.windows(4).position(|w| w == b"\r\n\r\n").is_some_and(|end| {
+            let head = String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
+            let len = head
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length:"))
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            buf.len() >= end + 4 + len
+        });
+        if n == 0 || done || buf.len() > MAX_REQUEST {
+            return Ok(String::from_utf8_lossy(&buf).into_owned());
+        }
+    }
+}
+
 fn parse_ticket(s: &str) -> Result<TicketKey, String> {
     TicketKey::parse(s).map_err(|e| http_response("400 Bad Request", "text/plain", &e.to_string()))
 }
@@ -313,6 +337,37 @@ fn handle_rebase(cmds: &Sender<Command>, path: &str) -> String {
     }
 }
 
+/// `POST /launch` — launch a ship: open the MR for the worktree's branch, reply with its URL.
+fn handle_launch(request: &str, cmds: &Sender<Command>, deployment: &Deployment) -> String {
+    let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+    let dto: wire::LaunchCmd = match serde_json::from_str(body) {
+        Ok(d) => d,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
+    };
+    let ticket = match dto.ticket.as_deref().map(parse_ticket).transpose() {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    let launch = crate::scheduler::Launch {
+        ticket,
+        worktree: dto.worktree,
+        target: dto.target,
+        default_branch: deployment.default_branch.clone(),
+        title: dto.title,
+        description: dto.description,
+        draft: dto.draft,
+    };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::Launch { launch, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(url)) => http_response("200 OK", "text/plain", &url),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
 /// `GET /settings` — relay a live-config read to the writer and return every lever's effective
 /// value + source (`{key, value, source}[]`) as JSON. The `fleetc settings list` read.
 fn handle_settings_list(cmds: &Sender<Command>) -> String {
@@ -465,6 +520,22 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
+    fn read_request_reads_a_body_that_spans_many_reads() {
+        // A reader that hands back 100 bytes at a time, like a socket under a large write.
+        struct Trickle(std::io::Cursor<Vec<u8>>);
+        impl Read for Trickle {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let n = buf.len().min(100);
+                self.0.read(&mut buf[..n])
+            }
+        }
+        let body = "x".repeat(10_000);
+        let raw = format!("POST /launch HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        let got = read_request(&mut Trickle(std::io::Cursor::new(raw.clone().into_bytes()))).unwrap();
+        assert_eq!(got, raw, "the whole body, not the first buffer");
+    }
+
+    #[test]
     fn http_response_has_status_type_and_length() {
         let r = http_response("200 OK", "application/json", "[]");
         assert!(r.starts_with("HTTP/1.1 200 OK\r\n"));
@@ -551,6 +622,7 @@ mod tests {
                     Command::GetConvoyView { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetReview { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetSettings { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::Launch { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                 }
             }
         });
@@ -596,6 +668,7 @@ mod tests {
                     Command::GetConvoyView { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetReview { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetSettings { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::Launch { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                 }
             }
         });

@@ -8,8 +8,10 @@ description: >-
 model: opus
 color: blue
 tools: >-
-  Read, Glob, Grep, Bash, Edit, Write, WebFetch, WebSearch,
+  Read, Glob, Grep, Bash, Edit, Write, Skill, WebFetch, WebSearch,
   mcp__claude_ai_Atlassian_Rovo__*
+skills: >-
+  fleet-launch
 mcpServers:
   - "claude.ai Atlassian Rovo"
 initialPrompt: /goal Deliver your ticket (the FLEET_TICKET env var): implemented to its acceptance criteria, tests passing, MR open.
@@ -39,13 +41,10 @@ TICKET="$FLEET_TICKET"
 
 Implement the ticket to its acceptance criteria, with tests, in your worktree.
 Keep going until it builds and the tests + lint pass — run them yourself. Then
-open the MR for your branch (ready, not draft), following the repo's MR
-conventions. **Target the branch you were forked from** — read
-`fleetc packet "$TICKET"` → `order.fork_from`, strip any `origin/` prefix, and
-pass it as the MR target (`glab mr create --target-branch <base>`). For a normal
-ticket that's the default branch; for a *stacked* child it's the parent's branch — so
-your diff stays scoped to your own change, and GitLab retargets you to the default
-branch when the parent merges. **Review happens downstream** (CI + the team's peer review) — you
+open the MR for your branch: `/fleet-launch` (ready, not draft). It targets the
+branch you were forked from: the default branch for a normal ticket, the parent's
+branch for a *stacked* child, so your diff stays scoped to your own change and the
+forge retargets you to the default branch when the parent merges. **Review happens downstream** (CI + the team's peer review) — you
 do not run a self-review loop.
 
 ## Voice your judgment (fleetc)

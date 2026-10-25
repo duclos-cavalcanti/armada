@@ -41,14 +41,7 @@ impl GitWorktrees {
     /// (uncommitted work) makes git refuse — we'd rather keep it and log than nuke unsaved changes.
     /// The branch delete is best-effort (the worktree is already gone; a leftover ref is cheap).
     pub fn remove(&self, path: &str) -> Result<()> {
-        // The branch the worktree is on — read before we remove it.
-        let branch = Command::new("git")
-            .args(["-C", path, "branch", "--show-current"])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|b| !b.is_empty());
+        let branch = current_branch(path); // read before we remove it
 
         let out = Command::new("git")
             .args(["-C", &self.project, "worktree", "remove", path])
@@ -64,6 +57,17 @@ impl GitWorktrees {
         }
         Ok(())
     }
+}
+
+/// The branch checked out in the worktree at `path`; `None` if detached, or not a git work tree.
+pub fn current_branch(path: &str) -> Option<String> {
+    Command::new("git")
+        .args(["-C", path, "branch", "--show-current"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|b| !b.is_empty())
 }
 
 #[cfg(test)]

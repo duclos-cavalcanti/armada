@@ -32,6 +32,7 @@ fn run() -> Result<()> {
         Some("transcript") => transcript(&args[1..]),
         Some("review") => review(&args[1..]),
         Some("rebase") => rebase(&args[1..]),
+        Some("launch") => launch(&args[1..]),
         Some("settings") => settings(&args[1..]),
         Some("project") => project(),
         Some("cost") => cost(&args[1..]),
@@ -54,6 +55,7 @@ fn run() -> Result<()> {
                  fleetc transcript --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] [--open]   (resolve a cog's transcript)\n  \
                  fleetc review   --iid <N>         (an MR's fresh review surface: open-thread count + floating notes)\n  \
                  fleetc rebase   --iid <N>         (server-side rebase an MR)\n  \
+                 fleetc launch   --title <t> --body <text> [--ticket <KEY-N>] [--target <branch>] [--draft] [--worktree <path>]   (open the MR for the worktree's branch; prints its URL)\n  \
                  fleetc settings [list | set <key> <value>]   (live config levers; no restart)\n  \
                  fleetc project                   (the project checkout's path, from fleet.toml)\n  \
                  fleetc cost     [--since <RFC3339>] [--db <path>]"
@@ -549,12 +551,51 @@ fn review(args: &[String]) -> Result<()> {
 /// `fleetc rebase --iid <N>` — server-side rebase the MR via the factory's forge (`GlabForge::rebase`).
 fn rebase(args: &[String]) -> Result<()> {
     let iid = require_iid(args, "rebase")?;
-    let socket = std::env::var("FLEET_SOCK").unwrap_or_else(|_| wire::default_socket());
-    let (code, body) = wire::post_json(&socket, &format!("/rebase?iid={iid}"), &serde_json::json!({}))?;
-    if code != 200 {
-        bail!("fleetd ({code}): {body}");
+    post_and_print(&format!("/rebase?iid={iid}"), &serde_json::json!({}))
+}
+
+/// `fleetc launch --title <t> --body <text> [--ticket <KEY-N>] [--target <branch>] [--draft]
+/// [--worktree <path>]` — launch a ship: open the MR for the branch checked out in the worktree
+/// (default: the current dir), assigned to you. The target defaults to the ticket's fork base,
+/// else origin's default branch. The branch must already be pushed. Prints the MR's URL.
+fn launch(args: &[String]) -> Result<()> {
+    let (mut ticket, mut target, mut title, mut description, mut worktree) = (None, None, None, None, None);
+    let mut draft = false;
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
+        match flag.as_str() {
+            "--ticket" => ticket = Some(ticket_key(&take()?, "launch")?),
+            "--target" => target = Some(take()?),
+            "--title" => title = Some(take()?),
+            "--body" => description = Some(take()?),
+            "--worktree" => worktree = Some(take()?),
+            "--draft" => draft = true,
+            other => bail!("unknown flag: {other}"),
+        }
     }
-    println!("{body}");
+    let worktree = match worktree {
+        Some(w) => w,
+        None => std::env::current_dir()?.to_string_lossy().into_owned(),
+    };
+    post_and_print("/launch", &wire::LaunchCmd {
+        ticket,
+        worktree,
+        target,
+        title: title.ok_or_else(|| anyhow!("--title required"))?,
+        description: description.ok_or_else(|| anyhow!("--body required"))?,
+        draft,
+    })
+}
+
+/// POST `body` to fleetd and print its reply body (an action whose reply is the result).
+fn post_and_print<T: serde::Serialize>(path: &str, body: &T) -> Result<()> {
+    let socket = std::env::var("FLEET_SOCK").unwrap_or_else(|_| wire::default_socket());
+    let (code, resp) = wire::post_json(&socket, path, body)?;
+    if code != 200 {
+        bail!("fleetd ({code}): {resp}");
+    }
+    println!("{resp}");
     Ok(())
 }
 

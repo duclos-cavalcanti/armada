@@ -339,6 +339,17 @@ pub struct ForgeShip {
 /// count (notes resolvable AND not resolved AND not system); `floating_notes` = the
 /// non-resolvable, non-system notes the count excludes (a reviewer HOLD / summary that gates
 /// approval, not merge). Replaces the bash `mr-open-threads` + `mr-floating-notes` pair.
+/// A new MR as the fleet asks the forge to open it (`Forge::open_mr`). The forge adapter maps it
+/// onto its own CLI; squash is the fleet's policy (set here on GitLab, at merge on GitHub).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MrDraft {
+    pub source: String,
+    pub target: String,
+    pub title: String,
+    pub description: String,
+    pub draft: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewState {
     pub open_threads: i64,

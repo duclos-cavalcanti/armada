@@ -1,52 +1,100 @@
 ---
-description: Push the current branch then create a draft GitLab MR via /create-mr
-argument-hint: [target_branch]
+description: Launch the current branch's ship. Push it, draft the MR title + description from the ticket and the branch's divergence from its base, then open the MR via `fleetc launch`. fleetd's forge adapter opens it, on GitLab or GitHub alike. Run from the worktree.
+argument-hint: [--draft]
 ---
 
 # Skill: fleet-launch
 
-You are opening a Merge Request for the current branch. This skill is a thin
-wrapper around `/create-mr` that adds the missing push step — `/create-mr`
-assumes the branch is already on the remote, so this skill pushes first.
+You are launching a ship: opening the MR for the current branch. **The judgment is
+yours:** a title and description written from the ticket and from what this branch
+changes against its base. **The mechanics are fleetd's:** `fleetc launch` opens the MR
+on whichever forge the fleet runs (target branch, assignee, squash), so never call
+`glab` / `gh` here.
 
-**Argument:** `target_branch` — forwarded to `/create-mr`; defaults to origin's
-default branch (`git symbolic-ref --short refs/remotes/origin/HEAD`, minus `origin/`).
-A stacked-MR child passes its parent's source branch here (the dispatching caller
-knows it from the ticket's `is blocked by` edge); everything else takes the default.
+**Argument:** `--draft` (optional) opens it as a draft. The default is ready. A hand
+iterating on a branch may want a draft; the handoff marks it ready later.
 
 ---
 
-## Step 1 — Push the branch
+## Step 1 — Resolve the base + push
 
-Push the current branch to the remote, setting upstream tracking if not already
-set:
+The base is the ticket's fork base (a stacked child forks off its parent's branch),
+else origin's default branch. `fleetc launch` resolves the same base as the MR target.
 
 ```bash
+TICKET="${FLEET_TICKET:-}"
+BASE=""
+[ -n "$TICKET" ] && BASE="$(fleetc packet "$TICKET" | jq -r '.order.fork_from // empty')"
+[ -n "$BASE" ] || BASE="$(git symbolic-ref --short refs/remotes/origin/HEAD)"
+BASE="origin/${BASE#origin/}"
+git fetch origin "${BASE#origin/}" --quiet --no-tags
 git push -u origin HEAD
 ```
 
-If the push is refused because the remote has diverged (e.g. after a UI-rebase),
-use `git push --force-with-lease` instead. Do not use plain `--force` — the
-lease check refuses if a teammate's push intervened since your last fetch.
-
-If the push fails for any other reason (auth, network, protected-branch policy),
-surface the error and exit non-zero. Do not retry blindly.
+If the push is refused because the remote diverged (e.g. after a server-side rebase),
+use `git push --force-with-lease`. Never plain `--force`: the lease refuses if someone
+else pushed since your last fetch. Any other push failure (auth, network, protected
+branch): surface it and stop. Don't retry blindly.
 
 ---
 
-## Step 2 — Invoke /create-mr
+## Step 2 — Gather context
 
-Invoke `/create-mr` with the target branch (the argument, or the default
-branch). `/create-mr` drafts the MR description, opens the MR via
-`glab mr create --draft`, and displays the MR link.
+- **The ticket.** If `$TICKET` is set, `fleetc packet "$TICKET"` carries its title
+  (`.ticket.title`) and the acceptance-criteria summary (`.order.ac_summary`).
+- **The change** against the base:
+  ```bash
+  git log "$BASE"...HEAD --oneline
+  git diff "$BASE"...HEAD --stat
+  git diff "$BASE"...HEAD
+  ```
 
-The MR is left in draft (per `/create-mr`'s default).
+---
+
+## Step 3 — Draft the title + description
+
+**Title:** `<TICKET>: <what the change does>` (just the summary when there's no ticket).
+The ticket key in the title links the MR to its ticket.
+
+**Description:** written for a **future reader**, so focus on the *why*, not only the *what*:
+
+```
+## Summary
+
+<2-4 sentences: the motivation and context. Why does this change exist? What problem does it solve? Reference the ticket.>
+
+## Changes
+
+<Bulleted list of the meaningful changes: components affected, new types/adapters, modified flows, infra changes.>
+
+## Scope Decisions
+
+<What was intentionally not addressed, and why.>
+
+## Testing
+
+<How it was tested: unit / integration tests added, manual verification, edge cases considered.>
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+```
+
+---
+
+## Step 4 — Launch
+
+```bash
+fleetc launch ${TICKET:+--ticket "$TICKET"} --title "<title>" --body "$(cat <<'EOF'
+<the description from Step 3>
+EOF
+)"   # add --draft if asked
+```
+
+It prints the MR's URL. Show it. fleetd's next sync picks the ship up into the armada.
 
 ---
 
 ## Failure handling
 
-If the push or the `/create-mr` invocation fails in a way you can't resolve,
-write a summary (which step failed, the error, what was tried) to **both** the
-Jira ticket *and* your claude-code response, then exit non-zero. Do not paper
-over a push failure with `--force` to avoid losing teammates' work.
+If the push or `fleetc launch` fails in a way you can't resolve, report which step
+failed, the error, and what you tried, in your response (the operator reads your
+pane). Then stop. Never paper over a push failure with `--force`.

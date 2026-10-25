@@ -20,11 +20,23 @@ use domain::ports::{
 };
 use domain::{
     CogState, ConvoyKey, ConvoyTicketView, ConvoyView, CrewKind, EntityKind, EventKind,
-    LivenessThresholds, Order, Packet, Report, Session, TicketKey,
+    LivenessThresholds, MrDraft, Order, Packet, Report, Session, TicketKey,
 };
 use ledger::Ledger;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
+
+/// A validated `fleetc launch`: open the MR for `worktree`'s branch. `default_branch` is the
+/// last-resort target (the server holds it from boot).
+pub struct Launch {
+    pub ticket: Option<TicketKey>,
+    pub worktree: String,
+    pub target: Option<String>,
+    pub default_branch: String,
+    pub title: String,
+    pub description: String,
+    pub draft: bool,
+}
 
 /// The outcome channel a `Command` carries so the server can relay it as HTTP.
 type Reply = std::sync::mpsc::Sender<std::result::Result<(), String>>;
@@ -34,6 +46,8 @@ type PacketReply = std::sync::mpsc::Sender<std::result::Result<Packet, String>>;
 type ConvoyReply = std::sync::mpsc::Sender<std::result::Result<ConvoyView, String>>;
 /// An MR-review read's reply — the fresh open-thread count + floating notes.
 type ReviewReply = std::sync::mpsc::Sender<std::result::Result<domain::ReviewState, String>>;
+/// A launch's reply — the new MR's URL.
+type UrlReply = std::sync::mpsc::Sender<std::result::Result<String, String>>;
 /// A settings-list read's reply — every live lever's effective value + source.
 type SettingsReply = std::sync::mpsc::Sender<std::result::Result<Vec<crate::settings::LeverView>, String>>;
 
@@ -55,6 +69,7 @@ pub enum Command {
     GetConvoyView { convoy: ConvoyKey, reply: ConvoyReply }, // a read: the captain's convoy slice
     GetReview { iid: i64, reply: ReviewReply }, // a read: an MR's fresh review surface (forge)
     Rebase { iid: i64, reply: Reply },          // an action: server-side rebase an MR (forge)
+    Launch { launch: Launch, reply: UrlReply }, // an action: open a ticket's MR (forge)
     SetSetting { key: String, value: String, reply: Reply }, // live-config overwrite (validated here)
     GetSettings { reply: SettingsReply },                    // a read: every live lever + source
 }
@@ -199,6 +214,10 @@ fn apply(ledger: &Ledger, tracker: &JiraTracker, host: &TmuxHost, forge: &GlabFo
             let res = forge.rebase(iid).map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
+        Command::Launch { launch: l, reply } => {
+            let res = launch(ledger, forge, l).map_err(|e| format!("{e:#}"));
+            let _ = reply.send(res);
+        }
         Command::SetSetting { key, value, reply } => {
             // Shape check (known lever + parseable type) here, authoritative, before the write.
             let res = settings::validate(&key, &value)
@@ -209,6 +228,20 @@ fn apply(ledger: &Ledger, tracker: &JiraTracker, host: &TmuxHost, forge: &GlabFo
             let _ = reply.send(Ok(settings::report(cfg, ledger)));
         }
     }
+}
+
+/// Launch a ship: open the MR for the worktree's branch. The target is the explicit one, else the
+/// ticket's order fork base (a stacked child targets its parent), else origin's default branch.
+fn launch(ledger: &Ledger, forge: &dyn Forge, l: Launch) -> Result<String> {
+    let source = crate::git::current_branch(&l.worktree)
+        .ok_or_else(|| anyhow!("{} has no branch checked out", l.worktree))?;
+    let base = match (&l.target, &l.ticket) {
+        (Some(t), _) => t.clone(),
+        (None, Some(k)) => OrderRepo::get(ledger, k)?.map(|o| o.fork_from).unwrap_or(l.default_branch),
+        (None, None) => l.default_branch,
+    };
+    let target = base.strip_prefix("origin/").unwrap_or(&base).to_string();
+    forge.open_mr(&MrDraft { source, target, title: l.title, description: l.description, draft: l.draft })
 }
 
 /// Hold or release a ticket. A hold also disarms the ticket's open MR (an armed MR merges on the
@@ -479,13 +512,17 @@ mod tests {
     use domain::ports::EventLog;
     use domain::*;
 
-    struct FakeForge(Vec<ForgeShip>, std::cell::RefCell<Vec<i64>>); // (armada, disarmed iids)
+    #[derive(Default)]
+    struct FakeForge {
+        disarmed: std::cell::RefCell<Vec<i64>>,
+        opened: std::cell::RefCell<Vec<MrDraft>>,
+    }
     impl Forge for FakeForge {
         fn preflight(&self) -> Result<String> {
             Ok("fake".into())
         }
         fn armada(&self) -> Result<Vec<ForgeShip>> {
-            Ok(self.0.clone())
+            Ok(vec![])
         }
         fn snapshot(&self, _: i64) -> Result<ForgeShip> {
             unimplemented!()
@@ -503,8 +540,12 @@ mod tests {
             Ok(())
         }
         fn disarm(&self, iid: i64) -> Result<()> {
-            self.1.borrow_mut().push(iid);
+            self.disarmed.borrow_mut().push(iid);
             Ok(())
+        }
+        fn open_mr(&self, d: &MrDraft) -> Result<String> {
+            self.opened.borrow_mut().push(d.clone());
+            Ok("https://forge/mr/1".into())
         }
         fn request_review(&self, _: &TicketKey) -> Result<Vec<String>> {
             Ok(vec![])
@@ -587,17 +628,65 @@ mod tests {
         };
         let sid = ShipRepo::upsert(&db, &ship).unwrap();
         db.set_swept(&sid, Some("fp")).unwrap();
-        let forge = FakeForge(vec![], Default::default());
+        let forge = FakeForge::default();
         let key = TicketKey("PROJ-1".into());
 
         set_held(&db, &forge, &key, true, Some("late dependency")).unwrap();
-        assert_eq!(*forge.1.borrow(), vec![7], "the hold disarmed !7");
+        assert_eq!(*forge.disarmed.borrow(), vec![7], "the hold disarmed !7");
         assert_eq!(db.get_by_iid(7).unwrap().unwrap().swept, None, "swept cleared → re-sweep on release");
         assert!(TicketRepo::get(&db, &key).unwrap().unwrap().held);
 
         set_held(&db, &forge, &key, false, None).unwrap();
-        assert_eq!(forge.1.borrow().len(), 1, "release doesn't touch the forge");
+        assert_eq!(forge.disarmed.borrow().len(), 1, "release doesn't touch the forge");
         assert!(!TicketRepo::get(&db, &key).unwrap().unwrap().held);
+    }
+
+    #[test]
+    fn launch_targets_the_explicit_base_else_the_order_fork_else_the_default_branch() {
+        let dir = std::env::temp_dir().join(format!("fleetd-launch-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&dir).args(args).status().unwrap().success());
+        git(&["init", "-q"]);
+        git(&["checkout", "-q", "-b", "chore/PROJ-2-child"]);
+        let worktree = dir.to_string_lossy().into_owned();
+
+        let db = Ledger::in_memory().unwrap();
+        sync::sync_board(&db, &FakeTracker(vec![tt("PROJ-2", TicketStatus::InProgress)]), "now").unwrap();
+        let key = TicketKey("PROJ-2".into());
+        OrderRepo::dispatch(&db, &Order {
+            ticket: key.clone(),
+            auto_impl: true,
+            auto_merge: true,
+            fork_from: "origin/chore/PROJ-1-parent".into(), // a stacked child
+            ac_summary: "ac".into(),
+            park_at: None,
+            worktree_path: Some(worktree.clone()),
+            created_at: "t".into(),
+        })
+        .unwrap();
+        let forge = FakeForge::default();
+        let req = |ticket: Option<TicketKey>, target: Option<&str>| Launch {
+            ticket,
+            worktree: worktree.clone(),
+            target: target.map(String::from),
+            default_branch: "origin/main".into(),
+            title: "PROJ-2: child".into(),
+            description: "why".into(),
+            draft: false,
+        };
+
+        assert_eq!(launch(&db, &forge, req(Some(key.clone()), None)).unwrap(), "https://forge/mr/1");
+        launch(&db, &forge, req(None, None)).unwrap();
+        launch(&db, &forge, req(Some(key), Some("release"))).unwrap();
+        let opened = forge.opened.borrow();
+        let targets: Vec<_> = opened.iter().map(|d| (d.source.as_str(), d.target.as_str())).collect();
+        assert_eq!(
+            targets,
+            [("chore/PROJ-2-child", "chore/PROJ-1-parent"), ("chore/PROJ-2-child", "main"), ("chore/PROJ-2-child", "release")],
+            "order fork base, then the default branch, and an explicit target wins — origin/ stripped"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -613,7 +702,7 @@ mod tests {
     #[test]
     fn sync_tick_records_a_tickran_event_with_counts() {
         let db = Ledger::in_memory().unwrap();
-        let forge = FakeForge(vec![], Default::default());
+        let forge = FakeForge::default();
         let tracker = FakeTracker(vec![TrackerTicket {
             key: TicketKey("PROJ-1".into()),
             title: "T".into(),

@@ -72,6 +72,21 @@ pub struct HoldCmd {
     pub reason: Option<String>,
 }
 
+/// Launch a ship — open the MR for the branch checked out in `worktree` (`POST /launch`). The
+/// target is `target`, else the ticket's order fork base, else origin's default branch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LaunchCmd {
+    #[serde(default)]
+    pub ticket: Option<String>,
+    pub worktree: String,
+    #[serde(default)]
+    pub target: Option<String>,
+    pub title: String,
+    pub description: String,
+    #[serde(default)]
+    pub draft: bool,
+}
+
 /// An operator message pushed into a cog's tmux pane (`POST /send`). The target is the same per-cog
 /// addressing as the control verbs (worker/sailor/hand by `ticket`, a captain by `convoy`, the
 /// lookout as the singleton); `message` is typed into the pane and submitted (send-keys + Enter), so

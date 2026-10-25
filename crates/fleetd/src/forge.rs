@@ -9,7 +9,7 @@
 
 use anyhow::{anyhow, ensure, Context, Result};
 use domain::ports::Forge;
-use domain::{Approvals, FloatingNote, ForgeShip, PipelineStatus, ReviewState, ShipState, TicketKey};
+use domain::{Approvals, FloatingNote, ForgeShip, MrDraft, PipelineStatus, ReviewState, ShipState, TicketKey};
 use std::process::Command;
 
 pub struct GlabForge {
@@ -187,6 +187,25 @@ impl Forge for GlabForge {
             return Ok(()); // not armed — GitLab would 406 the cancel
         }
         self.cancel_auto_merge(iid)
+    }
+
+    fn open_mr(&self, d: &MrDraft) -> Result<String> {
+        let me: serde_json::Value = serde_json::from_str(&self.api("user")?)?;
+        let me = me.get("username").and_then(|u| u.as_str()).context("glab api user: no username")?;
+        let repo = self.repo()?;
+        let mut args = vec![
+            "mr", "create", "-R", &repo,
+            "--source-branch", &d.source, "--target-branch", &d.target,
+            "--title", &d.title, "--description", &d.description,
+            "--assignee", me, "--squash-before-merge", "--yes",
+        ];
+        if d.draft {
+            args.push("--draft");
+        }
+        let out = Command::new("glab").args(&args).output()?;
+        ensure!(out.status.success(), "glab mr create failed: {}", String::from_utf8_lossy(&out.stderr));
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        Ok(stdout.lines().rev().find(|l| l.trim_start().starts_with("http")).unwrap_or(stdout.trim()).trim().to_string())
     }
 
     fn arm_merge(&self, iid: i64) -> Result<()> {

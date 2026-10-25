@@ -111,6 +111,9 @@ mod tests {
         fn disarm(&self, _: i64) -> Result<()> {
             Ok(())
         }
+        fn open_mr(&self, _: &domain::MrDraft) -> Result<String> {
+            Ok("https://x/1".into())
+        }
         fn request_review(&self, _: &domain::TicketKey) -> Result<Vec<String>> {
             Ok(vec![])
         }
