@@ -807,7 +807,7 @@ mod tests {
             &Order {
                 ticket: TicketKey("PROJ-1".into()),
                 auto_impl: true,
-                auto_review: true,
+                auto_merge: true,
                 fork_from: "origin/master".into(),
                 ac_summary: "do it".into(),
                 park_at: None,

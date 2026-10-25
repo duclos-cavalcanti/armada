@@ -57,13 +57,22 @@ impl Default for ProjectConfig {
     }
 }
 
-/// `[forge]` in fleet.toml — which forge adapter, and the project on it.
-#[derive(Debug, Clone, Default, Deserialize)]
+/// `[forge]` in fleet.toml — which forge adapter, the project on it, and the merge policy.
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ForgeConfig {
     pub kind: Option<ForgeKind>,
     /// The forge's project id (GitLab: the numeric project id).
     pub project: String,
+    /// The dispatch default: true = the sailor arms auto-merge; false = it lands the MR to clean,
+    /// then reports `awaiting_merge` and waits for the operator. `fleetc dispatch --hold` forces false.
+    pub auto_merge: bool,
+}
+
+impl Default for ForgeConfig {
+    fn default() -> Self {
+        Self { kind: None, project: String::new(), auto_merge: true }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -268,6 +277,14 @@ mod tests {
         assert_eq!(c.forge.kind, Some(ForgeKind::Gitlab));
         assert_eq!(c.forge.project, "42");
         assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn forge_auto_merge_defaults_on_and_can_be_turned_off() {
+        let c: Config = toml::from_str(&format!("{FORGE}{TRACKER}")).unwrap();
+        assert!(c.forge.auto_merge, "the sailor arms auto-merge unless the deployment says otherwise");
+        let c: Config = toml::from_str(&format!("{FORGE}auto_merge = false\n{TRACKER}")).unwrap();
+        assert!(!c.forge.auto_merge);
     }
 
     #[test]

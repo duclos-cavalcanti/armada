@@ -17,8 +17,9 @@ use std::sync::mpsc::Sender;
 
 /// Bind the socket (clearing any stale file) and serve forever. `cmds` is the write
 /// channel to the scheduler; each connection gets its own clone. `project` is the resolved
-/// `[project] path` (startup config, read-only — served without touching the writer).
-pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, project: String) -> Result<()> {
+/// `[project] path` (startup config, read-only — served without touching the writer);
+/// `auto_merge` is the `[forge] auto_merge` default a dispatch that doesn't say inherits.
+pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, project: String, auto_merge: bool) -> Result<()> {
     let project: std::sync::Arc<str> = project.into();
     let _ = std::fs::remove_file(path); // a leftover socket from a crash would block bind
     let listener = UnixListener::bind(path)?;
@@ -29,7 +30,7 @@ pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, project: Str
                 let cmds = cmds.clone();
                 let project = project.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = handle(&mut s, &snapshot, &cmds, &project) {
+                    if let Err(e) = handle(&mut s, &snapshot, &cmds, &project, auto_merge) {
                         eprintln!("fleetd: connection error: {e}");
                     }
                 });
@@ -40,7 +41,13 @@ pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, project: Str
     Ok(())
 }
 
-fn handle(stream: &mut UnixStream, snapshot: &Snapshot, cmds: &Sender<Command>, project: &str) -> std::io::Result<()> {
+fn handle(
+    stream: &mut UnixStream,
+    snapshot: &Snapshot,
+    cmds: &Sender<Command>,
+    project: &str,
+    auto_merge: bool,
+) -> std::io::Result<()> {
     let mut buf = [0u8; 2048];
     let n = stream.read(&mut buf)?;
     let request = String::from_utf8_lossy(&buf[..n]);
@@ -56,7 +63,7 @@ fn handle(stream: &mut UnixStream, snapshot: &Snapshot, cmds: &Sender<Command>, 
         (Some("GET"), Some("/health")) => http_response("200 OK", "text/plain", "ok"),
         (Some("GET"), Some("/project")) => http_response("200 OK", "text/plain", project),
         (Some("POST"), Some("/status")) => handle_status(&request, cmds),
-        (Some("POST"), Some("/dispatch")) => handle_dispatch(&request, cmds),
+        (Some("POST"), Some("/dispatch")) => handle_dispatch(&request, cmds, auto_merge),
         (Some("POST"), Some("/hand")) => handle_hand(&request, cmds),
         (Some("POST"), Some("/convoy-open")) => handle_convoy(&request, cmds, true),
         (Some("POST"), Some("/convoy-close")) => handle_convoy(&request, cmds, false),
@@ -126,7 +133,7 @@ fn parse_ticket(s: &str) -> Result<TicketKey, String> {
 
 /// `POST /dispatch` — parse the order packet, stamp `created_at`, relay to the writer.
 /// The ledger's FK (ticket must exist on the board) is the authoritative check.
-fn handle_dispatch(request: &str, cmds: &Sender<Command>) -> String {
+fn handle_dispatch(request: &str, cmds: &Sender<Command>, auto_merge: bool) -> String {
     let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
     let dto: wire::DispatchOrder = match serde_json::from_str(body) {
         Ok(d) => d,
@@ -139,7 +146,7 @@ fn handle_dispatch(request: &str, cmds: &Sender<Command>) -> String {
     let order = Order {
         ticket,
         auto_impl: dto.auto_impl,
-        auto_review: dto.auto_review,
+        auto_merge: dto.auto_merge.unwrap_or(auto_merge),
         fork_from: dto.fork_from,
         ac_summary: dto.ac_summary,
         park_at: dto.park_at,
@@ -470,7 +477,7 @@ mod tests {
         let sock = format!("/tmp/fleetd-test-{}-{tag}.sock", std::process::id());
         let sock2 = sock.clone();
         std::thread::spawn(move || {
-            let _ = serve(&sock2, snapshot, cmds, "/wt/project".into());
+            let _ = serve(&sock2, snapshot, cmds, "/wt/project".into(), true);
         });
         for _ in 0..100 {
             if std::path::Path::new(&sock).exists() {
@@ -556,11 +563,15 @@ mod tests {
     fn post_dispatch_relays_the_order_to_the_writer() {
         let snapshot: Snapshot = Arc::new(Mutex::new(Vec::new()));
         let (tx, rx) = std::sync::mpsc::channel::<Command>();
+        let (seen_tx, seen) = std::sync::mpsc::channel::<bool>(); // each relayed order's auto_merge
         std::thread::spawn(move || {
             for cmd in rx {
                 match cmd {
+                    Command::Dispatch { order, reply } => {
+                        let _ = seen_tx.send(order.auto_merge);
+                        let _ = reply.send(Ok(()));
+                    }
                     Command::RecordStatus { reply, .. }
-                    | Command::Dispatch { reply, .. }
                     | Command::LaunchHand { reply, .. }
                     | Command::OpenConvoy { reply, .. }
                     | Command::CloseConvoy { reply, .. }
@@ -580,9 +591,16 @@ mod tests {
         });
         let sock = spawn_server(snapshot, tx, "dispatch");
 
-        let body = r#"{"ticket":"PROJ-1","auto_impl":true,"auto_review":false,"fork_from":"origin/master","ac_summary":"do it","park_at":null}"#;
+        let body = r#"{"ticket":"PROJ-1","auto_impl":true,"auto_merge":false,"fork_from":"origin/master","ac_summary":"do it","park_at":null}"#;
         let req = format!("POST /dispatch HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len());
         assert!(roundtrip(&sock, req.as_bytes()).contains("200 OK"));
+        assert!(!seen.recv().unwrap(), "an explicit hold is kept");
+
+        // No auto_merge on the wire → the deployment default (true here).
+        let body = r#"{"ticket":"PROJ-1","auto_impl":true,"fork_from":"origin/master","ac_summary":"do it","park_at":null}"#;
+        let req = format!("POST /dispatch HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        assert!(roundtrip(&sock, req.as_bytes()).contains("200 OK"));
+        assert!(seen.recv().unwrap(), "an unset auto_merge inherits [forge] auto_merge");
 
         // Malformed JSON is rejected at the edge.
         let req = "POST /dispatch HTTP/1.1\r\nContent-Length: 3\r\n\r\n{ x";

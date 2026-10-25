@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS ship_snapshots (
 CREATE TABLE IF NOT EXISTS orders (
     ticket      TEXT PRIMARY KEY REFERENCES tickets(key),
     auto_impl   INTEGER NOT NULL DEFAULT 1,            -- 0/1 (default worker)
-    auto_review INTEGER NOT NULL DEFAULT 1,            -- 0/1 (default auto-merge)
+    auto_merge  INTEGER NOT NULL DEFAULT 1,            -- 0/1 (0 = the sailor waits for the operator to merge)
     fork_from   TEXT NOT NULL,
     ac_summary  TEXT NOT NULL,
     park_at     TEXT,

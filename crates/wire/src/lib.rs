@@ -27,7 +27,10 @@ pub struct StatusReport {
 pub struct DispatchOrder {
     pub ticket: String,
     pub auto_impl: bool,   // true = worker · false = hand
-    pub auto_review: bool, // true = auto-merge · false = held in draft for review
+    /// `Some(false)` = hold for the operator to merge (`--hold`); `None` = the deployment's
+    /// `[forge] auto_merge` default, filled in by fleetd.
+    #[serde(default)]
+    pub auto_merge: Option<bool>,
     pub fork_from: String,
     pub ac_summary: String,
     pub park_at: Option<String>,

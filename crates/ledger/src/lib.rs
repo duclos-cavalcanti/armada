@@ -864,7 +864,7 @@ fn row_to_order(r: &rusqlite::Row) -> rusqlite::Result<Order> {
     Ok(Order {
         ticket: ticket_key(r.get("ticket")?)?,
         auto_impl: r.get::<_, i64>("auto_impl")? != 0,
-        auto_review: r.get::<_, i64>("auto_review")? != 0,
+        auto_merge: r.get::<_, i64>("auto_merge")? != 0,
         fork_from: r.get("fork_from")?,
         ac_summary: r.get("ac_summary")?,
         park_at: r.get("park_at")?,
@@ -879,19 +879,19 @@ impl OrderRepo for Ledger {
         // and the change-log never diverge; the follow-stream sees the new order).
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO orders(ticket, auto_impl, auto_review, fork_from, ac_summary, park_at, worktree_path, created_at)
+            "INSERT INTO orders(ticket, auto_impl, auto_merge, fork_from, ac_summary, park_at, worktree_path, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(ticket) DO UPDATE SET
-               auto_impl=excluded.auto_impl, auto_review=excluded.auto_review,
+               auto_impl=excluded.auto_impl, auto_merge=excluded.auto_merge,
                fork_from=excluded.fork_from, ac_summary=excluded.ac_summary, park_at=excluded.park_at,
                worktree_path=excluded.worktree_path",
             params![
-                o.ticket.0, o.auto_impl as i64, o.auto_review as i64,
+                o.ticket.0, o.auto_impl as i64, o.auto_merge as i64,
                 o.fork_from, o.ac_summary, o.park_at, o.worktree_path, o.created_at,
             ],
         )?;
         let payload =
-            serde_json::json!({ "auto_impl": o.auto_impl, "auto_review": o.auto_review, "park_at": o.park_at });
+            serde_json::json!({ "auto_impl": o.auto_impl, "auto_merge": o.auto_merge, "park_at": o.park_at });
         tx.execute(
             "INSERT INTO events(created_at, kind, entity_kind, entity_ref, payload_json)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -1242,7 +1242,7 @@ mod repo_tests {
         let order = Order {
             ticket: TicketKey("PROJ-1".into()),
             auto_impl: true,
-            auto_review: false,
+            auto_merge: false,
             fork_from: "origin/master".into(),
             ac_summary: "do the thing".into(),
             park_at: None,
@@ -1251,7 +1251,7 @@ mod repo_tests {
         };
         db.dispatch(&order).unwrap();
         let got = OrderRepo::get(&db, &TicketKey("PROJ-1".into())).unwrap().unwrap();
-        assert!(got.auto_impl && !got.auto_review);
+        assert!(got.auto_impl && !got.auto_merge);
         assert_eq!(db.queue().unwrap().len(), 1);
 
         // dispatch emits a Dispatched event (CDC) keyed by the ticket.
@@ -1260,7 +1260,7 @@ mod repo_tests {
         assert_eq!(d.entity_kind, EntityKind::Ticket);
         assert_eq!(d.entity_ref, "PROJ-1");
         assert_eq!(d.payload["auto_impl"], true);
-        assert_eq!(d.payload["auto_review"], false);
+        assert_eq!(d.payload["auto_merge"], false);
 
         db.cancel(&TicketKey("PROJ-1".into())).unwrap();
         assert!(db.queue().unwrap().is_empty());

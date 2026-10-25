@@ -95,10 +95,10 @@ fn status(args: &[String]) -> Result<()> {
 }
 
 /// `fleetc dispatch` — submit an order intent (the dispatch packet) to the queue, for
-/// reconcile to spawn. Defaults are the normal path: worker + auto-merge.
+/// reconcile to spawn. Defaults: a worker, and the deployment's `[forge] auto_merge`.
 fn dispatch(args: &[String]) -> Result<()> {
     let (mut ticket, mut ac, mut fork_from, mut park_at, mut worktree) = (None, None, None, None, None);
-    let (mut auto_impl, mut auto_review) = (true, true);
+    let (mut auto_impl, mut auto_merge) = (true, None);
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
@@ -109,7 +109,7 @@ fn dispatch(args: &[String]) -> Result<()> {
             "--worktree" => worktree = Some(take()?),
             "--park-at" => park_at = Some(take()?),
             "--hand" => auto_impl = false,   // operator-driven, not a worker
-            "--hold" => auto_review = false,  // held in draft for review, not auto-merge
+            "--hold" => auto_merge = Some(false), // the sailor waits for the operator to merge
             other => bail!("unknown flag: {other}"),
         }
     }
@@ -125,7 +125,7 @@ fn dispatch(args: &[String]) -> Result<()> {
     submit("/dispatch", &wire::DispatchOrder {
         ticket,
         auto_impl,
-        auto_review,
+        auto_merge,
         fork_from: fork_from.unwrap_or_else(|| "origin/master".into()),
         ac_summary,
         park_at,

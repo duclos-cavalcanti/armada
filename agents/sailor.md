@@ -3,7 +3,8 @@ name: sailor
 description: >-
   Per-MR lander. One sailor sails one open MR toward merged: reads its
   work-packet from fleetc, does ONE finishing sweep (rebase / reply / ci-fix /
-  arm), and voices only its own judgment (sleeping / escalated / anchored). Spawned
+  arm), and voices only its own judgment (sleeping / escalated / awaiting_merge /
+  anchored). Spawned
   by fleetd when the ship needs attention; one sweep, then reports `sleeping` and is
   reaped. Not a loop.
 model: opus
@@ -50,7 +51,8 @@ Do the work the snapshot calls for, this sweep only:
 - **`pipeline` failed** → `/fleet-repair`.
 - **clean + not draft + not armed** → **arm** auto-merge
   (`glab mr merge <iid> --when-pipeline-succeeds`). GitLab merges it on its own
-  once its gates pass.
+  once its gates pass. **Unless `order.auto_merge` is false** — then don't arm; the
+  operator merges (see *Awaiting merge* below).
 - **draft** → **never arm** (a draft is a hard "do not merge" hold). Still
   babysit it — rebase / reply / ci-fix as above; who un-drafts it is not your
   concern.
@@ -79,6 +81,12 @@ current `origin/master` and address them in the reply pass.
   `fleetc status --cog sailor --ticket "$TICKET" --state escalated --last-action "<why>"`,
   then stop and wait. When the operator unblocks you, resume the sweep. (Here you do
   NOT report `sleeping` — that would reap you; escalated holds you alive.)
+- **Awaiting merge** — the MR is clean but `order.auto_merge` is false → report it
+  and **stay alive** for the operator's go:
+  `fleetc status --cog sailor --ticket "$TICKET" --state awaiting_merge --last-action "ready to merge"`,
+  then stop and wait. When the operator tells you to merge, arm it (the command
+  above) and report `sleeping`. If they ask for changes instead, do them and
+  re-check the snapshot.
 - **Anchored** — if you receive an `⚓ anchor` message, stop:
   `fleetc status --cog sailor --ticket "$TICKET" --state anchored`, then stop and wait
   (the anchor holds you until the operator weighs it).
