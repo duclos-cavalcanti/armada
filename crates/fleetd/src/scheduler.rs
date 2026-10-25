@@ -63,8 +63,8 @@ pub enum Command {
 /// cadences + thresholds injected from `Config`. Between tickers it drains client
 /// write `Command`s off `cmds` — the only place writes happen (single-writer).
 pub fn run(ledger: Ledger, host: TmuxHost, snapshot: Snapshot, cfg: Config, cmds: Receiver<Command>) {
-    let forge = GlabForge::new(cfg.forge.project.clone());
-    let tracker = JiraTracker::new();
+    let forge = GlabForge::new(&cfg.forge.project, cfg.ticket_prefix());
+    let tracker = JiraTracker::new(&cfg.tracker.project, cfg.tracker.claim_label.clone());
     let (mut next_poll, mut next_sync, mut next_reconcile) =
         (Instant::now(), Instant::now(), Instant::now());
 
@@ -500,7 +500,7 @@ mod tests {
         fn assign_to_me(&self, _: &TicketKey) -> Result<()> {
             Ok(())
         }
-        fn add_label(&self, _: &TicketKey, _: &str) -> Result<()> {
+        fn add_claim_label(&self, _: &TicketKey) -> Result<()> {
             Ok(())
         }
         fn add_to_active_sprint(&self, _: &TicketKey) -> Result<()> {

@@ -14,11 +14,13 @@ use std::process::Command;
 
 pub struct GlabForge {
     project: String,
+    /// The tracker's key prefix — how an MR's branch/title names its ticket.
+    ticket_prefix: String,
 }
 
 impl GlabForge {
-    pub fn new(project: impl Into<String>) -> Self {
-        Self { project: project.into() }
+    pub fn new(project: impl Into<String>, ticket_prefix: impl Into<String>) -> Self {
+        Self { project: project.into(), ticket_prefix: ticket_prefix.into() }
     }
 
     fn api(&self, path: &str) -> Result<String> {
@@ -79,13 +81,13 @@ impl Forge for GlabForge {
             "projects/{}/merge_requests?state=opened&per_page=100",
             self.project
         ))?;
-        parse_glab_mrs(&json)
+        parse_glab_mrs(&json, &self.ticket_prefix)
     }
 
     fn snapshot(&self, iid: i64) -> Result<ForgeShip> {
         let json = self.api(&format!("projects/{}/merge_requests/{iid}", self.project))?;
         let v: serde_json::Value = serde_json::from_str(&json)?;
-        let mut ship = mr_to_ship(&v).context("could not map MR JSON to a ship")?;
+        let mut ship = mr_to_ship(&v, &self.ticket_prefix).context("could not map MR JSON to a ship")?;
         ship.approvals = self.approvals(iid)?; // separate endpoint, not on the MR body
         Ok(ship)
     }
@@ -265,13 +267,13 @@ fn nbool(n: &serde_json::Value, key: &str) -> bool {
     n.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
-fn parse_glab_mrs(json: &str) -> Result<Vec<ForgeShip>> {
+fn parse_glab_mrs(json: &str, prefix: &str) -> Result<Vec<ForgeShip>> {
     let v: serde_json::Value = serde_json::from_str(json)?;
     let arr = v.as_array().context("expected a JSON array of MRs from glab")?;
-    Ok(arr.iter().filter_map(mr_to_ship).collect())
+    Ok(arr.iter().filter_map(|m| mr_to_ship(m, prefix)).collect())
 }
 
-fn mr_to_ship(m: &serde_json::Value) -> Option<ForgeShip> {
+fn mr_to_ship(m: &serde_json::Value, prefix: &str) -> Option<ForgeShip> {
     let iid = m.get("iid")?.as_i64()?;
     let s = |k: &str| m.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let title = s("title");
@@ -289,7 +291,7 @@ fn mr_to_ship(m: &serde_json::Value) -> Option<ForgeShip> {
         url: s("web_url"),
         target: m.get("target_branch").and_then(|v| v.as_str()).unwrap_or("master").to_string(),
         pilot,
-        ticket: extract_ticket(source).or_else(|| extract_ticket(&title)),
+        ticket: TicketKey::find_in(source, prefix).or_else(|| TicketKey::find_in(&title, prefix)),
         title,
         state: ship_state(gl_state, draft),
         head_sha: s("sha"),
@@ -339,13 +341,6 @@ fn ship_state(gitlab_state: &str, draft: bool) -> ShipState {
     }
 }
 
-/// The tracker's key prefix — the one remaining hardcode; step 3 reads it from fleet.toml.
-const TICKET_PREFIX: &str = "MADY";
-
-/// Pull the first `<prefix>-<n>` key out of a string (branch name or title).
-fn extract_ticket(s: &str) -> Option<TicketKey> {
-    TicketKey::find_in(s, TICKET_PREFIX)
-}
 
 #[cfg(test)]
 mod tests {
@@ -353,7 +348,7 @@ mod tests {
 
     // Real glab field shape (trimmed), from the live API.
     const SAMPLE: &str = r#"[
-      {"iid":2331,"title":"MADY-6187: Remove reliance","source_branch":"feature/MADY-6187-remove",
+      {"iid":2331,"title":"PROJ-6187: Remove reliance","source_branch":"feature/PROJ-6187-remove",
        "target_branch":"master","web_url":"https://x/2331","draft":false,"state":"opened",
        "sha":"61b2a8","detailed_merge_status":"ci_must_pass","has_conflicts":false,
        "author":{"username":"Jack.Shannon"}},
@@ -364,12 +359,12 @@ mod tests {
 
     #[test]
     fn parses_core_fields() {
-        let ships = parse_glab_mrs(SAMPLE).unwrap();
+        let ships = parse_glab_mrs(SAMPLE, "PROJ").unwrap();
         assert_eq!(ships.len(), 2);
 
         let a = &ships[0];
         assert_eq!(a.iid, 2331);
-        assert_eq!(a.ticket, Some(TicketKey("MADY-6187".into())));
+        assert_eq!(a.ticket, Some(TicketKey("PROJ-6187".into())));
         assert_eq!(a.pilot, "Jack.Shannon");
         assert_eq!(a.target, "master");
         assert_eq!(a.state, ShipState::Open);
@@ -384,10 +379,9 @@ mod tests {
     }
 
     #[test]
-    fn extract_ticket_cases() {
-        assert_eq!(extract_ticket("feature/MADY-123-x"), Some(TicketKey("MADY-123".into())));
-        assert_eq!(extract_ticket("MADY-9 title"), Some(TicketKey("MADY-9".into())));
-        assert_eq!(extract_ticket("chore/nothing"), None);
+    fn tickets_link_only_by_the_configured_prefix() {
+        // Same MRs, another tracker's prefix: nothing links (no cross-project false matches).
+        assert!(parse_glab_mrs(SAMPLE, "OTHER").unwrap().iter().all(|s| s.ticket.is_none()));
     }
 
     #[test]
@@ -445,16 +439,16 @@ mod tests {
     #[test]
     fn detail_enriches_pipeline_and_threads() {
         // The single-MR detail carries head_pipeline + blocking_discussions_resolved.
-        let detail = r#"{"iid":2338,"title":"MADY-6164: x","source_branch":"chore/MADY-6164-y",
+        let detail = r#"{"iid":2338,"title":"PROJ-6164: x","source_branch":"chore/PROJ-6164-y",
           "target_branch":"master","web_url":"https://x/2338","draft":false,"state":"opened",
           "sha":"0e31","has_conflicts":false,"author":{"username":"me"},
           "head_pipeline":{"status":"success"},"blocking_discussions_resolved":false}"#;
         let v: serde_json::Value = serde_json::from_str(detail).unwrap();
-        let ship = mr_to_ship(&v).unwrap();
+        let ship = mr_to_ship(&v, "PROJ").unwrap();
         assert_eq!(ship.pipeline, Some(PipelineStatus::Success));
         assert_eq!(ship.open_threads, 1); // unresolved blocking threads
 
         // The list shape (no pipeline/threads) still defaults cleanly.
-        assert_eq!(parse_glab_mrs(SAMPLE).unwrap()[0].pipeline, None);
+        assert_eq!(parse_glab_mrs(SAMPLE, "PROJ").unwrap()[0].pipeline, None);
     }
 }

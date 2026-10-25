@@ -159,8 +159,8 @@ pub trait Tracker {
     fn assigned_to_peer(&self, key: &TicketKey) -> Result<bool>;
     /// Assign the ticket to the operator (current user) — a claim follow-on.
     fn assign_to_me(&self, key: &TicketKey) -> Result<()>;
-    /// Add a label (idempotent) — a claim follow-on.
-    fn add_label(&self, key: &TicketKey, label: &str) -> Result<()>;
+    /// Add the deployment's claim label, if it has one (idempotent) — a claim follow-on.
+    fn add_claim_label(&self, key: &TicketKey) -> Result<()>;
     /// Add the ticket to the active sprint (idempotent) — a claim follow-on.
     fn add_to_active_sprint(&self, key: &TicketKey) -> Result<()>;
     /// The ticket's parent story (`None` if it isn't a sub-task) — for parent roll-up.

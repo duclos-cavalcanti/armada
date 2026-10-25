@@ -44,3 +44,9 @@ quiet_secs  = 1800 # between active_secs and this => Quiet; beyond => Parked  (F
 [forge]
 kind    = "gitlab"    # the forge adapter (only "gitlab" so far)
 project = "12345678"  # the forge's project id (FLEET_FORGE_PROJECT)
+
+# --- tracker (REQUIRED) — where tickets live ---
+[tracker]
+kind        = "jira"          # the tracker adapter (only "jira" so far); needs `jira init`
+project     = "MADY"          # Jira project key = the ticket key prefix (FLEET_TRACKER_PROJECT)
+claim_label = "TEAM-LABEL"  # optional: the label a worker's claim adds; omit for none

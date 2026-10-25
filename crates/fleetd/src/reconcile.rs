@@ -511,7 +511,7 @@ fn spawn<T: Tracker, H: SessionHost>(
         // logged, not fatal (the transition already locked the ticket and the cog must launch).
         for (what, res) in [
             ("assign", tracker.assign_to_me(&tkey)),
-            ("label", tracker.add_label(&tkey, "TEAM-LABEL")),
+            ("label", tracker.add_claim_label(&tkey)),
             ("sprint", tracker.add_to_active_sprint(&tkey)),
         ] {
             if let Err(e) = res {
@@ -1534,7 +1534,7 @@ mod tests {
     /// executor, so they're left unimplemented.
     struct FakeTracker {
         moves: RefCell<Vec<(String, TicketStatus)>>,
-        claims: RefCell<Vec<String>>, // "assign" / "label:TEAM-LABEL" / "sprint"
+        claims: RefCell<Vec<String>>, // "assign" / "label" / "sprint"
         peer: RefCell<bool>,          // what assigned_to_peer returns
         fail: RefCell<Vec<String>>,   // follow-on names to force-fail (best-effort test)
         parent: RefCell<Option<TicketKey>>, // what parent_of returns
@@ -1577,8 +1577,8 @@ mod tests {
         fn assign_to_me(&self, _key: &TicketKey) -> Result<()> {
             self.claim("assign")
         }
-        fn add_label(&self, _key: &TicketKey, label: &str) -> Result<()> {
-            self.claim(&format!("label:{label}"))
+        fn add_claim_label(&self, _key: &TicketKey) -> Result<()> {
+            self.claim("label")
         }
         fn add_to_active_sprint(&self, _key: &TicketKey) -> Result<()> {
             self.claim("sprint")
@@ -1675,10 +1675,10 @@ mod tests {
             tracker.moves.borrow().as_slice(),
             &[("PROJ-1".to_string(), TicketStatus::InProgress)]
         );
-        // ...then the three claim follow-ons: self-assign, TEAM-LABEL label, active sprint.
+        // ...then the three claim follow-ons: self-assign, claim label, active sprint.
         assert_eq!(
             tracker.claims.borrow().as_slice(),
-            &["assign".to_string(), "label:TEAM-LABEL".to_string(), "sprint".to_string()]
+            &["assign".to_string(), "label".to_string(), "sprint".to_string()]
         );
         // a live worker session now exists in the order's worktree.
         let sessions = SessionRepo::for_ticket(&db, &TicketKey("PROJ-1".into())).unwrap();

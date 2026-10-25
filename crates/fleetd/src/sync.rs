@@ -187,7 +187,7 @@ mod tests {
         fn assign_to_me(&self, _: &TicketKey) -> Result<()> {
             Ok(())
         }
-        fn add_label(&self, _: &TicketKey, _: &str) -> Result<()> {
+        fn add_claim_label(&self, _: &TicketKey) -> Result<()> {
             Ok(())
         }
         fn add_to_active_sprint(&self, _: &TicketKey) -> Result<()> {

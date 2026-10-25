@@ -35,6 +35,12 @@ git clone git@gitlab.com:<project> worktrees/master
 #    Keep current: re-clone, or `git -C third-party/<repo> pull`.
 ```
 
+Integrations are chosen in `fleet.toml` (`[forge]`, `[tracker]`); initialize each CLI once:
+
+- **Forges:** GitLab — `glab auth login`. GitHub (`gh`) — planned.
+- **Trackers:** Jira — `jira init` (its board is the one claimed tickets join the active
+  sprint of). Filesystem — planned.
+
 ### 2. Install
 
 ```bash

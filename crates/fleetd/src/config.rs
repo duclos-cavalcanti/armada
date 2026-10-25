@@ -33,6 +33,8 @@ pub struct Config {
     /// `[forge]` — whose MRs form the armada. Deployment-specific: no default project, so
     /// `load` fails fast without one.
     pub forge: ForgeConfig,
+    /// `[tracker]` — where tickets live. Deployment-specific: no default, `load` fails fast.
+    pub tracker: TrackerConfig,
     /// The telemetry DB path (separate from the ledger) + the OTLP/HTTP receiver bind addr.
     pub telemetry_db: String,
     pub otel_addr: String,
@@ -56,6 +58,23 @@ pub enum ForgeKind {
     Gitlab,
 }
 
+/// `[tracker]` in fleet.toml — which tracker adapter, its project, and the optional claim label.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TrackerConfig {
+    pub kind: Option<TrackerKind>,
+    /// The tracker's project. For Jira its key is also the ticket key prefix (`PROJ` → `PROJ-12`).
+    pub project: String,
+    /// A label a worker's claim adds to the ticket (a team convention); `None` = no label.
+    pub claim_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrackerKind {
+    Jira,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -68,6 +87,7 @@ impl Default for Config {
             active_secs: domain::LIVENESS_ACTIVE_SECS,
             quiet_secs: domain::LIVENESS_QUIET_SECS,
             forge: ForgeConfig::default(),
+            tracker: TrackerConfig::default(),
             telemetry_db: wire::default_telemetry_db(),
             otel_addr: "127.0.0.1:4318".into(),
             hub: ".".into(),
@@ -107,6 +127,9 @@ impl Config {
         if let Ok(v) = std::env::var("FLEET_FORGE_PROJECT") {
             c.forge.project = v;
         }
+        if let Ok(v) = std::env::var("FLEET_TRACKER_PROJECT") {
+            c.tracker.project = v;
+        }
         if let Ok(v) = std::env::var("FLEET_TELEMETRY_DB") {
             c.telemetry_db = v;
         }
@@ -124,7 +147,19 @@ impl Config {
         let path = config_path();
         ensure!(self.forge.kind.is_some(), "{path}: [forge] kind is required (\"gitlab\")");
         ensure!(!self.forge.project.is_empty(), "{path}: [forge] project is required (or FLEET_FORGE_PROJECT)");
+        ensure!(self.tracker.kind.is_some(), "{path}: [tracker] kind is required (\"jira\")");
+        ensure!(
+            domain::is_key_prefix(&self.tracker.project),
+            "{path}: [tracker] project must be a key prefix like \"PROJ\" (or FLEET_TRACKER_PROJECT), got {:?}",
+            self.tracker.project
+        );
         Ok(())
+    }
+
+    /// The ticket key prefix — how branches, MR titles, and keys name a ticket. For Jira it is
+    /// the project key; a tracker with its own key scheme would supply its own here.
+    pub fn ticket_prefix(&self) -> &str {
+        &self.tracker.project
     }
 
     pub fn thresholds(&self) -> LivenessThresholds {
@@ -201,19 +236,39 @@ mod tests {
         assert!(!c.dry_run); // default preserved (absent from the file)
     }
 
+    const FORGE: &str = "[forge]\nkind = \"gitlab\"\nproject = \"42\"\n";
+    const TRACKER: &str = "[tracker]\nkind = \"jira\"\nproject = \"PROJ\"\n";
+
     #[test]
     fn forge_table_parses_and_validates() {
-        let c: Config = toml::from_str("[forge]\nkind = \"gitlab\"\nproject = \"42\"\n").unwrap();
+        let c: Config = toml::from_str(&format!("{FORGE}{TRACKER}")).unwrap();
         assert_eq!(c.forge.kind, Some(ForgeKind::Gitlab));
         assert_eq!(c.forge.project, "42");
         assert!(c.validate().is_ok());
     }
 
     #[test]
+    fn tracker_table_parses_with_an_optional_claim_label() {
+        let c: Config = toml::from_str(&format!("{FORGE}{TRACKER}")).unwrap();
+        assert_eq!((c.tracker.kind, c.ticket_prefix()), (Some(TrackerKind::Jira), "PROJ"));
+        assert_eq!(c.tracker.claim_label, None, "no label unless configured");
+        let c: Config = toml::from_str(&format!("{FORGE}{TRACKER}claim_label = \"Team-X\"\n")).unwrap();
+        assert_eq!(c.tracker.claim_label.as_deref(), Some("Team-X"));
+    }
+
+    #[test]
+    fn tracker_is_required_and_its_project_must_be_a_key_prefix() {
+        let c: Config = toml::from_str(FORGE).unwrap();
+        assert!(c.validate().is_err(), "no [tracker]");
+        let c: Config = toml::from_str(&format!("{FORGE}[tracker]\nkind = \"jira\"\nproject = \"proj x\"\n")).unwrap();
+        assert!(c.validate().is_err(), "a project that can't prefix a key");
+    }
+
+    #[test]
     fn forge_is_required() {
         // No built-in default target: the empty config, or a kind without a project, fails.
         assert!(Config::default().validate().is_err());
-        let c: Config = toml::from_str("[forge]\nkind = \"gitlab\"\n").unwrap();
+        let c: Config = toml::from_str(&format!("[forge]\nkind = \"gitlab\"\n{TRACKER}")).unwrap();
         assert!(c.validate().is_err(), "a forge without a project");
     }
 

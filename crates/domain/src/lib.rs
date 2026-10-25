@@ -61,14 +61,15 @@ impl ConvoyKey {
     }
 }
 
-/// `<PREFIX>-<n>`: an uppercase-led `[A-Z][A-Z0-9]*` prefix, a dash, digits.
+/// `<PREFIX>-<n>`: a key prefix, a dash, digits.
 fn key_shaped(s: &str) -> bool {
-    s.split_once('-').is_some_and(|(prefix, num)| {
-        prefix.starts_with(|c: char| c.is_ascii_uppercase())
-            && prefix.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
-            && !num.is_empty()
-            && num.bytes().all(|b| b.is_ascii_digit())
-    })
+    s.split_once('-')
+        .is_some_and(|(prefix, num)| is_key_prefix(prefix) && !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// A key prefix: uppercase-led `[A-Z][A-Z0-9]*` (a Jira project key; a tracker's configured prefix).
+pub fn is_key_prefix(p: &str) -> bool {
+    p.starts_with(|c: char| c.is_ascii_uppercase()) && p.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
 }
 
 id_newtype!(SessionId, i64);

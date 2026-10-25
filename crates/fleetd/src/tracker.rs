@@ -11,16 +11,22 @@ use domain::ports::Tracker;
 use domain::{ConvoyKey, TicketKey, TicketStatus, TrackerTicket};
 use std::process::Command;
 
-pub struct JiraTracker;
+/// `[tracker]` in fleet.toml: the Jira `project` (its key is the ticket prefix) and the optional
+/// label a worker's claim adds. Project-scoped commands pass `-p <project>`, so fleet.toml — not
+/// jira-cli's own default — picks the project. The sprint board still comes from `jira init`.
+pub struct JiraTracker {
+    project: String,
+    claim_label: Option<String>,
+}
 
 impl JiraTracker {
-    pub fn new() -> Self {
-        JiraTracker
+    pub fn new(project: impl Into<String>, claim_label: Option<String>) -> Self {
+        Self { project: project.into(), claim_label }
     }
 
     fn raw_page(&self, jql: &str, from: usize) -> Result<String> {
         let out = Command::new("jira")
-            .args(["issue", "list", "-q", jql, "--raw", "--paginate", &format!("{from}:100")])
+            .args(["issue", "list", "-p", &self.project, "-q", jql, "--raw", "--paginate", &format!("{from}:100")])
             .output()?;
         ensure!(
             out.status.success(),
@@ -50,15 +56,9 @@ impl JiraTracker {
     }
 }
 
-impl Default for JiraTracker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Tracker for JiraTracker {
     fn active_sprint(&self) -> Result<Vec<TrackerTicket>> {
-        self.all_issues("project = MADY AND sprint in openSprints()")
+        self.all_issues("sprint in openSprints()") // `-p` scopes it to the project
     }
 
     fn get(&self, key: &TicketKey) -> Result<TrackerTicket> {
@@ -91,7 +91,7 @@ impl Tracker for JiraTracker {
     fn assigned_to_peer(&self, key: &TicketKey) -> Result<bool> {
         let jql = format!("key = {} AND assignee IS NOT EMPTY AND assignee != currentUser()", key.0);
         let out = Command::new("jira")
-            .args(["issue", "list", "-q", &jql, "--plain", "--no-headers", "--columns", "KEY"])
+            .args(["issue", "list", "-p", &self.project, "-q", &jql, "--plain", "--no-headers", "--columns", "KEY"])
             .output()?;
         if out.status.success() {
             return Ok(!String::from_utf8_lossy(&out.stdout).trim().is_empty());
@@ -111,15 +111,19 @@ impl Tracker for JiraTracker {
         Ok(())
     }
 
-    fn add_label(&self, key: &TicketKey, label: &str) -> Result<()> {
-        self.jira(&["issue", "edit", &key.0, "--no-input", "--label", label])?;
+    fn add_claim_label(&self, key: &TicketKey) -> Result<()> {
+        if let Some(label) = &self.claim_label {
+            self.jira(&["issue", "edit", &key.0, "--no-input", "--label", label])?;
+        }
         Ok(())
     }
 
     /// add to the active sprint. jira-cli 1.7.0: `sprint list --plain --columns ID` + the
     /// positional `sprint add <SPRINT_ID> <ISSUE>` are the verified forms.
     fn add_to_active_sprint(&self, key: &TicketKey) -> Result<()> {
-        let list = self.jira(&["sprint", "list", "--state", "active", "--plain", "--no-headers", "--columns", "ID"])?;
+        let list = self.jira(&[
+            "sprint", "list", "-p", &self.project, "--state", "active", "--plain", "--no-headers", "--columns", "ID",
+        ])?;
         let id = list
             .lines()
             .next()
@@ -181,8 +185,8 @@ fn issue_to_ticket(i: &serde_json::Value) -> Option<TrackerTicket> {
             .and_then(|a| a.get("displayName"))
             .and_then(|n| n.as_str())
             .map(String::from),
-        // The convoy is the ticket's epic. On MADY the Story→Epic linkage writes `parent`
-        // (Epic Link customfield_10008 is a read-only mirror — MANIFEST § Project Coordinates),
+        // The convoy is the ticket's epic. Team-managed Jira projects link Story→Epic via
+        // `parent` (the legacy Epic Link custom field, where present, is a read-only mirror),
         // so `parent` IS the epic/convoy. (A sub-task's parent is its story, not the epic — but
         // sub-tasks aren't on the captain's dispatch frontier, so that's fine.)
         convoy: f

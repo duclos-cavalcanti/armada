@@ -85,8 +85,9 @@ fn run_sync() -> Result<()> {
     let ledger = Ledger::open(&cfg.ledger)?;
     let now = now_rfc3339();
     // Board first so ships can link their ticket FK.
-    let tickets = sync::sync_board(&ledger, &tracker::JiraTracker::new(), &now)?;
-    let ships = sync::sync_armada(&ledger, &forge::GlabForge::new(cfg.forge.project), &now)?;
+    let tracker = tracker::JiraTracker::new(&cfg.tracker.project, cfg.tracker.claim_label.clone());
+    let tickets = sync::sync_board(&ledger, &tracker, &now)?;
+    let ships = sync::sync_armada(&ledger, &forge::GlabForge::new(&cfg.forge.project, cfg.ticket_prefix()), &now)?;
     println!("fleetd sync: {tickets} tickets + {ships} ships synced to the ledger");
     Ok(())
 }
@@ -122,12 +123,13 @@ fn run_daemon() -> Result<()> {
     // effective cadences, and the forge target. Read it as the go/no-go after a (re)start.
     let mode = if settings::dry_run(&cfg, &ledger) { "dry-run — planning only" } else { "LIVE — driving the line" };
     println!(
-        "fleetd: ONLINE · {mode} · {} cogs adopted · poll {}s / sync {}s / reconcile {}s · project {}",
+        "fleetd: ONLINE · {mode} · {} cogs adopted · poll {}s / sync {}s / reconcile {}s · forge {} · tracker {}",
         snapshot.lock().unwrap().len(),
         settings::poll_secs(&cfg, &ledger),
         settings::sync_secs(&cfg, &ledger),
         settings::reconcile_secs(&cfg, &ledger),
         cfg.forge.project,
+        cfg.tracker.project,
     );
     std::thread::spawn(move || scheduler::run(ledger, host, sched_snapshot, cfg, cmd_rx));
 
