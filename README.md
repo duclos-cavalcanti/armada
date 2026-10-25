@@ -97,5 +97,6 @@ armada/
 ├── Makefile     one-word wrappers (run `make` for the cheat sheet)
 ├── fleet.toml   fleetd config (cadences, dry_run, [project], [forge], [tracker])
 ├── TODO.md      the forward backlog
+├── KNOWN_ISSUES.md  accepted edge cases + workarounds
 └── worktrees/   product overlay — project checkout + ticket worktrees (gitignored)
 ```
