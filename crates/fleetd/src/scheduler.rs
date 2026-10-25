@@ -282,7 +282,8 @@ impl ControlTarget {
             }
             CrewKind::Captain => {
                 let convoy = t.convoy.ok_or_else(|| "--cog captain needs --convoy".to_string())?;
-                Ok(ControlTarget::Captain { convoy: ConvoyKey(convoy) })
+                let convoy = ConvoyKey::parse(&convoy).map_err(|e| e.to_string())?;
+                Ok(ControlTarget::Captain { convoy })
             }
             CrewKind::Lookout => Ok(ControlTarget::Lookout),
         }

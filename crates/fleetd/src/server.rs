@@ -180,7 +180,10 @@ fn handle_convoy(request: &str, cmds: &Sender<Command>, open: bool) -> String {
         Ok(d) => d,
         Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
     };
-    let key = ConvoyKey(dto.key);
+    let key = match ConvoyKey::parse(&dto.key) {
+        Ok(k) => k,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &e.to_string()),
+    };
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
     let cmd = if open {
         Command::OpenConvoy { key, title: dto.title, reply: reply_tx }
@@ -207,8 +210,12 @@ fn handle_convoy_view(cmds: &Sender<Command>, path: &str) -> String {
     if convoy.is_empty() {
         return http_response("400 Bad Request", "text/plain", "missing ?convoy=");
     }
+    let convoy = match ConvoyKey::parse(convoy) {
+        Ok(k) => k,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &e.to_string()),
+    };
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    let cmd = Command::GetConvoyView { convoy: ConvoyKey(convoy.to_string()), reply: reply_tx };
+    let cmd = Command::GetConvoyView { convoy, reply: reply_tx };
     if cmds.send(cmd).is_err() {
         return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
     }

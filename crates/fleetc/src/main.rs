@@ -165,11 +165,11 @@ fn convoy(args: &[String]) -> Result<()> {
                     other => key = Some(other.to_string()),
                 }
             }
-            let key = key.ok_or_else(|| anyhow!("convoy open needs <KEY>"))?;
+            let key = convoy_key(&key.ok_or_else(|| anyhow!("convoy open needs <KEY>"))?, "convoy open")?;
             submit("/convoy-open", &wire::ConvoyCmd { key, title })
         }
         Some("close") => {
-            let key = args.get(1).cloned().ok_or_else(|| anyhow!("convoy close needs <KEY>"))?;
+            let key = convoy_key(args.get(1).ok_or_else(|| anyhow!("convoy close needs <KEY>"))?, "convoy close")?;
             submit("/convoy-close", &wire::ConvoyCmd { key, title: None })
         }
         _ => bail!("usage: fleetc convoy <open|close> <KEY> [--title <text>]"),
@@ -243,7 +243,7 @@ fn context(args: &[String]) -> Result<()> {
             other => bail!("unknown flag: {other}"),
         }
     }
-    let convoy = convoy.ok_or_else(|| anyhow!("context needs --convoy <KEY>"))?;
+    let convoy = convoy_key(&convoy.ok_or_else(|| anyhow!("context needs --convoy <KEY>"))?, "context")?;
     let socket = std::env::var("FLEET_SOCK").unwrap_or_else(|_| wire::default_socket());
     let (code, body) = wire::get_json(&socket, &format!("/context?convoy={convoy}"))?;
     if code != 200 {
@@ -299,6 +299,11 @@ fn ticket_key(t: &str, verb: &str) -> Result<String> {
     domain::TicketKey::parse(t).map(|k| k.0).map_err(|e| anyhow!("{verb}: {e}"))
 }
 
+/// Validate a convoy key at the edge — same shape as a ticket key.
+fn convoy_key(c: &str, verb: &str) -> Result<String> {
+    domain::ConvoyKey::parse(c).map(|k| k.0).map_err(|e| anyhow!("{verb}: {e}"))
+}
+
 /// Parse + validate the uniform cog target for a control verb (§A): `--cog <kind>` is required, and
 /// the key is per-cog — worker/sailor/hand need `--ticket`, a captain `--convoy`, the lookout neither.
 /// A missing `--cog`, an unknown kind, or the wrong key errors here (fail-fast; fleetd re-validates).
@@ -331,9 +336,8 @@ fn validate_cog_target(cog: &str, ticket: Option<&str>, convoy: Option<&str>, ve
             }
         }
         "captain" => {
-            if convoy.is_none() {
-                bail!("{verb} --cog captain needs --convoy <KEY>");
-            }
+            let c = convoy.ok_or_else(|| anyhow!("{verb} --cog captain needs --convoy <KEY>"))?;
+            convoy_key(c, verb)?;
             if ticket.is_some() {
                 bail!("{verb} --cog captain: --ticket is not valid — use --convoy");
             }

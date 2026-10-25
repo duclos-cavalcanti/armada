@@ -4,8 +4,8 @@
 
 -- The work order + the board (all sprint tickets, upsert-filled by the tracker).
 CREATE TABLE IF NOT EXISTS tickets (
-    key         TEXT PRIMARY KEY,                     -- 'MADY-1234'
-    convoy      TEXT,                                 -- nullable; adapter-neutral grouping key (NOT a ticket)
+    key         TEXT PRIMARY KEY,                     -- '<PREFIX>-<n>', e.g. 'PROJ-1234'
+    convoy      TEXT,                                 -- nullable; grouping key, ticket-key shaped (NOT a ticket)
     held        INTEGER NOT NULL DEFAULT 0,           -- held off the dispatch frontier (0/1)
     created_at  TEXT NOT NULL,
     -- cached tracker mirror (re-synced; the tracker is the source of truth):

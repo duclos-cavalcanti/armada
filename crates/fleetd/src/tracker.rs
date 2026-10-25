@@ -145,7 +145,7 @@ fn parse_parent(json: &str) -> Option<TicketKey> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
     let issues = v.get("issues").and_then(|i| i.as_array())?;
     let key = issues.first()?.get("fields")?.get("parent")?.get("key")?.as_str()?;
-    Some(TicketKey(key.to_string()))
+    TicketKey::parse(key).ok()
 }
 
 /// Parse one page → (raw issue count, mapped tickets). The raw count drives
@@ -165,7 +165,7 @@ fn parse_jira_issues(json: &str) -> Result<Vec<TrackerTicket>> {
 }
 
 fn issue_to_ticket(i: &serde_json::Value) -> Option<TrackerTicket> {
-    let key = i.get("key")?.as_str()?;
+    let key = TicketKey::parse(i.get("key")?.as_str()?).ok()?;
     let f = i.get("fields")?;
     let status_name = f
         .get("status")
@@ -173,7 +173,7 @@ fn issue_to_ticket(i: &serde_json::Value) -> Option<TrackerTicket> {
         .and_then(|n| n.as_str())
         .unwrap_or("");
     Some(TrackerTicket {
-        key: TicketKey(key.to_string()),
+        key,
         title: f.get("summary").and_then(|s| s.as_str()).unwrap_or("").to_string(),
         status: jira_status(status_name)?, // unknown status ⇒ skip (filter_map)
         assignee: f
@@ -189,7 +189,7 @@ fn issue_to_ticket(i: &serde_json::Value) -> Option<TrackerTicket> {
             .get("parent")
             .and_then(|p| p.get("key"))
             .and_then(|k| k.as_str())
-            .map(|s| ConvoyKey(s.to_string())),
+            .and_then(|s| ConvoyKey::parse(s).ok()),
         blocked_by: parse_blocked_by(f),
     })
 }
@@ -206,7 +206,7 @@ fn parse_blocked_by(fields: &serde_json::Value) -> Vec<TicketKey> {
         .iter()
         .filter(|l| l.get("type").and_then(|t| t.get("name")).and_then(|n| n.as_str()) == Some("Blocks"))
         .filter_map(|l| l.get("inwardIssue").and_then(|i| i.get("key")).and_then(|k| k.as_str()))
-        .map(|k| TicketKey(k.to_string()))
+        .filter_map(|k| TicketKey::parse(k).ok())
         .collect()
 }
 

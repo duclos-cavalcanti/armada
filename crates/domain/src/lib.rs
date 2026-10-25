@@ -34,13 +34,7 @@ impl TicketKey {
     /// Parse a `<PREFIX>-<n>` key — an uppercase-led `[A-Z][A-Z0-9]*` prefix, a dash, digits.
     /// Used wherever a key enters (client input, ledger reads): never silently coerced.
     pub fn parse(s: &str) -> anyhow::Result<Self> {
-        let shaped = s.split_once('-').is_some_and(|(prefix, num)| {
-            prefix.starts_with(|c: char| c.is_ascii_uppercase())
-                && prefix.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
-                && !num.is_empty()
-                && num.bytes().all(|b| b.is_ascii_digit())
-        });
-        anyhow::ensure!(shaped, "{s:?} is not a ticket key (expected <PREFIX>-<n>, e.g. PROJ-123)");
+        anyhow::ensure!(key_shaped(s), "{s:?} is not a ticket key (expected <PREFIX>-<n>, e.g. PROJ-123)");
         Ok(Self(s.to_string()))
     }
 
@@ -55,10 +49,28 @@ impl TicketKey {
         })
     }
 }
-id_newtype!(/// The convoy a ticket belongs to — the adapter-neutral grouping key a
-            /// captain commands (Jira: the epic's key; filesystem: the folder name).
-            /// NOT a ticket — each adapter supplies its own identifier.
+id_newtype!(/// The convoy a ticket belongs to — the grouping a captain commands (Jira: the
+            /// epic's key). NOT a ticket, but it shares the ticket key shape `<PREFIX>-<n>`, so
+            /// every identifier in the fleet has one strict format.
             ConvoyKey, String);
+impl ConvoyKey {
+    /// Parse a convoy key — the same `<PREFIX>-<n>` shape as a ticket key.
+    pub fn parse(s: &str) -> anyhow::Result<Self> {
+        anyhow::ensure!(key_shaped(s), "{s:?} is not a convoy key (expected <PREFIX>-<n>, e.g. PROJ-100)");
+        Ok(Self(s.to_string()))
+    }
+}
+
+/// `<PREFIX>-<n>`: an uppercase-led `[A-Z][A-Z0-9]*` prefix, a dash, digits.
+fn key_shaped(s: &str) -> bool {
+    s.split_once('-').is_some_and(|(prefix, num)| {
+        prefix.starts_with(|c: char| c.is_ascii_uppercase())
+            && prefix.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+            && !num.is_empty()
+            && num.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
 id_newtype!(SessionId, i64);
 id_newtype!(ShipId, i64);
 id_newtype!(EscalationId, i64);
@@ -764,6 +776,12 @@ mod liveness_tests {
         for bad in ["proj-1", "PROJ-", "-1", "PROJ1", "PROJ-1a", "2AB-1", "PROJ-1-2", "", "--flag"] {
             assert!(TicketKey::parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn convoy_key_shares_the_ticket_key_shape() {
+        assert!(ConvoyKey::parse("PROJ-100").is_ok());
+        assert!(ConvoyKey::parse("forge-work").is_err());
     }
 
     #[test]

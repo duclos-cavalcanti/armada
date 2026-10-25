@@ -112,6 +112,11 @@ fn ticket_key(s: String) -> rusqlite::Result<TicketKey> {
     require(TicketKey::parse(&s).ok(), 0, "ticket key")
 }
 
+/// Re-check a stored convoy key on read — same shape as a ticket key.
+fn convoy_key(s: String) -> rusqlite::Result<ConvoyKey> {
+    require(ConvoyKey::parse(&s).ok(), 0, "convoy key")
+}
+
 // ── tickets ─────────────────────────────────────────────────────────────────────
 
 fn row_to_ticket(r: &rusqlite::Row) -> rusqlite::Result<Ticket> {
@@ -122,7 +127,7 @@ fn row_to_ticket(r: &rusqlite::Row) -> rusqlite::Result<Ticket> {
     };
     Ok(Ticket {
         key: ticket_key(r.get("key")?)?,
-        convoy: r.get::<_, Option<String>>("convoy")?.map(ConvoyKey),
+        convoy: r.get::<_, Option<String>>("convoy")?.map(convoy_key).transpose()?,
         held: r.get::<_, i64>("held")? != 0,
         created_at: r.get("created_at")?,
         blocked_by: Vec::new(), // filled by the caller from ticket_blocks
@@ -271,7 +276,7 @@ fn row_to_session(r: &rusqlite::Row) -> rusqlite::Result<Session> {
         id: SessionId(r.get("id")?),
         kind: require(CrewKind::parse(&kind), 1, "session kind")?,
         ticket: r.get::<_, Option<String>>("ticket")?.map(ticket_key).transpose()?,
-        convoy: r.get::<_, Option<String>>("convoy")?.map(ConvoyKey),
+        convoy: r.get::<_, Option<String>>("convoy")?.map(convoy_key).transpose()?,
         worktree_path: r.get("worktree_path")?,
         tmux_session: r.get("tmux_session")?,
         harness_session_id: r.get("harness_session_id")?,
@@ -925,7 +930,7 @@ impl OrderRepo for Ledger {
 
 fn row_to_convoy(r: &rusqlite::Row) -> rusqlite::Result<Convoy> {
     Ok(Convoy {
-        key: ConvoyKey(r.get("key")?),
+        key: convoy_key(r.get("key")?)?,
         title: r.get("title")?,
         created_at: r.get("created_at")?,
         ended_at: r.get("ended_at")?,
