@@ -2,24 +2,34 @@ import { useMemo, useState } from 'react'
 import {
   ReactFlow, Background, Controls, MiniMap, MarkerType,
   Handle, Position, BaseEdge, EdgeLabelRenderer, useNodesState,
+  NodeResizer, useReactFlow,
 } from '@xyflow/react'
 import architecture from '../graphs/fleet/architecture.json'
+import overview from '../graphs/fleet/overview.json'
+import data from '../graphs/fleet/data.json'
+import { toPng } from 'html-to-image'
 import { routeOrthogonal, simplify, roundedPath, polylineMidpoint } from './obstacleRouter'
 
 // renderable graphs share one schema (groups + x/y nodes + base edges). Pick
 // which one to render via ?graph=<name>; defaults to the full architecture.
 const GRAPHS = {
+  overview,
   architecture,
+  data,
 }
 const GRAPH_LABELS = {
+  overview: 'Overview',
   architecture: 'Full architecture',
+  data: 'Data model',
 }
 // two-level nav: the main dropdown picks a group; a multi-member group gets a
 // second dropdown for the aspect within it. The group is derived from ?graph,
 // so the URL stays graph-addressed. One graph today — the fleet topology —
 // with flow overlays; add more under graphs/fleet/ and register them here.
 const GROUPS = [
+  { id: 'overview', label: 'Overview', graphs: ['overview'] },
   { id: 'architecture', label: 'Full architecture', graphs: ['architecture'] },
+  { id: 'data', label: 'Data model', graphs: ['data'] },
 ]
 const graphName = new URLSearchParams(window.location.search).get('graph') || 'architecture'
 const arch = GRAPHS[graphName] ?? architecture
@@ -47,6 +57,12 @@ const KIND = {
   cog:          { c: '#3FB950', g: '⚙'  },  // a crew cog — a Claude session in a tmux pane
   config:       { c: '#9DA7B3', g: '⚙'  },  // repo / hub
   external:     { c: '#DB6D28', g: '☁'  },  // GitLab / Jira / Claude Code
+  // data-diagram taxonomy (the `data` graph): rust domain types + ledger tables.
+  struct:       { c: '#D2A8FF', g: '◆'  },  // domain entity (a persisted Rust struct)
+  dto:          { c: '#39C5CF', g: '◇'  },  // read-model / port DTO (never a table)
+  enum:         { c: '#F0883E', g: '▸'  },  // domain enum (a vocabulary)
+  table:        { c: '#56D364', g: '▤'  },  // a ledger.db / telemetry.db table
+  skill:        { c: '#D2A8FF', g: '✦'  },  // an operator /fleet-* skill (judgment over fleetc)
 }
 
 const LEGEND = [
@@ -54,18 +70,36 @@ const LEGEND = [
   ['socket', 'control bus'], ['daemon', 'fleetd module'], ['adapter', 'driven adapter'],
   ['sqlite', 'ledger / telemetry'], ['cog', 'crew cog (tmux)'], ['config', 'repo / hub'],
   ['external', 'external system'],
+  ['struct', 'domain struct'], ['dto', 'read-model / DTO'], ['enum', 'domain enum'], ['table', 'ledger table'],
+  ['skill', 'operator skill (/fleet-*)'],
 ]
+// only show legend rows for kinds actually present in the active graph, so each
+// graph's legend stays relevant (architecture/overview never show the data kinds).
+const PRESENT_KINDS = new Set(arch.nodes.map((n) => n.kind))
+const VISIBLE_LEGEND = LEGEND.filter(([k]) => PRESENT_KINDS.has(k))
 
 const EDGE = '#4d5864'
 const SIDES = [['left', Position.Left], ['right', Position.Right], ['top', Position.Top], ['bottom', Position.Bottom]]
 const hidden = { opacity: 0, pointerEvents: 'none', width: 1, height: 1, minWidth: 1, minHeight: 1, border: 0 }
 
-function CompNode({ data }) {
+function CompNode({ id, data }) {
   const k = KIND[data.kind] ?? KIND.config
+  const { setNodes } = useReactFlow()
   // custody-domain nodes render as centered pills (tree-node look); the rest
   // are left-aligned cards.
   const isDomain = data.kind === 'domain' || data.kind === 'domainnew'
   return (
+    <>
+      {/* drag-to-resize handles on the selected card; writes the new size back
+          into data.w/h so routeAll reroutes and "Layout" can export it. */}
+      <NodeResizer
+        isVisible={!!data.selected}
+        minWidth={70}
+        minHeight={26}
+        color={k.c}
+        handleStyle={{ width: 7, height: 7, borderRadius: 2 }}
+        onResize={(_, p) => setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, w: Math.round(p.width), h: Math.round(p.height) } } : n)))}
+      />
     <div
       style={{
         width: data.w, height: data.h, boxSizing: 'border-box',
@@ -85,6 +119,7 @@ function CompNode({ data }) {
       <div style={{ color: k.c, font: `700 10px ${MONO}`, letterSpacing: '0.05em' }}>{k.g} {data.label}</div>
       {data.sub && <div style={{ color: 'var(--dim)', font: '9px sans-serif', marginTop: 2 }}>{data.sub}</div>}
     </div>
+    </>
   )
 }
 
@@ -113,7 +148,29 @@ function RoutedEdge({ id, data, markerEnd, style }) {
   )
 }
 
-const nodeTypes = { comp: CompNode }
+// a group rectangle. Rendered behind the comp nodes; unlike a plain box it
+// carries the same hidden side-handles, so an edge can target the GROUP itself
+// (e.g. one arrow into the whole SKILLS cluster) instead of a member node.
+function GroupNode({ data }) {
+  return (
+    <div style={{
+      width: '100%', height: '100%', position: 'relative',
+      background: `${data.color}0c`, border: `1px dashed ${data.color}55`, borderRadius: 14,
+    }}>
+      {SIDES.map(([n, p]) => <Handle key={'s' + n} id={'s-' + n} type="source" position={p} style={hidden} />)}
+      {SIDES.map(([n, p]) => <Handle key={'t' + n} id={'t-' + n} type="target" position={p} style={hidden} />)}
+      {/* label as a chip on the top border: a solid dark bg keeps it legible over
+          the tint and clear of any comp card that sits near the box edge. */}
+      <div style={{
+        position: 'absolute', top: -11, left: 8, font: `700 10px ${MONO}`, letterSpacing: '0.08em',
+        color: data.color, textTransform: 'uppercase', whiteSpace: 'nowrap',
+        background: 'var(--bg)', padding: '2px 8px', borderRadius: 6, border: `1px solid ${data.color}66`,
+      }}>{data.label}</div>
+    </div>
+  )
+}
+
+const nodeTypes = { comp: CompNode, grouprect: GroupNode }
 const edgeTypes = { routed: RoutedEdge }
 
 const PANE_H = { font: `700 10px ${MONO}`, letterSpacing: '0.1em', color: 'var(--dim)' }
@@ -291,10 +348,15 @@ function routeWithRetries(a, b, obstacles, ss, ts, occupied) {
 function routeAll(nodeList) {
   const rect = {}
   for (const n of nodeList) if (n.type === 'comp') rect[n.id] = { x: n.position.x, y: n.position.y, w: n.data.w, h: n.data.h }
+  // group boxes are valid edge ENDPOINTS (an arrow can land on the whole box),
+  // but never OBSTACLES (edges pass through them freely). `geo` is the endpoint
+  // lookup; obstacles below stay keyed off `rect` (comp nodes only).
+  const geo = { ...rect }
+  for (const n of nodeList) if (n.type === 'grouprect') geo[n.id] = { x: n.position.x, y: n.position.y, w: parseFloat(n.style.width), h: parseFloat(n.style.height) }
 
   const meta = arch.base
-    .filter((e) => rect[e.source] && rect[e.target])
-    .map((e) => { const [ss, ts] = pickSides(rect[e.source], rect[e.target]); return { e, ss, ts } })
+    .filter((e) => geo[e.source] && geo[e.target])
+    .map((e) => { const [ss, ts] = pickSides(geo[e.source], geo[e.target]); return { e, ss, ts } })
 
   // spread anchors per (node, side), ordered by where each edge's *far* end
   // sits along that side — so a fan of edges leaving one side never crosses
@@ -307,7 +369,7 @@ function routeAll(nodeList) {
   const oppCoord = (key, axis) => {
     const [i, end] = key.split('|')
     const m = meta[+i]
-    const r = end === 's' ? rect[m.e.target] : rect[m.e.source]
+    const r = end === 's' ? geo[m.e.target] : geo[m.e.source]
     return axis === 'x' ? r.x + r.w / 2 : r.y + r.h / 2
   }
   const frac = {}
@@ -318,8 +380,8 @@ function routeAll(nodeList) {
     const n = g.length
     g.forEach((key, j) => { frac[key] = n === 1 ? 0 : (j / (n - 1) - 0.5) * 0.6 })
   }
-  const srcA = (i) => anchor(rect[meta[i].e.source], meta[i].ss, frac[`${i}|s`])
-  const tgtA = (i) => anchor(rect[meta[i].e.target], meta[i].ts, frac[`${i}|t`])
+  const srcA = (i) => anchor(geo[meta[i].e.source], meta[i].ss, frac[`${i}|s`])
+  const tgtA = (i) => anchor(geo[meta[i].e.target], meta[i].ts, frac[`${i}|t`])
 
   const order = meta.map((_, i) => i).sort((a, b) => manhattan(srcA(b), tgtA(b)) - manhattan(srcA(a), tgtA(a)))
 
@@ -340,17 +402,17 @@ function routeAll(nodeList) {
     type: 'routed',
     data: { path: roundedPath(pathsById[i]), label: e.label, labelPos: polylineMidpoint(pathsById[i]) },
     markerEnd: { type: MarkerType.ArrowClosed, color: EDGE, width: 13, height: 13 },
-    style: { stroke: EDGE, strokeWidth: 1.2 },
+    style: { stroke: EDGE, strokeWidth: 1.2, ...(e.dashed ? { strokeDasharray: '7 5' } : {}) },
   }))
 }
 
 export default function Topology() {
   const initialNodes = useMemo(() => {
     const groupNodes = arch.groups.map((grp) => ({
-      id: `grp-${grp.id}`,
+      id: `grp-${grp.id}`, type: 'grouprect',
       position: { x: grp.x * SPREAD, y: grp.y * SPREAD },
-      data: { label: <div style={{ position: 'absolute', top: 6, left: 10, font: `700 11px ${MONO}`, letterSpacing: '0.06em', color: grp.color, textTransform: 'uppercase' }}>{grp.label}</div> },
-      style: { width: grp.w * SPREAD, height: grp.h * SPREAD, background: `${grp.color}0c`, border: `1px dashed ${grp.color}55`, borderRadius: 14 },
+      data: { label: grp.label, color: grp.color },
+      style: { width: grp.w * SPREAD, height: grp.h * SPREAD },
       selectable: false, draggable: false, zIndex: 0,
     }))
     const compNodes = arch.nodes.map((n) => ({
@@ -363,6 +425,7 @@ export default function Topology() {
   const [nodes, , onNodesChange] = useNodesState(initialNodes)
   const edges = useMemo(() => routeAll(nodes), [nodes])
   const [copied, setCopied] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [selected, setSelected] = useState(null)
   const [mode, setMode] = useState(0)
   const sel = selected ? arch.nodes.find((n) => n.id === selected) : null
@@ -384,13 +447,48 @@ export default function Topology() {
   // node list, so a hand-tuned arrangement can be pasted into architecture.json
   const copyLayout = async () => {
     const pos = {}
-    for (const n of nodes) if (n.type === 'comp') pos[n.id] = { x: Math.round(n.position.x / SPREAD), y: Math.round(n.position.y / SPREAD) }
-    const merged = arch.nodes.map((n) => ({ ...n, x: pos[n.id]?.x ?? n.x, y: pos[n.id]?.y ?? n.y }))
+    // positions are SPREAD-scaled at render; sizes (w/h) are native px, so only x/y divide back.
+    for (const n of nodes) if (n.type === 'comp') pos[n.id] = { x: Math.round(n.position.x / SPREAD), y: Math.round(n.position.y / SPREAD), w: n.data.w, h: n.data.h }
+    const merged = arch.nodes.map((n) => { const p = pos[n.id]; return p ? { ...n, x: p.x, y: p.y, w: p.w, h: p.h } : n })
     const text = JSON.stringify(merged)
     try { await navigator.clipboard.writeText(text) } catch { /* clipboard blocked — fall back to console */ }
     console.log(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
+  }
+
+  // export the whole graph as a PNG. We size the capture to the full bounds of
+  // the live nodes (comp cards + group boxes) and reset the viewport transform
+  // on the CLONE only (html-to-image's `style` applies to the clone), so the
+  // export always holds the entire diagram regardless of current zoom/pan.
+  const downloadPng = async () => {
+    const vp = document.querySelector('.react-flow__viewport')
+    if (!vp) return
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const n of nodes) {
+      const w = n.type === 'comp' ? n.data.w : parseFloat(n.style?.width) || 0
+      const h = n.type === 'comp' ? n.data.h : parseFloat(n.style?.height) || 0
+      minX = Math.min(minX, n.position.x); minY = Math.min(minY, n.position.y)
+      maxX = Math.max(maxX, n.position.x + w); maxY = Math.max(maxY, n.position.y + h)
+    }
+    const pad = 48
+    const width = Math.ceil(maxX - minX + pad * 2)
+    const height = Math.ceil(maxY - minY + pad * 2)
+    setExporting(true)
+    try {
+      const url = await toPng(vp, {
+        backgroundColor: '#0D1117', pixelRatio: 2, width, height,
+        style: { width: `${width}px`, height: `${height}px`, transform: `translate(${pad - minX}px, ${pad - minY}px) scale(1)` },
+      })
+      const a = document.createElement('a')
+      a.download = `fleet-${graphName}.png`
+      a.href = url
+      a.click()
+    } catch (err) {
+      console.error('PNG export failed', err)
+    } finally {
+      setExporting(false)
+    }
   }
 
   return (
@@ -437,6 +535,19 @@ export default function Topology() {
         >
           {copied ? 'Copied ✓' : 'Layout'}
         </button>
+        <button
+          onClick={downloadPng}
+          disabled={exporting}
+          title="Export the whole diagram as a PNG image"
+          style={{
+            background: 'var(--panel)', color: 'var(--text)',
+            border: '1px solid var(--border)', borderRadius: 8,
+            padding: '7px 12px', cursor: exporting ? 'default' : 'pointer',
+            font: `600 11px ${MONO}`, letterSpacing: '0.04em', opacity: exporting ? 0.6 : 1,
+          }}
+        >
+          {exporting ? 'Exporting…' : 'PNG'}
+        </button>
       </div>
       <ReactFlow
         nodes={viewNodes} edges={viewEdges} onNodesChange={onNodesChange}
@@ -452,7 +563,7 @@ export default function Topology() {
           nodeColor={(n) => (KIND[kindOf(n.id)] ?? KIND.config).c} />
       </ReactFlow>
       <div style={{ position: 'fixed', bottom: 14, right: 14, zIndex: 6, background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 12px' }}>
-        {LEGEND.map(([k, label]) => (
+        {VISIBLE_LEGEND.map(([k, label]) => (
           <span key={k} style={{ font: `10px ${MONO}`, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ width: 9, height: 9, borderRadius: 2, background: (KIND[k] ?? KIND.config).c, display: 'inline-block' }} />{label}
           </span>

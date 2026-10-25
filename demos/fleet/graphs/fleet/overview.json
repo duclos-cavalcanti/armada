@@ -1,0 +1,177 @@
+{
+  "title": "The Fleet — overview",
+  "sha": "1cdee16",
+  "note": "A simplified, opaque view of the fleet. The operator makes the judgment calls and wraps them in a toolkit of /fleet-* skills — the intelligent layer over the mechanical fleetc CLI — which (with the operator's own raw verbs) actuate fleetc; fleetc drives fleetd (the daemon, shown as one box — no internal state machines); fleetd actuates its external systems (a Tracker, a Forge), persists to the Ledger, works inside a Project (the worktrees), and spawns the Crew of cogs. For the real machinery (fleetd's server/scheduler/reconcile, the adapters, telemetry, flows) switch to the Full architecture.",
+  "groups": [
+    {
+      "id": "operators",
+      "label": "Operator",
+      "x": 42,
+      "y": 272,
+      "w": 190,
+      "h": 86,
+      "color": "#58A6FF"
+    },
+    {
+      "id": "skills",
+      "label": "SKILLS",
+      "x": 30,
+      "y": 380,
+      "w": 200,
+      "h": 256,
+      "color": "#D2A8FF"
+    },
+    {
+      "id": "external",
+      "label": "External systems",
+      "x": 370,
+      "y": 40,
+      "w": 560,
+      "h": 180,
+      "color": "#D29922"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "operator",
+      "kind": "human",
+      "label": "Operator",
+      "sub": "you · drives the fleet",
+      "x": 57,
+      "y": 292,
+      "w": 160,
+      "h": 56
+    },
+    { "id": "sk_berth", "kind": "skill", "label": "/fleet-berth", "x": 40, "y": 392, "w": 180, "h": 28 },
+    { "id": "sk_launch", "kind": "skill", "label": "/fleet-launch", "x": 40, "y": 424, "w": 180, "h": 28 },
+    { "id": "sk_parley", "kind": "skill", "label": "/fleet-parley", "x": 40, "y": 456, "w": 180, "h": 28 },
+    { "id": "sk_rechart", "kind": "skill", "label": "/fleet-rechart", "x": 40, "y": 488, "w": 180, "h": 28 },
+    { "id": "sk_repair", "kind": "skill", "label": "/fleet-repair", "x": 40, "y": 520, "w": 180, "h": 28 },
+    { "id": "sk_yield", "kind": "skill", "label": "/fleet-yield", "x": 40, "y": 552, "w": 180, "h": 28 },
+    { "id": "sk_publish", "kind": "skill", "label": "/fleet-publish", "x": 40, "y": 584, "w": 180, "h": 28 },
+    {
+      "id": "fleetc",
+      "kind": "cli",
+      "label": "fleetc",
+      "sub": "control surface (CLI)",
+      "x": 329,
+      "y": 279,
+      "w": 150,
+      "h": 86
+    },
+    {
+      "id": "fleetd",
+      "kind": "daemon",
+      "label": "fleetd",
+      "sub": "the daemon · opaque",
+      "x": 560,
+      "y": 283,
+      "w": 180,
+      "h": 74,
+      "detail": {
+        "type": "the single-writer daemon (opaque here)",
+        "summary": "In this view fleetd is one box: you see only that it connects to external systems, persists state, works a project, and spawns the crew. Its internals — the UDS control server, the scheduler, reconcile/sync/collector, the driven adapters — live in the Full architecture."
+      }
+    },
+    {
+      "id": "tracker",
+      "kind": "adapter",
+      "label": "Tracker",
+      "sub": "e.g. Jira",
+      "x": 430,
+      "y": 100,
+      "w": 180,
+      "h": 56
+    },
+    {
+      "id": "forge",
+      "kind": "adapter",
+      "label": "Forge",
+      "sub": "e.g. GitLab",
+      "x": 690,
+      "y": 100,
+      "w": 180,
+      "h": 56
+    },
+    {
+      "id": "master",
+      "kind": "config",
+      "label": "Project: Master",
+      "sub": "single origin · chosen project",
+      "x": 860,
+      "y": 357,
+      "w": 190,
+      "h": 56
+    },
+    {
+      "id": "project",
+      "kind": "config",
+      "label": "Project Worktrees",
+      "sub": "per-ticket branches off master",
+      "x": 1092,
+      "y": 288,
+      "w": 200,
+      "h": 56
+    },
+    {
+      "id": "crew",
+      "kind": "cog",
+      "label": "Crew",
+      "sub": "captain · worker · hand · sailor · lookout",
+      "x": 850,
+      "y": 289,
+      "w": 230,
+      "h": 58,
+      "detail": {
+        "type": "the crew of cogs (a SessionSubstrate)",
+        "summary": "fleetd spawns the crew onto a session substrate (tmux, in practice — hidden here). Each cog is a Claude session with one job.",
+        "modes": [
+          {
+            "label": "cogs",
+            "steps": [
+              "captain — orchestrates one convoy: dispatches its clean frontier",
+              "worker — implements one ticket in one worktree",
+              "hand — operator-driven implementer (you write the code)",
+              "sailor — lands one open MR toward merged",
+              "lookout — reviews one allied MR"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "ledger",
+      "kind": "sqlite",
+      "label": "Ledger",
+      "sub": "durable state · opaque",
+      "x": 560,
+      "y": 420,
+      "w": 180,
+      "h": 66
+    },
+    {
+      "id": "dashboard",
+      "kind": "tui",
+      "label": "Dashboard",
+      "sub": "read-only view of fleet state",
+      "x": 402,
+      "y": 538,
+      "w": 592,
+      "h": 113
+    }
+  ],
+  "base": [
+    { "source": "operator", "target": "grp-skills", "label": "via skills" },
+    { "source": "operator", "target": "fleetc", "dashed": true },
+    { "source": "grp-skills", "target": "fleetc" },
+    { "source": "fleetc", "target": "fleetd", "label": "drives" },
+    { "source": "fleetd", "target": "tracker", "label": "tickets" },
+    { "source": "fleetd", "target": "forge", "label": "MRs · CI" },
+    { "source": "fleetd", "target": "crew", "label": "spawns" },
+    { "source": "crew", "target": "project", "label": "works in" },
+    { "source": "master", "target": "project", "label": "branches off" },
+    { "source": "fleetd", "target": "ledger", "label": "persists" },
+    { "source": "ledger", "target": "dashboard", "label": "shows state" }
+  ],
+  "flows": []
+}
