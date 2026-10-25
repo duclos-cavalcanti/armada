@@ -7,8 +7,9 @@
 
 mod collector;
 mod config;
-mod forge;
 mod git;
+mod github;
+mod gitlab;
 mod otlp;
 mod preflight;
 mod reconcile;
@@ -77,15 +78,20 @@ fn main() -> Result<()> {
         Some("sync") => run_sync(),
         Some("preflight") => {
             let cfg = config::Config::load()?;
-            preflight(&cfg, &forge(&cfg), &tracker(&cfg), &TmuxHost::new())
+            preflight(&cfg, forge(&cfg).as_ref(), &tracker(&cfg), &TmuxHost::new())
         }
         _ => run_daemon(),
     }
 }
 
-/// The deployment's forge + tracker, built from fleet.toml.
-fn forge(cfg: &config::Config) -> forge::GlabForge {
-    forge::GlabForge::new(&cfg.forge.project, cfg.ticket_prefix())
+/// The deployment's forge + tracker, built from fleet.toml (`[forge] kind` picks the adapter;
+/// `Config::load` already rejected a missing or unknown kind).
+fn forge(cfg: &config::Config) -> Box<dyn Forge + Send> {
+    let (project, prefix) = (&cfg.forge.project, cfg.ticket_prefix());
+    match cfg.forge.kind {
+        Some(config::ForgeKind::Github) => Box::new(github::GhForge::new(project, prefix)),
+        Some(config::ForgeKind::Gitlab) | None => Box::new(gitlab::GlabForge::new(project, prefix)),
+    }
 }
 fn tracker(cfg: &config::Config) -> tracker::JiraTracker {
     tracker::JiraTracker::new(&cfg.tracker.project, cfg.tracker.claim_label.clone())
@@ -110,7 +116,7 @@ fn run_sync() -> Result<()> {
     let now = now_rfc3339();
     // Board first so ships can link their ticket FK.
     let tickets = sync::sync_board(&ledger, &tracker(&cfg), &now)?;
-    let ships = sync::sync_armada(&ledger, &forge(&cfg), &now)?;
+    let ships = sync::sync_armada(&ledger, forge(&cfg).as_ref(), &now)?;
     println!("fleetd sync: {tickets} tickets + {ships} ships synced to the ledger");
     Ok(())
 }
@@ -119,7 +125,7 @@ fn run_daemon() -> Result<()> {
     let cfg = config::Config::load()?;
     let (host, forge, tracker) = (TmuxHost::new(), forge(&cfg), tracker(&cfg));
     println!("fleetd: preflight");
-    preflight(&cfg, &forge, &tracker, &host)?;
+    preflight(&cfg, forge.as_ref(), &tracker, &host)?;
     let ledger = Ledger::open(&cfg.ledger)?;
 
     // Seed the snapshot once so /context isn't empty before the first poll.
@@ -143,6 +149,7 @@ fn run_daemon() -> Result<()> {
         project: cfg.project.path.clone(),
         auto_merge: cfg.forge.auto_merge,
         default_branch: git::GitWorktrees::new(&cfg.project.path).default_branch()?, // preflight checked it
+        stacks: forge.stacks(),
     };
     let sched_snapshot = snapshot.clone();
 

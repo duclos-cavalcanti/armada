@@ -62,7 +62,7 @@ impl Default for ProjectConfig {
 #[serde(default)]
 pub struct ForgeConfig {
     pub kind: Option<ForgeKind>,
-    /// The forge's project id (GitLab: the numeric project id).
+    /// The forge's project: GitLab's numeric project id, or GitHub's `owner/repo`.
     pub project: String,
     /// The dispatch default: true = the sailor arms auto-merge; false = it lands the MR to clean,
     /// then reports `awaiting_merge` and waits for the operator. `fleetc dispatch --hold` forces false.
@@ -79,6 +79,7 @@ impl Default for ForgeConfig {
 #[serde(rename_all = "lowercase")]
 pub enum ForgeKind {
     Gitlab,
+    Github,
 }
 
 /// `[tracker]` in fleet.toml — which tracker adapter, its project, and the optional claim label.
@@ -166,8 +167,16 @@ impl Config {
 
     fn validate(&self) -> Result<()> {
         let path = config_path();
-        ensure!(self.forge.kind.is_some(), "{path}: [forge] kind is required (\"gitlab\")");
+        ensure!(self.forge.kind.is_some(), "{path}: [forge] kind is required (\"gitlab\" or \"github\")");
         ensure!(!self.forge.project.is_empty(), "{path}: [forge] project is required (or FLEET_FORGE_PROJECT)");
+        if self.forge.kind == Some(ForgeKind::Github) {
+            let parts: Vec<&str> = self.forge.project.split('/').collect();
+            ensure!(
+                parts.len() == 2 && parts.iter().all(|p| !p.is_empty()),
+                "{path}: [forge] project must be \"owner/repo\" for github, got {:?}",
+                self.forge.project
+            );
+        }
         ensure!(self.tracker.kind.is_some(), "{path}: [tracker] kind is required (\"jira\")");
         ensure!(
             domain::is_key_prefix(&self.tracker.project),
@@ -310,6 +319,16 @@ mod tests {
         assert!(Config::default().validate().is_err());
         let c: Config = toml::from_str(&format!("[forge]\nkind = \"gitlab\"\n{TRACKER}")).unwrap();
         assert!(c.validate().is_err(), "a forge without a project");
+    }
+
+    #[test]
+    fn github_forge_needs_an_owner_repo_project() {
+        let gh = |project: &str| format!("[forge]\nkind = \"github\"\nproject = \"{project}\"\n{TRACKER}");
+        let c: Config = toml::from_str(&gh("me/armada-test")).unwrap();
+        assert_eq!(c.forge.kind, Some(ForgeKind::Github));
+        assert!(c.validate().is_ok());
+        let c: Config = toml::from_str(&gh("12345678")).unwrap();
+        assert!(c.validate().is_err(), "a GitLab-style id isn't a GitHub repo");
     }
 
     #[test]

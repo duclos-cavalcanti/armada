@@ -24,6 +24,8 @@ pub struct Deployment {
     pub auto_merge: bool,
     /// origin's default branch (`origin/main`), read from the project checkout at boot.
     pub default_branch: String,
+    /// The forge can stack MRs (`Forge::stacks`). Without it a dispatch must fork the default branch.
+    pub stacks: bool,
 }
 
 /// Bind the socket (clearing any stale file) and serve forever. `cmds` is the write
@@ -175,11 +177,20 @@ fn handle_dispatch(request: &str, cmds: &Sender<Command>, deployment: &Deploymen
         Ok(t) => t,
         Err(r) => return r,
     };
+    let fork_from = dto.fork_from.unwrap_or_else(|| deployment.default_branch.clone());
+    let branch = |r: &str| r.strip_prefix("origin/").unwrap_or(r).to_string();
+    if !deployment.stacks && branch(&fork_from) != branch(&deployment.default_branch) {
+        let why = format!(
+            "this forge can't stack MRs: fork {} instead of {fork_from} (or wait for the parent to merge)",
+            deployment.default_branch
+        );
+        return http_response("400 Bad Request", "text/plain", &why);
+    }
     let order = Order {
         ticket,
         auto_impl: dto.auto_impl,
         auto_merge: dto.auto_merge.unwrap_or(deployment.auto_merge),
-        fork_from: dto.fork_from.unwrap_or_else(|| deployment.default_branch.clone()),
+        fork_from,
         ac_summary: dto.ac_summary,
         park_at: dto.park_at,
         worktree_path: dto.worktree_path,
@@ -554,10 +565,10 @@ mod tests {
     /// Spawn `serve` on a temp socket, waiting for the file to appear. Returns the path.
     fn spawn_server(snapshot: Snapshot, cmds: Sender<Command>, tag: &str) -> String {
         let sock = format!("/tmp/fleetd-test-{}-{tag}.sock", std::process::id());
-        let sock2 = sock.clone();
+        let (sock2, stacks) = (sock.clone(), tag != "nostack");
         std::thread::spawn(move || {
             let deployment =
-                Deployment { project: "/wt/project".into(), auto_merge: true, default_branch: "origin/main".into() };
+                Deployment { project: "/wt/project".into(), auto_merge: true, default_branch: "origin/main".into(), stacks };
             let _ = serve(&sock2, snapshot, cmds, deployment);
         });
         for _ in 0..100 {
@@ -691,4 +702,28 @@ mod tests {
 
         let _ = std::fs::remove_file(&sock);
     }
+
+    #[test]
+    fn a_forge_that_cant_stack_rejects_a_non_default_fork() {
+        let snapshot: Snapshot = Arc::new(Mutex::new(Vec::new()));
+        let (tx, rx) = std::sync::mpsc::channel::<Command>();
+        std::thread::spawn(move || {
+            for cmd in rx {
+                if let Command::Dispatch { reply, .. } = cmd {
+                    let _ = reply.send(Ok(()));
+                }
+            }
+        });
+        let sock = spawn_server(snapshot, tx, "nostack");
+        let post = |fork: &str| {
+            let body = format!(r#"{{"ticket":"PROJ-2","auto_impl":true,{fork}"ac_summary":"do it","park_at":null}}"#);
+            roundtrip(&sock, format!("POST /dispatch HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes())
+        };
+        let stacked = post(r#""fork_from":"origin/chore/PROJ-1-parent","#);
+        assert!(stacked.contains("400 Bad Request") && stacked.contains("can't stack"), "resp: {stacked}");
+        assert!(post(r#""fork_from":"main","#).contains("200 OK"), "the default branch, origin/ or not");
+        assert!(post("").contains("200 OK"), "no fork_from → the default branch");
+        let _ = std::fs::remove_file(&sock);
+    }
+
 }

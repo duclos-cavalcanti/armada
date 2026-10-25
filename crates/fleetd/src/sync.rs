@@ -85,6 +85,9 @@ mod tests {
         fn preflight(&self) -> Result<String> {
             Ok("fake".into())
         }
+        fn stacks(&self) -> bool {
+            true
+        }
         fn armada(&self) -> Result<Vec<ForgeShip>> {
             Ok(self.0.clone())
         }

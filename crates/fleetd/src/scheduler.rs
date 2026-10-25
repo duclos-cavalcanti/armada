@@ -8,7 +8,6 @@
 //!   the change-count span, so a no-op or a frozen spine is a queryable fact (#56).
 
 use crate::config::Config;
-use crate::forge::GlabForge;
 use crate::settings;
 use crate::tmux::TmuxHost;
 use crate::tracker::JiraTracker;
@@ -80,7 +79,7 @@ pub enum Command {
 pub fn run(
     ledger: Ledger,
     host: TmuxHost,
-    forge: GlabForge,
+    forge: Box<dyn Forge + Send>,
     tracker: JiraTracker,
     snapshot: Snapshot,
     cfg: Config,
@@ -99,7 +98,7 @@ pub fn run(
             next_poll = now + Duration::from_secs(settings::poll_secs(&cfg, &ledger));
         }
         if now >= next_sync {
-            if let Err(e) = tick_sync(&ledger, &forge, &tracker) {
+            if let Err(e) = tick_sync(&ledger, forge.as_ref(), &tracker) {
                 eprintln!("fleetd: sync tick error: {e}");
             }
             next_sync = now + Duration::from_secs(settings::sync_secs(&cfg, &ledger));
@@ -110,7 +109,7 @@ pub fn run(
             // extra tmux fan-out).
             let dry_run = settings::dry_run(&cfg, &ledger);
             let cogs = snapshot.lock().unwrap().clone();
-            match reconcile::tick(&ledger, &tracker, &host, &forge, &cogs, &cfg.project.path, dry_run) {
+            match reconcile::tick(&ledger, &tracker, &host, forge.as_ref(), &cogs, &cfg.project.path, dry_run) {
                 Ok(n) if n > 0 => {
                     let mode = if dry_run { "dry-run" } else { "live" };
                     eprintln!("fleetd: reconcile ({mode}) {n} actions");
@@ -122,7 +121,7 @@ pub fn run(
         }
         // Wait for a write up to the tick quantum, then loop to re-check the tickers.
         match cmds.recv_timeout(Duration::from_millis(500)) {
-            Ok(cmd) => apply(&ledger, &tracker, &host, &forge, &cfg, cmd),
+            Ok(cmd) => apply(&ledger, &tracker, &host, forge.as_ref(), &cfg, cmd),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break, // server gone → nothing left to do
         }
@@ -148,7 +147,7 @@ fn ensure_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey) -> Res
     TicketRepo::sync(ledger, &tt, &now_rfc3339())
 }
 
-fn apply(ledger: &Ledger, tracker: &JiraTracker, host: &TmuxHost, forge: &GlabForge, cfg: &Config, cmd: Command) {
+fn apply(ledger: &Ledger, tracker: &JiraTracker, host: &TmuxHost, forge: &dyn Forge, cfg: &Config, cmd: Command) {
     match cmd {
         Command::RecordStatus { cog, ticket, state, last_action, reply } => {
             let res = record_status(ledger, cog, &ticket, state, last_action)
@@ -203,7 +202,7 @@ fn apply(ledger: &Ledger, tracker: &JiraTracker, host: &TmuxHost, forge: &GlabFo
             let _ = reply.send(res);
         }
         Command::GetConvoyView { convoy, reply } => {
-            let res = build_convoy_view(ledger, &convoy).map_err(|e| e.to_string());
+            let res = build_convoy_view(ledger, &convoy, forge.stacks()).map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
         Command::GetReview { iid, reply } => {
@@ -267,14 +266,14 @@ fn set_held(ledger: &Ledger, forge: &dyn Forge, ticket: &TicketKey, held: bool, 
 /// Compose a captain's convoy slice: every ticket in the convoy, each marked `ready` (fleetd's
 /// `is_ready` frontier) + `dispatched` (an order exists), plus a light cog/ship awareness. The
 /// captain dispatches `ready && !dispatched` and closes the convoy once every ticket is terminal.
-fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey) -> Result<ConvoyView> {
+fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Result<ConvoyView> {
     let armada = ShipRepo::armada(ledger)?;
     let mut tickets = Vec::new();
     for t in TicketRepo::board(ledger)? {
         if t.convoy.as_ref() != Some(convoy) {
             continue;
         }
-        let classification = crate::reconcile::classify(ledger, &t, &armada)?;
+        let classification = crate::reconcile::classify(ledger, &t, &armada, stacks)?;
         let dispatched = OrderRepo::get(ledger, &t.key)?.is_some();
         let live_cog = SessionRepo::for_ticket(ledger, &t.key)?
             .into_iter()
@@ -526,6 +525,9 @@ mod tests {
     impl Forge for FakeForge {
         fn preflight(&self) -> Result<String> {
             Ok("fake".into())
+        }
+        fn stacks(&self) -> bool {
+            true
         }
         fn armada(&self) -> Result<Vec<ForgeShip>> {
             Ok(vec![])
@@ -1036,7 +1038,7 @@ mod tests {
         TicketRepo::upsert(&db, &t("PROJ-2", "PROJ-100", TicketStatus::Done)).unwrap(); // not ready
         TicketRepo::upsert(&db, &t("PROJ-9", "PROJ-200", TicketStatus::Todo)).unwrap(); // other convoy
 
-        let view = build_convoy_view(&db, &ConvoyKey("PROJ-100".into())).unwrap();
+        let view = build_convoy_view(&db, &ConvoyKey("PROJ-100".into()), true).unwrap();
         assert_eq!(view.tickets.len(), 2, "scoped to the convoy");
         let a = view.tickets.iter().find(|x| x.key == TicketKey("PROJ-1".into())).unwrap();
         assert_eq!(a.classification, Some(Classification::Clean), "To Do + unblocked");

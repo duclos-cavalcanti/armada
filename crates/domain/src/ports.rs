@@ -134,6 +134,9 @@ pub trait Forge {
     /// Preflight: verify this adapter can work — its CLI is installed, authenticated, and reaches
     /// the configured target. `Ok` carries a one-line confirmation for the checklist.
     fn preflight(&self) -> Result<String>;
+    /// Can this forge stack MRs — declare one MR blocked by another (`block_on`)? When false the
+    /// fleet never dispatches a stacked child: it waits for its parent to merge instead.
+    fn stacks(&self) -> bool;
     /// Every open MR (ours + allies = the armada), each as a `ForgeShip` DTO.
     fn armada(&self) -> Result<Vec<ForgeShip>>;
     fn snapshot(&self, iid: i64) -> Result<ForgeShip>;

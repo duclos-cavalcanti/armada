@@ -37,7 +37,8 @@ git clone git@gitlab.com:<project> worktrees/master
 
 Integrations are chosen in `fleet.toml` (`[forge]`, `[tracker]`); initialize each CLI once:
 
-- **Forges:** GitLab — `glab auth login`. GitHub (`gh`) — planned.
+- **Forges:** GitLab — `glab auth login`. GitHub — `gh auth login`; enable "Allow auto-merge" and
+  protect the default branch with your CI check. GitHub has no MR dependencies, so it doesn't stack.
 - **Trackers:** Jira — `jira init` (its board is the one claimed tickets join the active
   sprint of). Filesystem — planned.
 

@@ -92,6 +92,10 @@ impl Forge for GlabForge {
         Ok(format!("glab logged in · project {path}"))
     }
 
+    fn stacks(&self) -> bool {
+        true // MR dependencies via /blocks
+    }
+
     fn armada(&self) -> Result<Vec<ForgeShip>> {
         let json = self.api(&format!(
             "projects/{}/merge_requests?state=opened&per_page=100",

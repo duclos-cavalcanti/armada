@@ -47,8 +47,8 @@ path = "worktrees/master"
 # Deployment-specific, so there is no built-in default: fleetd refuses to start without it.
 # Kept last — every key after a `[table]` header belongs to that table.
 [forge]
-kind       = "gitlab"    # the forge adapter (only "gitlab" so far)
-project    = "12345678"  # the forge's project id (FLEET_FORGE_PROJECT)
+kind       = "gitlab"    # the forge adapter: "gitlab" | "github"
+project    = "12345678"  # GitLab project id, or GitHub "owner/repo" (FLEET_FORGE_PROJECT)
 auto_merge = true        # dispatch default: the sailor arms auto-merge; false = it waits for you to merge
 
 # --- tracker (REQUIRED) — where tickets live ---
