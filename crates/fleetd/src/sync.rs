@@ -111,6 +111,9 @@ mod tests {
         fn disarm(&self, _: i64) -> Result<()> {
             Ok(())
         }
+        fn set_draft(&self, _: i64, _: bool) -> Result<()> {
+            Ok(())
+        }
         fn open_mr(&self, _: &domain::MrDraft) -> Result<String> {
             Ok("https://x/1".into())
         }

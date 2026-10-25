@@ -9,12 +9,15 @@ Accepted edge cases: understood, not fixed, each with its workaround.
   nothing to stop it. GitLab stops it only once PROJ-9 has an open MR, because that's
   when reconcile declares the `/blocks` dependency.
   *Workaround:* a late dependency is the operator's or captain's call. Run
-  `fleetc hold PROJ-2`: the hold disarms the MR on either forge. `fleetc unhold` it
+  `fleetc hold PROJ-2`: the hold disarms the MR and marks it draft. `fleetc unhold` it
   once PROJ-9 lands, and a fresh sailor re-sweeps it.
-  *Fix if it bites:* reconcile disarms an armed MR on its own when a blocker appears.
+  *Fix if it bites:* reconcile holds an armed MR on its own when a blocker appears.
 
-- **A hold during a live sailor's sweep can be re-armed.**
+- **On a forge without drafts, a hold during a live sailor's sweep can be re-armed.**
   *Scenario:* a sailor is mid-sweep on PROJ-2 when you run `fleetc hold PROJ-2`. The hold
-  disarms the MR, then the sailor finishes its sweep and arms it again.
+  disarms the MR, then the sailor finishes its sweep and arms it again. Where the forge
+  supports drafts (GitLab; GitHub public repos and paid plans) the hold's draft blocks
+  the merge anyway. Where it doesn't (GitHub private repos on some plans), `fleetc hold`
+  reports that the draft step failed, and the re-arm can still merge.
   *Workaround:* hold again once the sailor reports `sleeping` (the sweep is short).
   *Fix:* step 7 routes arming through `fleetc`, and the server refuses to arm a held ticket.

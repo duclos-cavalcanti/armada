@@ -633,7 +633,8 @@ fn handoff<T: Tracker, H: SessionHost, F: Forge>(
     // 1. Move Jira In Progress → In QA.
     tracker.transition(&tkey, TicketStatus::InQa)?;
 
-    // 2. Request the team's review on the now-ready MR — once, here. Best-effort: a glab hiccup
+    // 2. Mark the MR ready (a draft is the pre-review state) + request the team's review — once,
+    //    here. Best-effort: a forge hiccup
     //    (or an MR not yet queryable) must not lose the In-QA transition + reap. The forge resolves
     //    the iid from the ticket's branch, so the ship needn't be in our ledger yet.
     match forge.request_review(&tkey) {
@@ -1635,6 +1636,9 @@ mod tests {
             Ok(())
         }
         fn disarm(&self, _iid: i64) -> Result<()> {
+            Ok(())
+        }
+        fn set_draft(&self, _: i64, _: bool) -> Result<()> {
             Ok(())
         }
         fn open_mr(&self, _: &domain::MrDraft) -> Result<String> {

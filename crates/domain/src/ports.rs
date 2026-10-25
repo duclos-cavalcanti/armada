@@ -150,12 +150,15 @@ pub trait Forge {
     /// Cancel an armed auto-merge, so the MR won't merge on its own. Idempotent — an unarmed MR is
     /// a success no-op. A hold calls it: an armed MR lives on the forge, beyond the fleet's gates.
     fn disarm(&self, iid: i64) -> Result<()>;
+    /// Mark the MR draft (`true`: it can't merge, armed or not) or ready (`false`). Idempotent — an
+    /// MR already in that state is a success no-op. Errors where the forge has no drafts.
+    fn set_draft(&self, iid: i64, draft: bool) -> Result<()>;
     /// Open a new MR from `draft` (the source branch is already pushed), assigned to the fleet's
     /// user. Returns its URL; the next sync picks the MR up into the armada.
     fn open_mr(&self, draft: &MrDraft) -> Result<String>;
-    /// Hand our ready MR to the team's review: resolve the reviewer set from the project's approval
-    /// rules (the server-side "team", minus the author), assign them on the ticket's open MR, and
-    /// return the set. Called once at handoff — the MR may not be in the ledger yet, so the forge
+    /// Hand our MR to the team's review: mark it ready (a draft is the pre-review state), resolve
+    /// the reviewer set (GitLab: the approval rules' approvers, minus the author), assign them, and
+    /// return the set — empty where the forge requests review itself (GitHub's CODEOWNERS on ready). Called once at handoff — the MR may not be in the ledger yet, so the forge
     /// resolves the iid from the ticket's branch itself.
     fn request_review(&self, ticket: &TicketKey) -> Result<Vec<String>>;
 }

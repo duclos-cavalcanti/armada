@@ -208,6 +208,18 @@ impl Forge for GlabForge {
         Ok(stdout.lines().rev().find(|l| l.trim_start().starts_with("http")).unwrap_or(stdout.trim()).trim().to_string())
     }
 
+    fn set_draft(&self, iid: i64, draft: bool) -> Result<()> {
+        let mr: serde_json::Value =
+            serde_json::from_str(&self.api(&format!("projects/{}/merge_requests/{iid}", self.project))?)?;
+        if mr.get("draft").and_then(|x| x.as_bool()).unwrap_or(false) == draft {
+            return Ok(()); // already there
+        }
+        let flag = if draft { "--draft" } else { "--ready" };
+        let out = Command::new("glab").args(["mr", "update", &iid.to_string(), "-R", &self.repo()?, flag]).output()?;
+        ensure!(out.status.success(), "glab mr update {flag} failed: {}", String::from_utf8_lossy(&out.stderr));
+        Ok(())
+    }
+
     fn arm_merge(&self, iid: i64) -> Result<()> {
         let repo = self.repo()?;
         let out = Command::new("glab")
@@ -223,8 +235,9 @@ impl Forge for GlabForge {
         let ship = self
             .armada()?
             .into_iter()
-            .find(|s| s.ticket.as_ref() == Some(ticket) && s.state == ShipState::Open)
+            .find(|s| s.ticket.as_ref() == Some(ticket) && matches!(s.state, ShipState::Open | ShipState::Draft))
             .ok_or_else(|| anyhow!("request_review {}: no open MR for the ticket", ticket.0))?;
+        self.set_draft(ship.iid, false)?; // review starts at ready
 
         // Team = the approval rules' eligible approvers (the server-side "team"), unique, minus the
         // author (GitLab rejects the author as their own reviewer).

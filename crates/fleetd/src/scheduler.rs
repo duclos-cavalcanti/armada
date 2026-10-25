@@ -244,18 +244,22 @@ fn launch(ledger: &Ledger, forge: &dyn Forge, l: Launch) -> Result<String> {
     forge.open_mr(&MrDraft { source, target, title: l.title, description: l.description, draft: l.draft })
 }
 
-/// Hold or release a ticket. A hold also disarms the ticket's open MR (an armed MR merges on the
-/// forge's own say, past every fleet gate) and clears its `swept`, so the first pass after release
-/// re-sweeps it: a fresh sailor re-arms it, or reports `awaiting_merge`.
+/// Hold or release a ticket. An armed MR merges on the forge's own say, past every fleet gate, so a
+/// hold also acts on the ticket's open MR: disarm it, clear its `swept` (the first pass after
+/// release re-sweeps: a fresh sailor re-arms, or reports `awaiting_merge`), and mark it draft — a
+/// draft can't merge even if re-armed. Release marks it ready. Each forge step that fails is
+/// reported with what already happened, so the caller can react (e.g. a forge without drafts).
 fn set_held(ledger: &Ledger, forge: &dyn Forge, ticket: &TicketKey, held: bool, reason: Option<&str>) -> Result<()> {
     TicketRepo::set_held(ledger, ticket, held, reason, &now_rfc3339())?;
-    if !held {
-        return Ok(());
-    }
     let open = ledger.armada()?.into_iter().find(|s| s.ticket.as_ref() == Some(ticket) && s.ended_at.is_none());
-    if let Some(ship) = open {
-        forge.disarm(ship.iid).with_context(|| format!("held, but disarming !{} failed", ship.iid))?;
+    let Some(ship) = open else { return Ok(()) };
+    let iid = ship.iid;
+    if held {
+        forge.disarm(iid).with_context(|| format!("held, but disarming !{iid} failed"))?;
         ShipRepo::set_swept(ledger, &ship.id, None)?;
+        forge.set_draft(iid, true).with_context(|| format!("held + disarmed, but couldn't mark !{iid} draft"))?;
+    } else {
+        forge.set_draft(iid, false).with_context(|| format!("released, but couldn't mark !{iid} ready"))?;
     }
     Ok(())
 }
@@ -515,7 +519,9 @@ mod tests {
     #[derive(Default)]
     struct FakeForge {
         disarmed: std::cell::RefCell<Vec<i64>>,
+        drafted: std::cell::RefCell<Vec<(i64, bool)>>,
         opened: std::cell::RefCell<Vec<MrDraft>>,
+        no_drafts: bool, // a forge plan without drafts
     }
     impl Forge for FakeForge {
         fn preflight(&self) -> Result<String> {
@@ -541,6 +547,13 @@ mod tests {
         }
         fn disarm(&self, iid: i64) -> Result<()> {
             self.disarmed.borrow_mut().push(iid);
+            Ok(())
+        }
+        fn set_draft(&self, iid: i64, draft: bool) -> Result<()> {
+            if self.no_drafts {
+                anyhow::bail!("drafts are not available on this repo");
+            }
+            self.drafted.borrow_mut().push((iid, draft));
             Ok(())
         }
         fn open_mr(&self, d: &MrDraft) -> Result<String> {
@@ -609,9 +622,9 @@ mod tests {
     }
 
     #[test]
-    fn hold_disarms_the_open_mr_and_clears_its_sweep() {
-        // An armed MR merges on the forge's own say — so a hold disarms it, and clears `swept` so
-        // the first pass after release re-sweeps (a fresh sailor re-arms). Release touches nothing.
+    fn hold_disarms_and_drafts_the_open_mr_and_release_readies_it() {
+        // An armed MR merges on the forge's own say — so a hold disarms it, clears `swept` so the
+        // first pass after release re-sweeps (a fresh sailor re-arms), and drafts it.
         let db = Ledger::in_memory().unwrap();
         sync::sync_board(&db, &FakeTracker(vec![tt("PROJ-1", TicketStatus::InQa)]), "now").unwrap();
         let ship = Ship {
@@ -637,8 +650,16 @@ mod tests {
         assert!(TicketRepo::get(&db, &key).unwrap().unwrap().held);
 
         set_held(&db, &forge, &key, false, None).unwrap();
-        assert_eq!(forge.disarmed.borrow().len(), 1, "release doesn't touch the forge");
+        assert_eq!(forge.disarmed.borrow().len(), 1, "release doesn't disarm");
+        assert_eq!(*forge.drafted.borrow(), vec![(7, true), (7, false)], "hold drafts, release readies");
         assert!(!TicketRepo::get(&db, &key).unwrap().unwrap().held);
+
+        // A forge without drafts: the hold + disarm stand, and the caller hears what failed.
+        let no_drafts = FakeForge { no_drafts: true, ..Default::default() };
+        let e = format!("{:#}", set_held(&db, &no_drafts, &key, true, None).unwrap_err());
+        assert!(e.contains("held + disarmed, but couldn't mark !7 draft"), "{e}");
+        assert!(TicketRepo::get(&db, &key).unwrap().unwrap().held, "the hold still stands");
+        assert_eq!(*no_drafts.disarmed.borrow(), vec![7]);
     }
 
     #[test]
