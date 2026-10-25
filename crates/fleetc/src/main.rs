@@ -46,7 +46,7 @@ fn run() -> Result<()> {
                  fleetc weigh    --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (resume)\n  \
                  fleetc sink     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (scuttle — hard teardown)\n  \
                  fleetc send     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] <message>   (message into the cog's pane)\n  \
-                 fleetc hold     <KEY-N> [--reason <why>]  (hold off the dispatch frontier)\n  \
+                 fleetc hold     <KEY-N> [--reason <why>]  (hold off the frontier; disarms its open MR)\n  \
                  fleetc unhold   <KEY-N>          (release back onto the frontier)\n  \
                  fleetc packet   <KEY-N>          (the cog's work-packet: order + ship + ticket)\n  \
                  fleetc context  --convoy <KEY> [--format table]   (a captain's convoy slice)\n  \
@@ -196,7 +196,8 @@ fn sink(args: &[String]) -> Result<()> {
 }
 
 /// `fleetc hold <KEY-N> --reason <why>` — hold the ticket off the dispatch frontier (the captain's
-/// groom-gate decision, or an operator lever). `--reason` rides on the `TicketHeld` event.
+/// groom-gate decision, or an operator lever); fleetd also disarms its open MR, if armed. `--reason`
+/// rides on the `TicketHeld` event.
 fn hold(args: &[String]) -> Result<()> {
     let ticket = require_ticket(args, "hold")?;
     let mut reason = None;

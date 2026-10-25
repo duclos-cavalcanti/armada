@@ -920,7 +920,7 @@ fn launch_sailor<H: SessionHost, F: Forge>(
         .ok_or_else(|| anyhow!("launch_sailor {ticket}: no open ship"))?;
 
     let snap = fresh_snapshot(ledger, forge, &ship)?;
-    ShipRepo::set_swept(ledger, &ship.id, &ship_fingerprint(&snap))?;
+    ShipRepo::set_swept(ledger, &ship.id, Some(&ship_fingerprint(&snap)))?;
 
     let worktree = OrderRepo::get(ledger, &tkey)?
         .and_then(|o| o.worktree_path)
@@ -1634,6 +1634,9 @@ mod tests {
         fn arm_merge(&self, _iid: i64) -> Result<()> {
             Ok(())
         }
+        fn disarm(&self, _iid: i64) -> Result<()> {
+            Ok(())
+        }
         fn request_review(&self, ticket: &TicketKey) -> Result<Vec<String>> {
             self.review_requested.borrow_mut().push(ticket.0.clone());
             Ok(vec!["alice".into(), "bob".into()])
@@ -1958,7 +1961,7 @@ mod tests {
         // mark swept = the current fingerprint → nothing changed.
         let s = db.armada().unwrap().into_iter().find(|s| s.iid == 10).unwrap();
         let snap = ShipRepo::snapshot(&db, &s.id).unwrap().unwrap();
-        db.set_swept(&s.id, &ship_fingerprint(&snap)).unwrap();
+        db.set_swept(&s.id, Some(&ship_fingerprint(&snap))).unwrap();
         assert!(plan(&db, &[]).unwrap().is_empty());
     }
 
@@ -1970,7 +1973,7 @@ mod tests {
         mutate(&mut snap);
         db.sync_snapshot(&snap).unwrap();
         let snap = ShipRepo::snapshot(db, &s.id).unwrap().unwrap();
-        db.set_swept(&s.id, &ship_fingerprint(&snap)).unwrap();
+        db.set_swept(&s.id, Some(&ship_fingerprint(&snap))).unwrap();
     }
 
     #[test]

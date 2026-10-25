@@ -8,8 +8,7 @@ Accepted edge cases: understood, not fixed, each with its workaround.
   already lives on the forge, so PROJ-2 merges as soon as CI goes green. GitHub has
   nothing to stop it. GitLab stops it only once PROJ-9 has an open MR, because that's
   when reconcile declares the `/blocks` dependency.
-  *Workaround:* a late dependency is the operator's or captain's call. Cancel the arm by
-  hand: `gh pr merge --disable-auto <n>`, or "Cancel auto-merge" on the GitLab MR. A
-  `fleetc hold` / anchor doesn't do it, because the arm lives on the forge, not in the fleet.
-  *Fix if it bites:* a `Forge::disarm` that reconcile calls when a blocker appears on an
-  armed MR.
+  *Workaround:* a late dependency is the operator's or captain's call. Run
+  `fleetc hold PROJ-2`: the hold disarms the MR on either forge. `fleetc unhold` it
+  once PROJ-9 lands, and a fresh sailor re-sweeps it.
+  *Fix if it bites:* reconcile disarms an armed MR on its own when a blocker appears.

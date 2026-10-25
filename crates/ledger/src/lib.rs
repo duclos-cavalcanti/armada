@@ -851,7 +851,7 @@ impl ShipRepo for Ledger {
         Ok(())
     }
 
-    fn set_swept(&self, id: &ShipId, fingerprint: &str) -> Result<()> {
+    fn set_swept(&self, id: &ShipId, fingerprint: Option<&str>) -> Result<()> {
         self.conn
             .execute("UPDATE ships SET swept = ?2 WHERE id = ?1", params![id.0, fingerprint])?;
         Ok(())

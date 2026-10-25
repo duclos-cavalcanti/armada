@@ -108,6 +108,9 @@ mod tests {
         fn arm_merge(&self, _: i64) -> Result<()> {
             Ok(())
         }
+        fn disarm(&self, _: i64) -> Result<()> {
+            Ok(())
+        }
         fn request_review(&self, _: &domain::TicketKey) -> Result<Vec<String>> {
             Ok(vec![])
         }

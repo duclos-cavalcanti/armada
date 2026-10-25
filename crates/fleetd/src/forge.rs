@@ -61,6 +61,14 @@ impl GlabForge {
         Ok(Approvals { current: (required - left).max(0), required })
     }
 
+    /// Cancel an armed MR's merge-when-pipeline-succeeds (callers check it's armed first).
+    fn cancel_auto_merge(&self, iid: i64) -> Result<()> {
+        let path = format!("projects/{}/merge_requests/{iid}/cancel_merge_when_pipeline_succeeds", self.project);
+        let out = Command::new("glab").args(["api", "--method", "POST", &path]).output()?;
+        ensure!(out.status.success(), "glab cancel auto-merge failed: {}", String::from_utf8_lossy(&out.stderr));
+        Ok(())
+    }
+
     /// The OWNER/REPO path of the configured project — `glab mr` SUBCOMMANDS need it via `-R`.
     /// Unlike `glab api projects/{id}/…` (which pins the project in the REST path), `glab mr <verb>`
     /// resolves its repo from `-R` or the ambient CWD git remote — so without this it shells against
@@ -120,17 +128,7 @@ impl Forge for GlabForge {
             let conflicted = v.get("has_conflicts").and_then(|x| x.as_bool()).unwrap_or(false)
                 || v.get("detailed_merge_status").and_then(|x| x.as_str()) == Some("conflict");
             if armed && conflicted {
-                let _ = Command::new("glab")
-                    .args([
-                        "api",
-                        "--method",
-                        "POST",
-                        &format!(
-                            "projects/{}/merge_requests/{iid}/cancel_merge_when_pipeline_succeeds",
-                            self.project
-                        ),
-                    ])
-                    .output();
+                let _ = self.cancel_auto_merge(iid);
             }
         }
         let out = Command::new("glab")
@@ -180,6 +178,15 @@ impl Forge for GlabForge {
             .output()?;
         ensure!(out.status.success(), "block_on failed: {}", String::from_utf8_lossy(&out.stderr));
         Ok(())
+    }
+
+    fn disarm(&self, iid: i64) -> Result<()> {
+        let mr: serde_json::Value =
+            serde_json::from_str(&self.api(&format!("projects/{}/merge_requests/{iid}", self.project))?)?;
+        if !mr.get("merge_when_pipeline_succeeds").and_then(|x| x.as_bool()).unwrap_or(false) {
+            return Ok(()); // not armed — GitLab would 406 the cancel
+        }
+        self.cancel_auto_merge(iid)
     }
 
     fn arm_merge(&self, iid: i64) -> Result<()> {

@@ -54,7 +54,8 @@ pub trait ShipRepo {
     fn sync_snapshot(&self, snap: &ShipSnapshot) -> Result<()>;
     fn snapshot(&self, id: &ShipId) -> Result<Option<ShipSnapshot>>;
     /// Record the snapshot fingerprint the last sailor was dispatched against (the sweep lock).
-    fn set_swept(&self, id: &ShipId, fingerprint: &str) -> Result<()>;
+    /// `None` = never swept, so the next ungated pass re-sweeps (a hold's disarm needs a re-arm).
+    fn set_swept(&self, id: &ShipId, fingerprint: Option<&str>) -> Result<()>;
     /// Record the `head_sha` the last lookout reviewed (the review cold-loop change-detector).
     fn set_reviewed(&self, id: &ShipId, head_sha: &str) -> Result<()>;
 }
@@ -146,6 +147,9 @@ pub trait Forge {
     /// edge is a success no-op. The reconcile BLOCK pass converges these from the ticket graph.
     fn block_on(&self, child_iid: i64, parent_iid: i64) -> Result<()>;
     fn arm_merge(&self, iid: i64) -> Result<()>;
+    /// Cancel an armed auto-merge, so the MR won't merge on its own. Idempotent — an unarmed MR is
+    /// a success no-op. A hold calls it: an armed MR lives on the forge, beyond the fleet's gates.
+    fn disarm(&self, iid: i64) -> Result<()>;
     /// Hand our ready MR to the team's review: resolve the reviewer set from the project's approval
     /// rules (the server-side "team", minus the author), assign them on the ticket's open MR, and
     /// return the set. Called once at handoff — the MR may not be in the ledger yet, so the forge

@@ -78,7 +78,8 @@ can't — a grooming glance — then act on it:
 3. **Too ill-formed to build** (no clear ACs, ambiguous scope) → **hold it**, don't
    dispatch guesswork: `fleetc hold <TICKET> --reason "<what's missing>"`, and leave
    the same note as a Jira comment (where the operator grooms it). The hold drops the
-   ticket off the frontier; the operator grooms it and `fleetc unhold`s it back.
+   ticket off the frontier (and disarms its MR, if one is armed); the operator grooms it
+   and `fleetc unhold`s it back.
 
 Work the **whole** `clean` frontier each pass — dispatch the good, hold the rest.
 Leaving a `clean` ticket untouched only re-triggers you next tick. Express true

@@ -13,7 +13,7 @@ use crate::settings;
 use crate::tmux::TmuxHost;
 use crate::tracker::JiraTracker;
 use crate::{context, now_rfc3339, reconcile, sync, Snapshot};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use domain::ports::{
     ConvoyRepo, EventLog, Forge, LookoutRepo, OrderRepo, ReportRepo, SessionHost, SessionRepo,
     ShipRepo, TicketRepo, Tracker,
@@ -180,8 +180,7 @@ fn apply(ledger: &Ledger, tracker: &JiraTracker, host: &TmuxHost, forge: &GlabFo
             let _ = reply.send(res);
         }
         Command::SetHeld { ticket, held, reason, reply } => {
-            let res = TicketRepo::set_held(ledger, &ticket, held, reason.as_deref(), &now_rfc3339())
-                .map_err(|e| e.to_string());
+            let res = set_held(ledger, forge, &ticket, held, reason.as_deref()).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
         Command::GetPacket { ticket, reply } => {
@@ -210,6 +209,22 @@ fn apply(ledger: &Ledger, tracker: &JiraTracker, host: &TmuxHost, forge: &GlabFo
             let _ = reply.send(Ok(settings::report(cfg, ledger)));
         }
     }
+}
+
+/// Hold or release a ticket. A hold also disarms the ticket's open MR (an armed MR merges on the
+/// forge's own say, past every fleet gate) and clears its `swept`, so the first pass after release
+/// re-sweeps it: a fresh sailor re-arms it, or reports `awaiting_merge`.
+fn set_held(ledger: &Ledger, forge: &dyn Forge, ticket: &TicketKey, held: bool, reason: Option<&str>) -> Result<()> {
+    TicketRepo::set_held(ledger, ticket, held, reason, &now_rfc3339())?;
+    if !held {
+        return Ok(());
+    }
+    let open = ledger.armada()?.into_iter().find(|s| s.ticket.as_ref() == Some(ticket) && s.ended_at.is_none());
+    if let Some(ship) = open {
+        forge.disarm(ship.iid).with_context(|| format!("held, but disarming !{} failed", ship.iid))?;
+        ShipRepo::set_swept(ledger, &ship.id, None)?;
+    }
+    Ok(())
 }
 
 /// Compose a captain's convoy slice: every ticket in the convoy, each marked `ready` (fleetd's
@@ -464,7 +479,7 @@ mod tests {
     use domain::ports::EventLog;
     use domain::*;
 
-    struct FakeForge(Vec<ForgeShip>);
+    struct FakeForge(Vec<ForgeShip>, std::cell::RefCell<Vec<i64>>); // (armada, disarmed iids)
     impl Forge for FakeForge {
         fn preflight(&self) -> Result<String> {
             Ok("fake".into())
@@ -485,6 +500,10 @@ mod tests {
             Ok(())
         }
         fn arm_merge(&self, _: i64) -> Result<()> {
+            Ok(())
+        }
+        fn disarm(&self, iid: i64) -> Result<()> {
+            self.1.borrow_mut().push(iid);
             Ok(())
         }
         fn request_review(&self, _: &TicketKey) -> Result<Vec<String>> {
@@ -549,6 +568,39 @@ mod tests {
     }
 
     #[test]
+    fn hold_disarms_the_open_mr_and_clears_its_sweep() {
+        // An armed MR merges on the forge's own say — so a hold disarms it, and clears `swept` so
+        // the first pass after release re-sweeps (a fresh sailor re-arms). Release touches nothing.
+        let db = Ledger::in_memory().unwrap();
+        sync::sync_board(&db, &FakeTracker(vec![tt("PROJ-1", TicketStatus::InQa)]), "now").unwrap();
+        let ship = Ship {
+            id: ShipId(0),
+            ticket: Some(TicketKey("PROJ-1".into())),
+            iid: 7,
+            url: "u".into(),
+            target: "master".into(),
+            pilot: "me".into(),
+            created_at: "t".into(),
+            ended_at: None,
+            swept: None,
+            reviewed: None,
+        };
+        let sid = ShipRepo::upsert(&db, &ship).unwrap();
+        db.set_swept(&sid, Some("fp")).unwrap();
+        let forge = FakeForge(vec![], Default::default());
+        let key = TicketKey("PROJ-1".into());
+
+        set_held(&db, &forge, &key, true, Some("late dependency")).unwrap();
+        assert_eq!(*forge.1.borrow(), vec![7], "the hold disarmed !7");
+        assert_eq!(db.get_by_iid(7).unwrap().unwrap().swept, None, "swept cleared → re-sweep on release");
+        assert!(TicketRepo::get(&db, &key).unwrap().unwrap().held);
+
+        set_held(&db, &forge, &key, false, None).unwrap();
+        assert_eq!(forge.1.borrow().len(), 1, "release doesn't touch the forge");
+        assert!(!TicketRepo::get(&db, &key).unwrap().unwrap().held);
+    }
+
+    #[test]
     fn ensure_ticket_leaves_a_synced_ticket_untouched() {
         // Already in the ledger → no refetch (the empty tracker's get() would error if called).
         let db = Ledger::in_memory().unwrap();
@@ -561,7 +613,7 @@ mod tests {
     #[test]
     fn sync_tick_records_a_tickran_event_with_counts() {
         let db = Ledger::in_memory().unwrap();
-        let forge = FakeForge(vec![]);
+        let forge = FakeForge(vec![], Default::default());
         let tracker = FakeTracker(vec![TrackerTicket {
             key: TicketKey("PROJ-1".into()),
             title: "T".into(),
