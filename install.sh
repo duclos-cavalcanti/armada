@@ -5,8 +5,8 @@
 # The repo ROOT is the source of truth: agents/ and skills/ live at the top level,
 # harness-neutral, and stow into whichever provider you name (claude default; pi,
 # gpt, … → ~/.<harness>). For the CLAUDE harness only, it additionally stows the
-# loose Claude config (.claude/*) into ~/.claude and creates the fleet's runtime
-# home ~/.fleet (fleetd populates it; fleet.toml stays in the repo).
+# loose Claude config (.claude/*) into ~/.claude. The fleet's state isn't installed: each
+# project keeps its own, in projects/<name>/.fleet/ (fleetd creates it on first run).
 #
 # Usage:
 #   ./install.sh                     install for the default harness (claude)
@@ -24,19 +24,10 @@
 #   .claude/*          → ~/.claude/   (loose config: CLAUDE.md, settings.json,
 #                        keybindings.json, scripts/; agent-memory/ + settings.local.json
 #                        are never stowed — project-/machine-scoped)
-#   ~/.fleet/          — the fleet's RUNTIME home, created here (not stowed). fleetd
-#                        writes ledger.db / fleetd.sock / telemetry.db into it; every
-#                        client resolves it off $HOME (no discovery). fleet.toml is NOT
-#                        here — it stays in the repo, read by fleetd directly.
 #
 # HARNESS RESOLUTION — <harness-home> defaults to ~/.<harness> (claude → ~/.claude).
 # Override per-run with --home, or (claude) via $CLAUDE_HOME.
 set -euo pipefail
-
-# The fleet's fixed runtime home — where fleetd keeps ledger.db / fleetd.sock /
-# telemetry.db. A fixed $HOME path (not a repo mirror, not a config var): every cog,
-# fleetc, and the daemon resolve it off $HOME, cwd-independent, no discovery.
-FLEET_RUNTIME="$HOME/.fleet"
 
 # ---- Globals (set in main / resolve_harness) ----
 # CLAUDE_HOME is read from the environment with a $HOME fallback inside resolve_harness
@@ -144,8 +135,6 @@ install() {
     stow_skills
     if [[ "$HARNESS" == "claude" ]]; then
         stow_claude_global
-        mkdir -p "$FLEET_RUNTIME"
-        echo "fleet runtime home: $FLEET_RUNTIME (fleetd populates ledger.db / fleetd.sock / telemetry.db)"
     fi
 }
 
@@ -154,10 +143,6 @@ uninstall() {
     echo "uninstalling agents/ + skills/ from $HARNESS_HOME (harness: $HARNESS)"
     if [[ "$HARNESS" == "claude" ]]; then
         unstow_claude_global
-        # Remove the fleet runtime home + its state (ledger/socket/telemetry). The
-        # ledger is rebuildable from a fresh Jira/glab sync; a fixed path, never a var.
-        rm -rf "$HOME/.fleet"
-        echo "removed fleet runtime home $HOME/.fleet"
     fi
     unstow_skills
     unstow_agents

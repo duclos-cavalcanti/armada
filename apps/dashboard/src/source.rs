@@ -58,8 +58,10 @@ pub struct Fleet {
 impl Fleet {
     /// Read the ledger into a fresh snapshot. Never panics: an unreachable ledger
     /// yields an empty snapshot carrying the error for the UI to surface.
-    pub fn load(ledger_path: &Path) -> Self {
-        match Self::try_load(ledger_path) {
+    pub fn load(project: &wire::Project) -> Self {
+        let ledger_path = PathBuf::from(project.ledger());
+        let ledger_path = ledger_path.as_path();
+        match Self::try_load(ledger_path, &project.socket()) {
             Ok(f) => f,
             Err(e) => Fleet {
                 ledger_path: ledger_path.to_path_buf(),
@@ -75,13 +77,13 @@ impl Fleet {
         }
     }
 
-    fn try_load(ledger_path: &Path) -> anyhow::Result<Self> {
+    fn try_load(ledger_path: &Path, socket: &str) -> anyhow::Result<Self> {
         let db = Ledger::open_readonly(&ledger_path.to_string_lossy())?;
         let now = chrono::Utc::now();
 
         // fleetd's live liveness (keyed by session id) — best-effort; empty if the daemon
         // isn't up, in which case the roster shows report-age alone.
-        let liveness = probe_liveness();
+        let liveness = probe_liveness(socket);
         let mut cogs = Vec::new();
         for session in SessionRepo::live(&db)? {
             let report = ReportRepo::latest(&db, &session.id)?;
@@ -114,12 +116,6 @@ impl Fleet {
             tick: db.latest_tick()?,
         })
     }
-
-    /// The default ledger path (`$HOME/.fleet/ledger.db`) — the one fleetd writes,
-    /// shared from `wire` so writer and reader never disagree on where the door is.
-    pub fn default_ledger_path() -> PathBuf {
-        PathBuf::from(wire::default_ledger())
-    }
 }
 
 /// A ship's most-recent sailor's last self-report (`sleeping` / `finishing` / …), or
@@ -150,9 +146,9 @@ fn age_secs(now: chrono::DateTime<chrono::Utc>, ts: &str) -> Option<i64> {
 /// isn't reachable — the whole dashboard still works off the ledger, just without the
 /// real-time freshness. Liveness is deliberately NOT in the ledger (it'd be stale the
 /// instant it's written); this is the one read that goes to the daemon, not the DB.
-fn probe_liveness() -> std::collections::HashMap<i64, String> {
+fn probe_liveness(socket: &str) -> std::collections::HashMap<i64, String> {
     let mut out = std::collections::HashMap::new();
-    if let Ok((200, body)) = wire::get_json(&wire::default_socket(), "/context") {
+    if let Ok((200, body)) = wire::get_json(socket, "/context") {
         if let Ok(serde_json::Value::Array(cogs)) = serde_json::from_str::<serde_json::Value>(&body) {
             for c in cogs {
                 if let (Some(id), Some(live)) = (c["session"]["id"].as_i64(), c["liveness"].as_str()) {

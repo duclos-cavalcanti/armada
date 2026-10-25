@@ -117,25 +117,67 @@ pub struct SettingCmd {
     pub value: String,
 }
 
-/// The default socket path (`$HOME/.fleet/fleetd.sock`) — the one place the daemon and
-/// every client agree on where the door is.
-pub fn default_socket() -> String {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    format!("{home}/.fleet/fleetd.sock")
+/// A fleet project: the folder holding `fleet.toml`, with its runtime state under `.fleet/`. Every
+/// client — fleetd, fleetc, the dashboard, a cog — finds it the same way: from a start directory
+/// (the cwd, or `-C <dir>`), the nearest folder, itself or a parent, holding `fleet.toml`. Outside
+/// a project there is no fleet to talk to, so `find` fails rather than guess.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Project {
+    pub root: std::path::PathBuf,
 }
 
-/// The default telemetry DB path (`$HOME/.fleet/telemetry.db`) — written by fleetd's collector,
-/// read by `fleetc cost`; one definition shared by writer + reader.
-pub fn default_telemetry_db() -> String {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    format!("{home}/.fleet/telemetry.db")
+impl Project {
+    pub const CONFIG: &'static str = "fleet.toml";
+
+    /// The project enclosing `start` (default: the cwd).
+    pub fn find(start: Option<&std::path::Path>) -> Result<Self> {
+        let start = match start {
+            Some(dir) => std::fs::canonicalize(dir).map_err(|e| anyhow!("-C {}: {e}", dir.display()))?,
+            None => std::env::current_dir()?,
+        };
+        start
+            .ancestors()
+            .find(|dir| dir.join(Self::CONFIG).is_file())
+            .map(|root| Self { root: root.to_path_buf() })
+            .ok_or_else(|| {
+                anyhow!(
+                    "not inside a fleet project: no {} in {} or any parent — cd into projects/<name>, or pass -C projects/<name>",
+                    Self::CONFIG,
+                    start.display()
+                )
+            })
+    }
+
+    pub fn config(&self) -> std::path::PathBuf {
+        self.root.join(Self::CONFIG)
+    }
+    /// `.fleet/` — the runtime state fleetd owns.
+    pub fn runtime(&self) -> std::path::PathBuf {
+        self.root.join(".fleet")
+    }
+    pub fn socket(&self) -> String {
+        self.runtime().join("fleetd.sock").to_string_lossy().into_owned()
+    }
+    pub fn ledger(&self) -> String {
+        self.runtime().join("ledger.db").to_string_lossy().into_owned()
+    }
+    pub fn telemetry_db(&self) -> String {
+        self.runtime().join("telemetry.db").to_string_lossy().into_owned()
+    }
 }
 
-/// The default operational ledger path (`$HOME/.fleet/ledger.db`) — fleetd's single-writer DB,
-/// read-only by `fleetc plan`; one definition shared by the daemon config + the reader.
-pub fn default_ledger() -> String {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    format!("{home}/.fleet/ledger.db")
+/// Split a leading `-C <dir>` off a binary's args (like `git -C`): the directory to find the
+/// project from, and the remaining args.
+pub fn split_dir_flag(mut args: Vec<String>) -> Result<(Option<std::path::PathBuf>, Vec<String>)> {
+    if args.first().map(String::as_str) != Some("-C") {
+        return Ok((None, args));
+    }
+    args.remove(0);
+    if args.is_empty() {
+        return Err(anyhow!("-C needs a directory"));
+    }
+    let dir = std::path::PathBuf::from(args.remove(0));
+    Ok((Some(dir), args))
 }
 
 /// POST a JSON body to `path` on the fleetd socket; returns `(status_code, body)`.
@@ -179,6 +221,34 @@ fn parse_response(resp: &str) -> Result<(u16, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_is_the_nearest_folder_holding_fleet_toml() {
+        let tmp = std::env::temp_dir().join(format!("wire-project-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let deep = tmp.join("projects/p/chore-X-1-foo/src");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(tmp.join("projects/p/fleet.toml"), "").unwrap();
+        let root = std::fs::canonicalize(tmp.join("projects/p")).unwrap();
+
+        let p = Project::find(Some(&deep)).unwrap();
+        assert_eq!(p.root, root, "found from a worktree, any depth down");
+        assert!(p.socket().ends_with("projects/p/.fleet/fleetd.sock"));
+        assert!(p.ledger().ends_with("projects/p/.fleet/ledger.db"));
+
+        let e = Project::find(Some(&tmp)).unwrap_err().to_string();
+        assert!(e.contains("not inside a fleet project"), "{e}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn splits_a_leading_dir_flag() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (dir, rest) = split_dir_flag(args(&["-C", "projects/p", "status", "--x"])).unwrap();
+        assert_eq!((dir.unwrap(), rest), (std::path::PathBuf::from("projects/p"), args(&["status", "--x"])));
+        assert_eq!(split_dir_flag(args(&["status"])).unwrap(), (None, args(&["status"])));
+        assert!(split_dir_flag(args(&["-C"])).is_err());
+    }
 
     #[test]
     fn parses_status_line_and_body() {

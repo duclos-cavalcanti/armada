@@ -13,8 +13,24 @@ fn main() {
     }
 }
 
+/// The fleet project this invocation talks to — the one enclosing the cwd, or `-C <dir>`'s.
+/// Resolved once in `run` (before any verb), so every socket + ledger read agrees.
+static PROJECT: std::sync::OnceLock<wire::Project> = std::sync::OnceLock::new();
+
+fn project_dir() -> &'static wire::Project {
+    PROJECT.get().expect("the project is resolved before any verb runs")
+}
+
+/// The project's fleetd socket.
+fn socket() -> String {
+    project_dir().socket()
+}
+
 fn run() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (dir, args) = wire::split_dir_flag(std::env::args().skip(1).collect())?;
+    if !args.is_empty() {
+        PROJECT.set(wire::Project::find(dir.as_deref())?).expect("set once");
+    }
     match args.first().map(String::as_str) {
         Some("status") => status(&args[1..]),
         Some("dispatch") => dispatch(&args[1..]),
@@ -38,7 +54,7 @@ fn run() -> Result<()> {
         Some("cost") => cost(&args[1..]),
         _ => {
             eprintln!(
-                "usage:\n  \
+                "usage: fleetc [-C <project-dir>] <verb> …   (the project: the cwd's, or -C's — nearest folder with a fleet.toml)\n  \
                  fleetc status   --cog <worker|sailor|hand> --ticket <KEY-N> --state <state> [--last-action <text>]\n  \
                  fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--hold] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
                  fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
@@ -51,14 +67,14 @@ fn run() -> Result<()> {
                  fleetc unhold   <KEY-N>          (release back onto the frontier; readies its MR)\n  \
                  fleetc packet   <KEY-N>          (the cog's work-packet: order + ship + ticket)\n  \
                  fleetc context  --convoy <KEY> [--format table]   (a captain's convoy slice)\n  \
-                 fleetc plan     [--db <path>]     (fleetd's latest reconcile plan — the parity lens)\n  \
+                 fleetc plan                       (fleetd's latest reconcile plan — the parity lens)\n  \
                  fleetc transcript --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] [--open]   (resolve a cog's transcript)\n  \
                  fleetc review   --iid <N>         (an MR's fresh review surface: open-thread count + floating notes)\n  \
                  fleetc rebase   --iid <N>         (server-side rebase an MR)\n  \
                  fleetc launch   --title <t> --body <text> [--ticket <KEY-N>] [--target <branch>] [--draft] [--worktree <path>]   (open the MR for the worktree's branch; prints its URL)\n  \
                  fleetc settings [list | set <key> <value>]   (live config levers; no restart)\n  \
                  fleetc project                   (the project checkout's path, from fleet.toml)\n  \
-                 fleetc cost     [--since <RFC3339>] [--db <path>]"
+                 fleetc cost     [--since <RFC3339>]"
             );
             std::process::exit(2);
         }
@@ -223,7 +239,7 @@ fn unhold(args: &[String]) -> Result<()> {
 /// ticket) from fleetd and print it as JSON. The sailor's boot read; also handy for an operator.
 fn packet(args: &[String]) -> Result<()> {
     let ticket = require_ticket(args, "packet")?;
-    let socket = std::env::var("FLEET_SOCK").unwrap_or_else(|_| wire::default_socket());
+    let socket = socket();
     let (code, body) = wire::get_json(&socket, &format!("/packet?ticket={ticket}"))?;
     if code == 200 {
         println!("{body}");
@@ -249,7 +265,7 @@ fn context(args: &[String]) -> Result<()> {
         }
     }
     let convoy = convoy_key(&convoy.ok_or_else(|| anyhow!("context needs --convoy <KEY>"))?, "context")?;
-    let socket = std::env::var("FLEET_SOCK").unwrap_or_else(|_| wire::default_socket());
+    let socket = socket();
     let (code, body) = wire::get_json(&socket, &format!("/context?convoy={convoy}"))?;
     if code != 200 {
         bail!("fleetd ({code}): {body}");
@@ -390,7 +406,7 @@ fn parse_send(args: &[String]) -> Result<wire::SendMsg> {
 
 /// POST a validated DTO to fleetd and turn a non-200 into a clear error.
 fn submit<T: serde::Serialize>(path: &str, body: &T) -> Result<()> {
-    let socket = std::env::var("FLEET_SOCK").unwrap_or_else(|_| wire::default_socket());
+    let socket = socket();
     let (code, resp) = wire::post_json(&socket, path, body)?;
     if code == 200 {
         Ok(())
@@ -401,18 +417,12 @@ fn submit<T: serde::Serialize>(path: &str, body: &T) -> Result<()> {
 
 /// `fleetc plan` — show fleetd's latest reconcile plan: what it *would* do (dry-run: `planned[]`)
 /// or *did* (live: `applied[]`/`failed[]`) last tick. The parity lens — read-only, so it works
-/// while fleetd writes. `--db <path>` overrides the ledger location (default `$HOME/.fleet/ledger.db`,
-/// or `$FLEET_LEDGER`).
+/// while fleetd writes. Reads the project's `.fleet/ledger.db`.
 fn plan(args: &[String]) -> Result<()> {
-    let mut db = None;
-    let mut it = args.iter();
-    while let Some(flag) = it.next() {
-        match flag.as_str() {
-            "--db" => db = Some(it.next().cloned().ok_or_else(|| anyhow!("--db needs a value"))?),
-            other => bail!("unknown flag: {other}"),
-        }
+    if let Some(flag) = args.first() {
+        bail!("unknown flag: {flag}");
     }
-    let db = db.or_else(|| std::env::var("FLEET_LEDGER").ok()).unwrap_or_else(wire::default_ledger);
+    let db = project_dir().ledger();
     let ledger = match ledger::Ledger::open_readonly(&db) {
         Ok(l) => l,
         Err(_) => {
@@ -474,7 +484,7 @@ fn transcript(args: &[String]) -> Result<()> {
     let rest: Vec<String> = args.iter().filter(|a| a.as_str() != "--open").cloned().collect();
     let target = require_cog_target(&rest, "transcript")?;
 
-    let db = std::env::var("FLEET_LEDGER").ok().unwrap_or_else(wire::default_ledger);
+    let db = project_dir().ledger();
     let ledger = ledger::Ledger::open_readonly(&db).map_err(|_| anyhow!("no ledger yet ({db})"))?;
 
     let kind = CrewKind::parse(&target.cog).ok_or_else(|| anyhow!("unknown --cog {:?}", target.cog))?;
@@ -539,7 +549,7 @@ fn newest_jsonl(dir: &std::path::Path) -> Option<std::path::PathBuf> {
 /// Routes through fleetd (fresh — a cog resolving review needs current state).
 fn review(args: &[String]) -> Result<()> {
     let iid = require_iid(args, "review")?;
-    let socket = std::env::var("FLEET_SOCK").unwrap_or_else(|_| wire::default_socket());
+    let socket = socket();
     let (code, body) = wire::get_json(&socket, &format!("/review?iid={iid}"))?;
     if code != 200 {
         bail!("fleetd ({code}): {body}");
@@ -590,7 +600,7 @@ fn launch(args: &[String]) -> Result<()> {
 
 /// POST `body` to fleetd and print its reply body (an action whose reply is the result).
 fn post_and_print<T: serde::Serialize>(path: &str, body: &T) -> Result<()> {
-    let socket = std::env::var("FLEET_SOCK").unwrap_or_else(|_| wire::default_socket());
+    let socket = socket();
     let (code, resp) = wire::post_json(&socket, path, body)?;
     if code != 200 {
         bail!("fleetd ({code}): {resp}");
@@ -632,7 +642,7 @@ fn settings(args: &[String]) -> Result<()> {
 /// `fleetc project` — print the project checkout's path (fleet.toml `[project] path`, as fleetd
 /// resolved it). How skills (fleet-berth) find the project from any cwd, for anyone.
 fn project() -> Result<()> {
-    let socket = std::env::var("FLEET_SOCK").unwrap_or_else(|_| wire::default_socket());
+    let socket = socket();
     let (code, body) = wire::get_json(&socket, "/project")?;
     if code != 200 {
         bail!("fleetd ({code}): {body}");
@@ -643,7 +653,7 @@ fn project() -> Result<()> {
 
 /// `fleetc settings list` — fetch every live lever's effective value + source and render a table.
 fn settings_list() -> Result<()> {
-    let socket = std::env::var("FLEET_SOCK").unwrap_or_else(|_| wire::default_socket());
+    let socket = socket();
     let (code, body) = wire::get_json(&socket, "/settings")?;
     if code != 200 {
         bail!("fleetd ({code}): {body}");
@@ -668,17 +678,16 @@ fn render_settings(json: &str) -> Result<String> {
 /// fleetd writes). A one-off `claude` (no attribution) rolls up under `interactive`.
 /// `--since <RFC3339>` windows it; default = all time.
 fn cost(args: &[String]) -> Result<()> {
-    let (mut db, mut since) = (None, None);
+    let mut since = None;
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
         match flag.as_str() {
-            "--db" => db = Some(take()?),
             "--since" => since = Some(take()?),
             other => bail!("unknown flag: {other}"),
         }
     }
-    let db = db.unwrap_or_else(wire::default_telemetry_db);
+    let db = project_dir().telemetry_db();
     let since = since.unwrap_or_default();
 
     let store = match ledger::telemetry::TelemetryStore::open_readonly(&db) {

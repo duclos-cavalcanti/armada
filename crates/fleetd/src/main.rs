@@ -73,14 +73,16 @@ fn now_rfc3339() -> String {
     time::OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default()
 }
 
+/// `fleetd [-C <dir>] [sync | preflight]` — the project is the one enclosing the cwd (or `<dir>`).
 fn main() -> Result<()> {
-    match std::env::args().nth(1).as_deref() {
-        Some("sync") => run_sync(),
-        Some("preflight") => {
-            let cfg = config::Config::load()?;
-            preflight(&cfg, forge(&cfg).as_ref(), &tracker(&cfg), &TmuxHost::new())
-        }
-        _ => run_daemon(),
+    let (dir, args) = wire::split_dir_flag(std::env::args().skip(1).collect())?;
+    let project = wire::Project::find(dir.as_deref())?;
+    let cfg = config::Config::load(&project)?;
+    match args.first().map(String::as_str) {
+        Some("sync") => run_sync(&project, &cfg),
+        Some("preflight") => preflight(&project, &cfg, forge(&cfg).as_ref(), &tracker(&cfg), &TmuxHost::new()),
+        None => run_daemon(&project, cfg),
+        Some(other) => anyhow::bail!("unknown command {other:?} — usage: fleetd [-C <dir>] [sync | preflight]"),
     }
 }
 
@@ -97,10 +99,17 @@ fn tracker(cfg: &config::Config) -> tracker::JiraTracker {
     tracker::JiraTracker::new(&cfg.tracker.project, cfg.tracker.claim_label.clone())
 }
 
-/// Every adapter's preflight + the project checkout, as one checklist (`fleetd preflight`, and
-/// the boot gate before ONLINE).
-fn preflight(cfg: &config::Config, forge: &dyn Forge, tracker: &dyn Tracker, host: &dyn SessionHost) -> Result<()> {
+/// Every adapter's preflight + the project's runtime state + its checkout, as one checklist
+/// (`fleetd preflight`, and the boot gate before ONLINE).
+fn preflight(
+    project: &wire::Project,
+    cfg: &config::Config,
+    forge: &dyn Forge,
+    tracker: &dyn Tracker,
+    host: &dyn SessionHost,
+) -> Result<()> {
     preflight::report(&[
+        ("runtime", preflight::runtime(project)),
         ("project", git::GitWorktrees::new(&cfg.project.path).preflight()),
         ("forge", forge.preflight()),
         ("tracker", tracker.preflight()),
@@ -110,30 +119,29 @@ fn preflight(cfg: &config::Config, forge: &dyn Forge, tracker: &dyn Tracker, hos
 
 /// One-shot: pull the armada from the forge into the ledger. The scheduler will run
 /// this on a slow cadence later; `fleetd sync` lets an operator trigger it now.
-fn run_sync() -> Result<()> {
-    let cfg = config::Config::load()?;
-    let ledger = Ledger::open(&cfg.ledger)?;
+fn run_sync(project: &wire::Project, cfg: &config::Config) -> Result<()> {
+    preflight::runtime(project)?;
+    let ledger = Ledger::open(&project.ledger())?;
     let now = now_rfc3339();
     // Board first so ships can link their ticket FK.
-    let tickets = sync::sync_board(&ledger, &tracker(&cfg), &now)?;
-    let ships = sync::sync_armada(&ledger, forge(&cfg).as_ref(), &now)?;
+    let tickets = sync::sync_board(&ledger, &tracker(cfg), &now)?;
+    let ships = sync::sync_armada(&ledger, forge(cfg).as_ref(), &now)?;
     println!("fleetd sync: {tickets} tickets + {ships} ships synced to the ledger");
     Ok(())
 }
 
-fn run_daemon() -> Result<()> {
-    let cfg = config::Config::load()?;
+fn run_daemon(project: &wire::Project, cfg: config::Config) -> Result<()> {
     let (host, forge, tracker) = (TmuxHost::new(), forge(&cfg), tracker(&cfg));
-    println!("fleetd: preflight");
-    preflight(&cfg, forge.as_ref(), &tracker, &host)?;
-    let ledger = Ledger::open(&cfg.ledger)?;
+    println!("fleetd: preflight · {}", project.root.display());
+    preflight(project, &cfg, forge.as_ref(), &tracker, &host)?;
+    let ledger = Ledger::open(&project.ledger())?;
 
     // Seed the snapshot once so /context isn't empty before the first poll.
     let snapshot: Snapshot = Arc::new(Mutex::new(context(&ledger, &host, &cfg.thresholds())?));
 
     // Built-in OTLP collector: open telemetry.db (separate from the ledger) + serve the OTLP/HTTP
     // receiver on its own thread, so cog + one-off claude spend lands in telemetry.db.
-    let telemetry = Arc::new(Mutex::new(ledger::telemetry::TelemetryStore::open(&cfg.telemetry_db)?));
+    let telemetry = Arc::new(Mutex::new(ledger::telemetry::TelemetryStore::open(&project.telemetry_db())?));
     let otel_addr = cfg.otel_addr.clone();
     std::thread::spawn(move || {
         if let Err(e) = collector::serve(&otel_addr, telemetry) {
@@ -144,7 +152,7 @@ fn run_daemon() -> Result<()> {
     // The scheduler owns the ledger (single writer), paces the tickers, and drains
     // client write Commands off this channel; the server is the only sender.
     let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
-    let socket = cfg.socket.clone();
+    let socket = project.socket();
     let deployment = server::Deployment {
         project: cfg.project.path.clone(),
         auto_merge: cfg.forge.auto_merge,

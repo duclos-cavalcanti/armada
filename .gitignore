@@ -1,7 +1,7 @@
 # Operator run-directives (per-run /loop scratch — ephemera, not doc canon)
 LOOP.md
 
-# Product overlay: worktrees/ is tracked as a dir via its own .gitignore stub
+# Projects: projects/ is tracked as a dir via its own .gitignore stub
 # (`*` + `!.gitignore` — the dir exists in git, its contents never do).
 
 # Per-developer agent memory — never committed.

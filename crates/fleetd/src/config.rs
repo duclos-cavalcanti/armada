@@ -19,8 +19,6 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)] // any field absent from the TOML falls back to Default::default()
 pub struct Config {
-    pub ledger: String,
-    pub socket: String,
     pub poll_secs: u64,
     pub sync_secs: u64,
     pub reconcile_secs: u64,
@@ -35,8 +33,7 @@ pub struct Config {
     pub forge: ForgeConfig,
     /// `[tracker]` — where tickets live. Deployment-specific: no default, `load` fails fast.
     pub tracker: TrackerConfig,
-    /// The telemetry DB path (separate from the ledger) + the OTLP/HTTP receiver bind addr.
-    pub telemetry_db: String,
+    /// The OTLP/HTTP receiver bind addr (the telemetry DB lives in the project's `.fleet/`).
     pub otel_addr: String,
     /// `[project]` — the product's main checkout, which owns the ticket worktrees. Captains and
     /// the lookout carry no worktree, so they launch here.
@@ -44,7 +41,7 @@ pub struct Config {
 }
 
 /// `[project]` in fleet.toml — the product's main checkout. A relative `path` resolves against
-/// fleet.toml's directory (not fleetd's cwd), so the kit layout `worktrees/master` just works.
+/// the project folder (fleet.toml's directory), so `projects/<name>/main` is just `path = "main"`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ProjectConfig {
@@ -53,7 +50,7 @@ pub struct ProjectConfig {
 
 impl Default for ProjectConfig {
     fn default() -> Self {
-        Self { path: "worktrees/master".into() }
+        Self { path: "main".into() }
     }
 }
 
@@ -102,8 +99,6 @@ pub enum TrackerKind {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            ledger: wire::default_ledger(), // shared with fleetc plan (DRY the path)
-            socket: wire::default_socket(), // shared with every client (DRY the path)
             poll_secs: 5,
             sync_secs: 300,
             reconcile_secs: 60,
@@ -112,7 +107,6 @@ impl Default for Config {
             quiet_secs: domain::LIVENESS_QUIET_SECS,
             forge: ForgeConfig::default(),
             tracker: TrackerConfig::default(),
-            telemetry_db: wire::default_telemetry_db(),
             otel_addr: "127.0.0.1:4318".into(),
             project: ProjectConfig::default(),
         }
@@ -120,16 +114,13 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Defaults, overlaid by the TOML file (if present), overlaid by env vars — then validated.
-    /// A malformed file or a missing `[forge]` is fatal: fleetd never runs on a guessed target.
-    pub fn load() -> Result<Self> {
-        let mut c = read_file()?.unwrap_or_default();
-        if let Ok(v) = std::env::var("FLEET_LEDGER") {
-            c.ledger = v;
-        }
-        if let Ok(v) = std::env::var("FLEET_SOCK") {
-            c.socket = v;
-        }
+    /// The project's fleet.toml over the defaults, overlaid by env vars — then validated. A
+    /// malformed file or a missing `[forge]` is fatal: fleetd never runs on a guessed target. Runtime
+    /// paths aren't config: they're the project's `.fleet/` (`wire::Project`).
+    pub fn load(project: &wire::Project) -> Result<Self> {
+        let path = project.config();
+        let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        let mut c: Config = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         if let Some(v) = env_num("FLEET_POLL_SECS") {
             c.poll_secs = v;
         }
@@ -154,19 +145,16 @@ impl Config {
         if let Ok(v) = std::env::var("FLEET_TRACKER_PROJECT") {
             c.tracker.project = v;
         }
-        if let Ok(v) = std::env::var("FLEET_TELEMETRY_DB") {
-            c.telemetry_db = v;
-        }
         if let Ok(v) = std::env::var("FLEET_OTEL_ADDR") {
             c.otel_addr = v;
         }
-        c.project.path = resolve_project(&c.project.path);
+        c.project.path = resolve_project(&c.project.path, &project.root);
         c.validate()?;
         Ok(c)
     }
 
     fn validate(&self) -> Result<()> {
-        let path = config_path();
+        let path = wire::Project::CONFIG;
         ensure!(self.forge.kind.is_some(), "{path}: [forge] kind is required (\"gitlab\" or \"github\")");
         ensure!(!self.forge.project.is_empty(), "{path}: [forge] project is required (or FLEET_FORGE_PROJECT)");
         if self.forge.kind == Some(ForgeKind::Github) {
@@ -197,34 +185,10 @@ impl Config {
     }
 }
 
-fn config_path() -> String {
-    // fleet.toml lives in the repo — fleetd is its only reader and runs from the repo.
-    // `make run` sets $FLEET_CONFIG=<repo>/fleet.toml; the cwd-relative fallback covers
-    // running fleetd from the repo directly. (~/.fleet holds only runtime state, no config.)
-    std::env::var("FLEET_CONFIG").unwrap_or_else(|_| "fleet.toml".into())
-}
-
-/// A relative `[project] path` is relative to fleet.toml's directory. Not canonicalized — the
+/// A relative `[project] path` is relative to the project folder. Not canonicalized — the
 /// checkout may not exist yet (preflight reports that, with the clone command).
-fn resolve_project(path: &str) -> String {
-    let p = std::path::Path::new(path);
-    if p.is_absolute() {
-        return path.to_string();
-    }
-    let joined = std::path::Path::new(&config_path()).parent().unwrap_or(std::path::Path::new("")).join(p);
-    std::path::absolute(&joined).unwrap_or(joined).to_string_lossy().into_owned()
-}
-
-/// The parsed file, or `None` when there is none. A file that exists but won't read or
-/// parse is an error — never silently ignored.
-fn read_file() -> Result<Option<Config>> {
-    let path = config_path();
-    let text = match std::fs::read_to_string(&path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e).with_context(|| format!("reading {path}")),
-    };
-    toml::from_str(&text).map(Some).with_context(|| format!("parsing {path}"))
+fn resolve_project(path: &str, root: &std::path::Path) -> String {
+    root.join(path).to_string_lossy().into_owned() // an absolute `path` replaces `root`
 }
 
 /// Read a numeric env var. `pub(crate)` so the live `settings` overlay resolves env the same way.
@@ -260,9 +224,6 @@ mod tests {
         assert!(!c.dry_run, "live is the default post-cutover (dry-run is opt-in)");
         assert_eq!(c.active_secs, 120);
         assert_eq!(c.quiet_secs, 1800);
-        assert!(c.ledger.ends_with("ledger.db"));
-        assert!(c.socket.ends_with("fleetd.sock"));
-        assert!(c.telemetry_db.ends_with("telemetry.db"));
         assert_eq!(c.otel_addr, "127.0.0.1:4318");
     }
 
@@ -337,10 +298,10 @@ mod tests {
     }
 
     #[test]
-    fn project_path_resolves_against_the_config_dir() {
-        assert_eq!(resolve_project("/abs/checkout"), "/abs/checkout");
-        let rel = resolve_project("worktrees/master");
-        assert!(std::path::Path::new(&rel).is_absolute() && rel.ends_with("worktrees/master"), "{rel}");
+    fn project_path_resolves_against_the_project_folder() {
+        let root = std::path::Path::new("/r/projects/p");
+        assert_eq!(resolve_project("/abs/checkout", root), "/abs/checkout");
+        assert_eq!(resolve_project("main", root), "/r/projects/p/main");
     }
 
     #[test]

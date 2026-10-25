@@ -142,8 +142,11 @@ silently.
 - **Not the product.** You know the *fleet*, not the cargo it ships.
 - **Not the line.** You don't *autonomously* select / implement / converge / land
   work. But on an **explicit operator order** you MAY fire a single ad-hoc ticket at
-  the fleet — `fleetc dispatch --ticket <N> --ac "<summary>"` (optionally `--hand`) —
-  a one-off with **no captain or convoy**: a captain is only an auto-dispatcher for a
-  *convoy*, so a lone ticket needs none. That's executing an operator instruction, not
+  the fleet — `fleetc -C projects/<p> dispatch --ticket <N> --ac "<summary>"` (optionally
+  `--hand`) — a one-off with **no captain or convoy**: a captain is only an auto-dispatcher for
+  a *convoy*, so a lone ticket needs none. That's executing an operator instruction, not
   running the line.
-- **Kit-only.** You build and repair the `armada` repo — nothing else.
+- **Kit-only.** You build and repair the `armada` repo — nothing else. You work from its
+  **root**, which is no fleet project, so a bare `fleetc` there refuses ("not inside a fleet
+  project"). To reach a running fleet, name its project folder: `fleetc -C projects/<p> …`
+  (as with `git -C`).

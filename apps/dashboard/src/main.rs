@@ -22,9 +22,9 @@ use crate::source::Fleet;
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// Ledger DB to read. Defaults to `$HOME/.fleet/ledger.db`.
-    #[arg(long, value_name = "PATH")]
-    ledger: Option<PathBuf>,
+    /// The fleet project to show (default: the one enclosing the cwd — the nearest fleet.toml).
+    #[arg(short = 'C', value_name = "DIR")]
+    dir: Option<PathBuf>,
 }
 
 /// Top-level tabs, cycled by `Tab` / `S-Tab`. Fleet (the cogs + escalations),
@@ -102,14 +102,14 @@ pub struct App {
     pub convoys_cursor: usize,
     /// Zoom: the focused pane fills the body; `space` toggles it.
     pub zoomed: bool,
-    pub ledger_path: PathBuf,
+    pub project: wire::Project,
     pub fleet: Fleet,
     pub last_refresh: Instant,
     pub quit: bool,
 }
 
 impl App {
-    fn new(ledger_path: PathBuf) -> Self {
+    fn new(project: wire::Project) -> Self {
         Self {
             tab: TabId::Fleet,
             fleet_pane: FleetPane::Cogs,
@@ -123,8 +123,8 @@ impl App {
             tickets_cursor: 0,
             convoys_cursor: 0,
             zoomed: false,
-            fleet: Fleet::load(&ledger_path),
-            ledger_path,
+            fleet: Fleet::load(&project),
+            project,
             last_refresh: Instant::now(),
             quit: false,
         }
@@ -332,7 +332,7 @@ impl App {
 
     fn refresh(&mut self, force: bool) {
         if force || self.last_refresh.elapsed() >= Duration::from_secs(1) {
-            self.fleet = Fleet::load(&self.ledger_path);
+            self.fleet = Fleet::load(&self.project);
             self.last_refresh = Instant::now();
             clamp(&mut self.cogs_cursor, self.fleet.cogs.len());
             clamp(&mut self.escalations_cursor, self.fleet.escalations.len());
@@ -353,7 +353,7 @@ fn clamp(cursor: &mut usize, n: usize) {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let ledger_path = cli.ledger.unwrap_or_else(Fleet::default_ledger_path);
+    let project = wire::Project::find(cli.dir.as_deref())?; // before raw mode, so an error prints plainly
 
     enable_raw_mode()?;
     let mut out = stdout();
@@ -361,7 +361,7 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(out);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run(&mut terminal, ledger_path);
+    let result = run(&mut terminal, project);
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -403,8 +403,8 @@ fn pbcopy(text: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, ledger_path: PathBuf) -> Result<()> {
-    let mut app = App::new(ledger_path);
+fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, project: wire::Project) -> Result<()> {
+    let mut app = App::new(project);
     loop {
         // The yank capture must happen INSIDE the draw closure: draw() swaps the
         // terminal's buffers on return, so the frame buffer is the only place the

@@ -46,6 +46,28 @@ fn strip_ansi(s: &str) -> String {
     out
 }
 
+/// The project's runtime state: `.fleet/` exists (created on first run) and is writable, the socket
+/// path fits a Unix socket (macOS caps it at 104 bytes), and an existing ledger opens.
+pub fn runtime(project: &wire::Project) -> Result<String> {
+    let dir = project.runtime();
+    std::fs::create_dir_all(&dir).map_err(|e| anyhow!("can't create {}: {e}", dir.display()))?;
+    let probe = dir.join(".write-probe");
+    std::fs::write(&probe, b"").map_err(|e| anyhow!("{} isn't writable: {e}", dir.display()))?;
+    let _ = std::fs::remove_file(&probe);
+    let socket = project.socket();
+    if socket.len() >= 104 {
+        bail!("socket path is {} bytes, over the 103 a Unix socket allows: {socket} — move the repo shallower", socket.len());
+    }
+    let ledger = project.ledger();
+    let state = if std::path::Path::new(&ledger).exists() {
+        ledger::Ledger::open_readonly(&ledger).map_err(|e| anyhow!("ledger {ledger} won't open: {e:#}"))?;
+        "ledger ok"
+    } else {
+        "new ledger"
+    };
+    Ok(format!("{} · {state}", dir.display()))
+}
+
 /// Render the checklist; `Err` (after printing it) if any check failed.
 pub fn report(checks: &[(&str, Result<String>)]) -> Result<()> {
     print!("{}", render(checks));

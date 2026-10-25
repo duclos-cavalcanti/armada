@@ -28,8 +28,10 @@ canonical list. The installer gates on it.
 # 2. Install every Brewfile entry (idempotent):
 brew bundle --file=./Brewfile
 
-# 3. Clone the project to work on — `[project] path` in fleet.toml (default worktrees/master).
-git clone git@gitlab.com:<project> worktrees/master
+# 3. Set up a project: a folder projects/<name>/ holding its fleet.toml (forge, tracker,
+#    cadences) and its checkout — `[project] path`, relative to that fleet.toml.
+mkdir -p projects/<name>   # then write projects/<name>/fleet.toml
+git clone <remote> projects/<name>/<default-branch>
 
 # 4. Third-party backends live in third-party/
 #    Keep current: re-clone, or `git -C third-party/<repo> pull`.
@@ -50,7 +52,7 @@ make uninstall    # reverse it (unstow; assumes the fleet is stopped)
 ```
 
 `make install` uses [stow](https://www.gnu.org/software/stow/) to symlink the
-agents, skills, and `~/.fleet` runtime into place.
+agents and skills into place.
 
 Per-deployment harness settings (auto-mode trust, permissions for *your* work or
 personal systems) live in a gitignored profile, applied onto `.claude/settings.json`:
@@ -71,14 +73,22 @@ git checkout .claude/settings.json
 ### 3. Run
 
 ```bash
-make preflight    # check the setup (project checkout, CLI auth, tmux + claude); `make run` gates on it
-make run          # build + run fleetd in the foreground (open a tmux pane first; Ctrl-C stops)
-make stop         # stop the fleet daemon
-make dashboard    # build + run the TUI dashboard
+make preflight P=<name>   # check the setup (runtime state, checkout, CLI auth, tmux + claude); `make run` gates on it
+make run P=<name>         # build + run project <name>'s fleetd in the foreground (open a tmux pane first; Ctrl-C stops)
+make stop                 # stop the fleet daemon
+make dashboard P=<name>   # build + run the TUI dashboard
 ```
 
 `fleetd` self-ticks (poll / sync / reconcile cadences, set in `fleet.toml`);
 `fleetc` is the control surface — run `fleetc` for its verbs.
+
+**A project is a folder.** `projects/<name>/` holds the project's `fleet.toml`, its runtime state
+in `.fleet/` (ledger, socket, telemetry), its checkout, and its ticket worktrees. `fleetd`,
+`fleetc`, the dashboard and every cog find the project as the nearest folder with a `fleet.toml`,
+starting from the current directory, or from `-C <dir>` (`fleetc -C projects/<name> …`). Outside a
+project they refuse to run. One fleet runs at a time. To switch, let the cogs finish (or
+`fleetc sink` them), `make stop`, then `make run P=<other>`. Each project's state stays in its
+folder, so you come back to it exactly as you left it.
 
 ---
 
@@ -96,8 +106,7 @@ armada/
 ├── Brewfile     dependency manifest
 ├── install.sh   install / --uninstall (gates on Brewfile + stows)
 ├── Makefile     one-word wrappers (run `make` for the cheat sheet)
-├── fleet.toml   fleetd config (cadences, dry_run, [project], [forge], [tracker])
 ├── TODO.md      the forward backlog
 ├── KNOWN_ISSUES.md  accepted edge cases + workarounds
-└── worktrees/   product overlay — project checkout + ticket worktrees (gitignored)
+└── projects/    one folder per project: fleet.toml + .fleet/ state + checkout + ticket worktrees (gitignored)
 ```

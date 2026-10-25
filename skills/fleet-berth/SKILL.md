@@ -1,5 +1,5 @@
 ---
-description: Create a git worktree + branch for a ticket under the factory's worktrees/ dir, forked off a given base (default: origin's default branch) of the project checkout, which it locates via `fleetc project` — so anyone can run it from any directory. Pure worktree creation — no Jira lifecycle. The operator or captain runs this when producing a dispatch, then passes the emitted path to `fleetc dispatch --worktree`; fleetd's reconcile spawns the cog there (reconcile never creates worktrees).
+description: Create a git worktree + branch for a ticket in its project folder (beside the project checkout), forked off a given base (default: origin's default branch) of the project checkout, which it locates via `fleetc project` — so anyone can run it from any directory. Pure worktree creation — no Jira lifecycle. The operator or captain runs this when producing a dispatch, then passes the emitted path to `fleetc dispatch --worktree`; fleetd's reconcile spawns the cog there (reconcile never creates worktrees).
 argument-hint: <ticket> [<fork-base-branch>]
 ---
 
@@ -8,7 +8,7 @@ argument-hint: <ticket> [<fork-base-branch>]
 You are creating the git worktree + branch for a ticket so downstream work
 can start. **This skill is Jira-read-only** — it fetches the ticket's issue-type
 to derive the branch name, refreshes the fork base, then creates the worktree
-under the factory's `worktrees/` dir, forked off the **project checkout**. Jira-side
+in the project folder, beside the **project checkout** it forks off. Jira-side
 lifecycle (assign, label, sprint, transition) is NOT this skill's concern —
 fleetd's spawn claims the ticket when it launches the cog.
 
@@ -31,7 +31,7 @@ side effects, in order:
    skill refreshes it itself). Never touches the checkout's working tree or any local
    branch.
 2. **Git worktree** — `git worktree add` creates a NEW directory + branch under
-   the factory's `worktrees/` (beside the project checkout). Its files are not
+   the project folder (beside the project checkout). Its files are not
    touched, and no commit is made on any existing branch.
 3. **Shared-cache symlinks** — plants the target repo's declared
    `worktree.symlinkDirectories` symlinks (`target/`, the CDK venv) **into the
@@ -66,9 +66,9 @@ calls):
      else (`Task`, `Sub-task`, …) → `chore`.
    - **slug** — a kebab-case condensation of the summary (3–5 words).
    - **branch** = `<prefix>/<ticket>-<slug>`.
-   - **path** — under the factory's `worktrees/` (beside the project checkout), named
-     `<branch-with-"/"-as-"-">`. E.g. checkout `…/worktrees/master` + branch
-     `chore/PROJ-944-block-hmac-key` → `…/worktrees/chore-PROJ-944-block-hmac-key`:
+   - **path** — in the project folder (beside the project checkout), named
+     `<branch-with-"/"-as-"-">`. E.g. checkout `projects/p/master` + branch
+     `chore/PROJ-944-block-hmac-key` → `projects/p/chore-PROJ-944-block-hmac-key`:
      ```bash
      LEAF="<prefix>-<ticket>-<slug>"        # branch with "/" → "-"
      WORKTREE_PATH="$(dirname "$REPO")/$LEAF"
@@ -119,7 +119,7 @@ BRANCH=<prefix>/<ticket>-<slug>
 
 - [ ] Fork base fetched fresh (`git -C "$REPO" fetch origin <base>`) before the
   worktree was cut
-- [ ] Worktree created under `worktrees/<leaf>` (beside the project checkout); branch
+- [ ] Worktree created at `projects/<p>/<leaf>` (beside the project checkout); branch
   derived from issue type; forked off `origin/<base>`
 - [ ] Shared-cache symlinks planted in the new worktree (`target/` etc.) → the
   checkout, per the target repo's `worktree.symlinkDirectories`
