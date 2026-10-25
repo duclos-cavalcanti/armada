@@ -113,14 +113,21 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog]) -> Result<Vec<Action>> {
             // Gated to ships the fleet DISPATCHED as AUTO work: an order with `auto_impl` (a worker's
             // ship, landed by a cold-loop sailor) + a worktree to sweep in. A manual order (a hand,
             // operator-driven) or an un-dispatched ship gets NO sailor — the fleet doesn't land work
-            // it didn't commission. Also gated: not held, and no live sailor already on it (the lock).
+            // it didn't commission. Also gated: not held, no live sailor already on it (the lock), and
+            // no open blocker — a ship whose ticket is blocked by a not-yet-Done/Cancelled ticket waits,
+            // unattended, until the blocker lands. This forge-neutral gate is what orders merges on a forge
+            // without MR dependencies (GitHub). It needs no release trigger of its own: the last ungated
+            // sweep already did its work, so a sweep is only owed if the ship changed (`changed`) meanwhile.
             let auto = OrderRepo::get(ledger, tkey)?.is_some_and(|o| o.auto_impl && o.worktree_path.is_some());
-            let held = TicketRepo::get(ledger, tkey)?.map(|t| t.held).unwrap_or(false);
+            let (held, blocked) = match TicketRepo::get(ledger, tkey)? {
+                Some(t) => (t.held, !blockers_terminal(ledger, &t.blocked_by)?),
+                None => (false, false),
+            };
             let live_sailor = SessionRepo::for_ticket(ledger, tkey)?
                 .iter()
                 .any(|s| s.kind == CrewKind::Sailor && s.ended_at.is_none());
             let changed = Some(ship_fingerprint(&snap)) != ship.swept;
-            if auto && !held && !live_sailor && (needs_work(&snap) || changed) {
+            if auto && !held && !blocked && !live_sailor && (needs_work(&snap) || changed) {
                 actions.push(Action::LaunchSailor { ticket: tkey.0.clone() });
             }
         }
@@ -1925,6 +1932,21 @@ mod tests {
         ticket(&d2, "PROJ-2", TicketStatus::InQa, false, vec![]); // no order at all
         ship(&d2, 11, "PROJ-2", ShipState::Open);
         assert!(plan(&d2, &[]).unwrap().is_empty(), "no order → no sailor");
+    }
+
+    #[test]
+    fn no_sailor_on_a_ship_whose_ticket_has_an_open_blocker() {
+        // PROJ-2's MR is up, but PROJ-2 is blocked by PROJ-1 (not Done) → no sailor, so nothing
+        // arms it ahead of its blocker. Once PROJ-1 lands, the gate lifts and the sweep fires.
+        let db = db();
+        ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
+        ticket(&db, "PROJ-2", TicketStatus::InQa, false, vec!["PROJ-1"]);
+        order_wt(&db, "PROJ-2", true, Some("/wt/PROJ-2"));
+        ship(&db, 10, "PROJ-2", ShipState::Open);
+        assert!(plan(&db, &[]).unwrap().is_empty(), "gated while PROJ-1 is open");
+
+        ticket(&db, "PROJ-1", TicketStatus::Done, false, vec![]);
+        assert_eq!(plan(&db, &[]).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-2".into() }]);
     }
 
     #[test]
