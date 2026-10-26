@@ -47,6 +47,8 @@ pub struct Fleet {
     pub load_error: Option<String>,
     pub cogs: Vec<CogRow>,
     pub board: Vec<Ticket>,
+    /// Why each held ticket is held (its key → the hold's reason, `""` when none was given).
+    pub held_reasons: std::collections::HashMap<String, String>,
     pub armada: Vec<ShipRow>,
     pub convoys: Vec<Convoy>,
     pub escalations: Vec<Escalation>,
@@ -68,6 +70,7 @@ impl Fleet {
                 load_error: Some(e.to_string()),
                 cogs: vec![],
                 board: vec![],
+                held_reasons: Default::default(),
                 armada: vec![],
                 convoys: vec![],
                 escalations: vec![],
@@ -104,11 +107,17 @@ impl Fleet {
             armada.push(ShipRow { ship, snapshot, sailor_state });
         }
 
+        let board = TicketRepo::board(&db)?;
+        let mut held_reasons = std::collections::HashMap::new();
+        for t in board.iter().filter(|t| t.held) {
+            held_reasons.insert(t.key.0.clone(), db.held_reason(&t.key)?.unwrap_or_default());
+        }
         Ok(Fleet {
             ledger_path: ledger_path.to_path_buf(),
             load_error: None,
             cogs,
-            board: TicketRepo::board(&db)?,
+            board,
+            held_reasons,
             armada,
             convoys: ConvoyRepo::active(&db)?,
             escalations: EscalationRepo::list_open(&db)?,

@@ -211,7 +211,7 @@ impl Tracker for FsTracker {
 
     fn read(&self, key: &TicketKey) -> Result<TicketDetail> {
         let t = self.load(key)?;
-        Ok(TicketDetail { kind: t.header.kind.clone(), description: t.body.clone(), ticket: self.to_ticket(key.clone(), &t) })
+        Ok(TicketDetail { kind: t.header.kind.clone(), description: t.body.clone(), ticket: self.to_ticket(key.clone(), &t), held: None })
     }
 
     fn create(&self, d: &TicketDraft) -> Result<TicketKey> {

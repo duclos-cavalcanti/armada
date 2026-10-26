@@ -86,11 +86,11 @@ git push --force-with-lease
 
 This publishes the resolved branch and resets approvals (re-review is forced).
 
-### 4 — Self-reflection
+### 4 — Report
 
-Post a Jira comment: which path ran (clean-triggered / conflict-resolved), the
-target branch, and — if you resolved a conflict — **which files and the gist of
-how you resolved each**, so the re-reviewer knows exactly what to scrutinize.
+Say in your response which path ran (clean-triggered / conflict-resolved), the target
+branch, and — if you resolved a conflict — **which files and the gist of how you resolved
+each**, so a re-reviewer knows exactly what to scrutinize.
 
 ## Escalate, don't guess
 

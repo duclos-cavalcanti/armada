@@ -215,6 +215,7 @@ fn detail_from_issue(issue: &serde_json::Value) -> Option<TicketDetail> {
             Some(doc) if doc.is_object() => adf_text(doc).trim_end().to_string(),
             _ => String::new(),
         },
+        held: None,
     })
 }
 

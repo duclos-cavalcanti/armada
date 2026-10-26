@@ -54,6 +54,25 @@ impl Ledger {
             .optional()?)
     }
 
+    /// Why a ticket is held: the reason on its latest `TicketHeld` event (`""` when the hold gave
+    /// none; `None` when it was never held). The hold itself is the ticket's `held` flag.
+    pub fn held_reason(&self, key: &TicketKey) -> Result<Option<String>> {
+        let payload: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT payload_json FROM events WHERE kind = ?1 AND entity_ref = ?2 ORDER BY seq DESC LIMIT 1",
+                params![EventKind::TicketHeld.as_str(), key.0],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(payload.map(|p| {
+            serde_json::from_str::<serde_json::Value>(&p)
+                .ok()
+                .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(String::from))
+                .unwrap_or_default()
+        }))
+    }
+
     /// An in-memory ledger with the schema applied — for tests.
     pub fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
@@ -693,6 +712,7 @@ mod tests {
         assert_eq!(held.len(), 1, "a no-op hold logs nothing");
         assert_eq!(released, 1, "a no-op release logs nothing");
         assert_eq!(held[0].payload["reason"], "needs grooming", "the reason rides on the event");
+        assert_eq!(db.held_reason(&key).unwrap().as_deref(), Some("needs grooming"), "and reads back");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 ---
-description: Yield a hand's work to a sailor — the operator's "pawn it off" handoff. Reads the hand's ticket from `FLEET_TICKET` (fleetd injects it at spawn) and, if there is one, reports `concluded` via fleetc so fleetd hands the open MR to a sailor (promotes the order to auto, moves Jira → In QA, requests review, reaps the hand). A ticketless hand has no sailor to yield to. Run from the hand's worktree.
+description: Yield a hand's work to a sailor — the operator's "pawn it off" handoff. Reads the hand's ticket from `FLEET_TICKET` (fleetd injects it at spawn) and, if there is one, reports `concluded` via fleetc so fleetd hands the open MR to a sailor (promotes the order to auto, moves the ticket → In QA, requests review, reaps the hand). A ticketless hand has no sailor to yield to. Run from the hand's worktree.
 argument-hint: (none — reads $FLEET_TICKET)
 ---
 
@@ -32,7 +32,7 @@ echo "yielded $TICKET to a sailor."
 ```
 
 That `concluded` report is the whole handoff: fleetd promotes your (manual) order to
-auto, moves Jira In Progress → In QA, requests the team's review, reaps you, and
+auto, moves the ticket In Progress → In QA, requests the team's review, reaps you, and
 `LaunchSailor` engages a sailor **in this worktree** to sail the MR to merge. You do
 **not** self-exit — the report retires you.
 

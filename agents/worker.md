@@ -9,12 +9,9 @@ description: >-
 model: opus
 color: blue
 tools: >-
-  Read, Glob, Grep, Bash, Edit, Write, Skill, Agent, WebFetch, WebSearch,
-  mcp__claude_ai_Atlassian_Rovo__*
+  Read, Glob, Grep, Bash, Edit, Write, Skill, Agent, WebFetch, WebSearch
 skills: >-
   fleet-launch, fleet-ready-done
-mcpServers:
-  - "claude.ai Atlassian Rovo"
 initialPrompt: /goal Deliver your ticket (the FLEET_TICKET env var): implemented to its acceptance criteria, tests passing, its draft MR surveyed clean, concluded.
 ---
 

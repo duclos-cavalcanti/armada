@@ -301,16 +301,25 @@ fn render_convoy_table(json: &str) -> Result<String> {
             Some(other) => other.to_string(),
         }
     };
-    let mut out = format!("{:<12} {:<12} {:<8} {:<10} {:<8} {}\n", "TICKET", "STATUS", "CLASS", "DISPATCH", "COG", "SHIP");
+    let waiting = |t: &serde_json::Value| -> String {
+        let keys: Vec<&str> = t["waiting_on"].as_array().into_iter().flatten().filter_map(|k| k.as_str()).collect();
+        match (keys.is_empty(), t["held"].as_str()) {
+            (_, Some(reason)) => format!("held{}", if reason.is_empty() { String::new() } else { format!(": {reason}") }),
+            (false, None) => format!("blocked by {}", keys.join(", ")),
+            (true, None) => String::new(),
+        }
+    };
+    let mut out = format!("{:<12} {:<12} {:<8} {:<10} {:<8} {:<8} {}\n", "TICKET", "STATUS", "CLASS", "DISPATCH", "COG", "SHIP", "WAITING");
     for t in tickets {
         out += &format!(
-            "{:<12} {:<12} {:<8} {:<10} {:<8} {}\n",
+            "{:<12} {:<12} {:<8} {:<10} {:<8} {:<8} {}\n",
             cell(t, "key"),
             cell(t, "status"),
             cell(t, "classification"),
             cell(t, "dispatched"),
             cell(t, "live_cog"),
             cell(t, "ship_state"),
+            waiting(t),
         );
     }
     Ok(out)
@@ -703,6 +712,9 @@ fn render_ticket(d: &serde_json::Value) -> String {
     let mut out = format!("{}\n{}\n", facts.join(" · "), s(&t["title"]));
     if !links.is_empty() {
         out.push_str(&format!("{}\n", links.join(" · ")));
+    }
+    if let Some(reason) = d["held"].as_str() {
+        out.push_str(&format!("held by the fleet{}\n", if reason.is_empty() { String::new() } else { format!(": {reason}") }));
     }
     let description = s(&d["description"]);
     if !description.trim().is_empty() {

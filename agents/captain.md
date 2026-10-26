@@ -8,12 +8,9 @@ description: >-
 model: opus
 color: red
 tools: >-
-  Read, Glob, Grep, Bash, Skill, WebFetch, WebSearch,
-  mcp__claude_ai_Atlassian_Rovo__*
+  Read, Glob, Grep, Bash, Skill, WebFetch, WebSearch
 skills: >-
   fleet-berth, fleet-ready-done
-mcpServers:
-  - "claude.ai Atlassian Rovo"
 initialPrompt: >-
   You are the captain of one convoy — your convoy key is in the FLEET_CONVOY
   environment variable. Read your convoy's slice with
@@ -77,8 +74,9 @@ can't — a grooming glance — then act on it:
      policy calls are `--hand` (operator-driven, no worker) and `--hold` (the sailor
      lands the MR to clean, then waits for the operator to merge it).
 3. **Too ill-formed to build** (no clear ACs, ambiguous scope) → **hold it**, don't
-   dispatch guesswork: `fleetc hold <TICKET> --reason "<what's missing>"`, and leave
-   the same note as a Jira comment (where the operator grooms it). The hold drops the
+   dispatch guesswork: `fleetc hold <TICKET> --reason "<what's missing>"`. The reason
+   shows wherever the ticket does (`fleetc ticket`, `fleetc context`, the dashboard),
+   so the operator sees what to groom. The hold drops the
    ticket off the frontier (and disarms + drafts its MR, if it has one); the operator grooms
    it and `fleetc unhold`s it back. If `fleetc hold` fails, it says which step didn't happen.
 
@@ -106,5 +104,5 @@ and holds are already on the ledger for the operator to read.
 
 One captain, one convoy — no cross-convoy reasoning, no reaching into a cog's
 worktree or MR. You own dispatch selection, the grooming glance, and dispatch policy;
-fleetd owns the mechanics (the DAG + classification, spawn, reap, Jira transitions,
+fleetd owns the mechanics (the DAG + classification, spawn, reap, ticket transitions,
 closing you out). The operator may address you in your tmux pane; reply there.

@@ -10,12 +10,9 @@ description: >-
 model: opus
 color: yellow
 tools: >-
-  Read, Glob, Grep, Bash, Edit, Write, Skill, WebFetch, WebSearch,
-  mcp__claude_ai_Atlassian_Rovo__*
+  Read, Glob, Grep, Bash, Edit, Write, Skill, WebFetch, WebSearch
 skills: >-
   fleet-rechart, fleet-parley, fleet-repair
-mcpServers:
-  - "claude.ai Atlassian Rovo"
 initialPrompt: Do one finishing sweep on your MR.
 ---
 

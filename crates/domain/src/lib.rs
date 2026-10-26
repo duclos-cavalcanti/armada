@@ -262,6 +262,10 @@ pub struct ConvoyTicketView {
     pub ship_state: Option<ShipState>,
     /// For a STACKED ticket: the ref to fork it off — its in-flight parent's branch (`origin/<branch>`).
     pub fork_from: Option<String>,
+    /// The blockers not yet Done/Cancelled — what the ticket (and its ship) waits on.
+    pub waiting_on: Vec<TicketKey>,
+    /// Why it's held, when it is (the hold's reason; `""` when none was given).
+    pub held: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -421,6 +425,10 @@ pub struct TicketDetail {
     pub ticket: TrackerTicket,
     pub kind: String,
     pub description: String,
+    /// The fleet's hold on it, from the ledger (not the tracker): the reason, `""` when none was
+    /// given; `None` when it isn't held.
+    #[serde(default)]
+    pub held: Option<String>,
 }
 
 /// A new ticket, as `fleetc ticket new` asks the tracker to create it. It starts in To Do.

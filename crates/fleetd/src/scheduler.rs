@@ -241,7 +241,7 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let _ = reply.send(arm(ledger, forge, &ticket).map_err(|e| format!("{e:#}")));
         }
         Command::GetTicket { ticket, reply } => {
-            let _ = reply.send(tracker.read(&ticket).map_err(|e| format!("{e:#}")));
+            let _ = reply.send(read_ticket(ledger, tracker, &ticket).map_err(|e| format!("{e:#}")));
         }
         Command::NewTicket { draft, reply } => {
             let _ = reply.send(tracker.create(&draft).map(|k| k.0).map_err(|e| format!("{e:#}")));
@@ -273,6 +273,27 @@ fn launch(ledger: &Ledger, forge: &dyn Forge, l: Launch) -> Result<String> {
     };
     let target = base.strip_prefix("origin/").unwrap_or(&base).to_string();
     forge.open_mr(&MrDraft { source, target, title: l.title, description: l.description, draft: l.draft })
+}
+
+/// A ticket's full text from the tracker, plus the fleet's hold on it from the ledger.
+fn read_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey) -> Result<domain::TicketDetail> {
+    let mut detail = tracker.read(key)?;
+    if TicketRepo::get(ledger, key)?.is_some_and(|t| t.held) {
+        detail.held = Some(ledger.held_reason(key)?.unwrap_or_default());
+    }
+    Ok(detail)
+}
+
+/// The blockers of `ticket` not yet Done/Cancelled.
+fn waiting_on(ledger: &Ledger, blockers: &[TicketKey]) -> Result<Vec<TicketKey>> {
+    let mut open = Vec::new();
+    for b in blockers {
+        let status = TicketRepo::get(ledger, b)?.and_then(|t| t.status);
+        if !matches!(status, Some(domain::TicketStatus::Done) | Some(domain::TicketStatus::Cancelled)) {
+            open.push(b.clone());
+        }
+    }
+    Ok(open)
 }
 
 /// Arm a ticket's open MR to merge once its gates pass. Refused while the ticket is held or has an
@@ -343,7 +364,19 @@ fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Resul
             }),
             _ => None,
         };
-        tickets.push(ConvoyTicketView { key: t.key, status: t.status, classification, dispatched, live_cog, ship_state, fork_from });
+        let waiting_on = waiting_on(ledger, &t.blocked_by)?;
+        let held = if t.held { Some(ledger.held_reason(&t.key)?.unwrap_or_default()) } else { None };
+        tickets.push(ConvoyTicketView {
+            key: t.key,
+            status: t.status,
+            classification,
+            dispatched,
+            live_cog,
+            ship_state,
+            fork_from,
+            waiting_on,
+            held,
+        });
     }
     Ok(ConvoyView { convoy: convoy.clone(), tickets })
 }
@@ -1162,6 +1195,12 @@ mod tests {
         let child = view.tickets.iter().find(|t| t.key.0 == "PROJ-2").unwrap();
         assert_eq!(child.classification, Some(domain::Classification::Stacked));
         assert_eq!(child.fork_from.as_deref(), Some("origin/feature/PROJ-1-parent"));
+        assert_eq!(child.waiting_on, vec![TicketKey("PROJ-1".into())], "PROJ-1 isn't done yet");
+
+        TicketRepo::set_held(&db, &TicketKey("PROJ-2".into()), true, Some("ACs unclear"), "t").unwrap();
+        let view = build_convoy_view(&db, &convoy, true).unwrap();
+        let child = view.tickets.iter().find(|t| t.key.0 == "PROJ-2").unwrap();
+        assert_eq!(child.held.as_deref(), Some("ACs unclear"), "a hold shows its reason");
         let view = build_convoy_view(&db, &convoy, false).unwrap();
         assert_eq!(view.tickets.iter().find(|t| t.key.0 == "PROJ-2").unwrap().fork_from, None, "no stacking, no fork base");
     }

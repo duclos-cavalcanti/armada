@@ -5,7 +5,7 @@
 
 use crate::source::{CogRow, ShipRow};
 use crate::{App, BoardPane, FleetPane, TabId};
-use domain::{Convoy, Escalation, Event, Ticket};
+use domain::{Convoy, Escalation, Event, Ticket, TicketStatus};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
@@ -83,7 +83,7 @@ fn render_armada(f: &mut Frame, area: Rect, app: &App) {
 /// Board tab: the sprint tickets over the active convoys.
 fn render_board(f: &mut Frame, area: Rect, app: &App) {
     let tickets_focused = BoardPane::Tickets == app.board_pane;
-    let tickets = ticket_rows(&app.fleet.board);
+    let tickets = ticket_rows(&app.fleet.board, &app.fleet.held_reasons);
     let convoys = convoy_rows(&app.fleet.convoys);
     let tickets_title = format!(" board · {} tickets ", app.fleet.board.len());
     let convoys_title = format!(" convoys ({}) ", app.fleet.convoys.len());
@@ -199,20 +199,34 @@ fn ship_rows(ships: &[ShipRow]) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn ticket_rows(board: &[Ticket]) -> Vec<Line<'static>> {
+/// One line per ticket; a held one shows `✋ <reason>`, one waiting on open blockers `⛔ <keys>`.
+fn ticket_rows(board: &[Ticket], held_reasons: &std::collections::HashMap<String, String>) -> Vec<Line<'static>> {
+    let done: std::collections::HashSet<&str> = board
+        .iter()
+        .filter(|t| matches!(t.status, Some(TicketStatus::Done) | Some(TicketStatus::Cancelled)))
+        .map(|t| t.key.0.as_str())
+        .collect();
     board
         .iter()
         .map(|t| {
             let status = t.status.map(|s| s.as_str().to_string()).unwrap_or_else(|| "—".into());
             let convoy = t.convoy.as_ref().map(|c| c.0.clone()).unwrap_or_default();
-            let held = if t.held { " ✋" } else { "" };
+            let mut gate = String::new();
+            if t.held {
+                let reason = held_reasons.get(&t.key.0).map(String::as_str).unwrap_or("");
+                gate += &format!(" ✋ {}", short(reason, 40));
+            }
+            let waiting: Vec<&str> = t.blocked_by.iter().map(|b| b.0.as_str()).filter(|b| !done.contains(b)).collect();
+            if !waiting.is_empty() {
+                gate += &format!(" ⛔ {}", waiting.join(", "));
+            }
             Line::from(format!(
                 "{:<12} {:<12} {:<10} {}{}",
                 t.key.0,
                 status,
                 convoy,
                 short(t.title.as_deref().unwrap_or(""), 40),
-                held,
+                gate.trim_end(),
             ))
         })
         .collect()
