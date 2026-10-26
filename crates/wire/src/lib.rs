@@ -87,6 +87,12 @@ pub struct LaunchCmd {
     pub draft: bool,
 }
 
+/// Arm a ticket's open MR to merge once its gates pass (`POST /arm`, `fleetc arm`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArmCmd {
+    pub ticket: String,
+}
+
 /// Create a ticket (`POST /ticket-new`, `fleetc ticket new`): the tracker picks the key.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TicketNewCmd {

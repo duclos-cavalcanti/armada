@@ -70,6 +70,7 @@ pub enum Command {
     GetReview { iid: i64, reply: ReviewReply }, // a read: an MR's fresh review surface (forge)
     Rebase { iid: i64, reply: Reply },          // an action: server-side rebase an MR (forge)
     Launch { launch: Launch, reply: UrlReply }, // an action: open a ticket's MR (forge)
+    Arm { ticket: TicketKey, reply: Reply }, // an action: arm the ticket's MR, unless held/blocked (forge)
     GetTicket { ticket: TicketKey, reply: TicketReply }, // a read: a ticket's full text (tracker)
     NewTicket { draft: domain::TicketDraft, reply: UrlReply }, // an action: create a ticket → its key (tracker)
     BlockTicket { ticket: TicketKey, by: TicketKey, reply: Reply }, // an action: add an "is blocked by" edge (tracker)
@@ -221,6 +222,9 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let res = launch(ledger, forge, l).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
+        Command::Arm { ticket, reply } => {
+            let _ = reply.send(arm(ledger, forge, &ticket).map_err(|e| format!("{e:#}")));
+        }
         Command::GetTicket { ticket, reply } => {
             let _ = reply.send(tracker.read(&ticket).map_err(|e| format!("{e:#}")));
         }
@@ -254,6 +258,24 @@ fn launch(ledger: &Ledger, forge: &dyn Forge, l: Launch) -> Result<String> {
     };
     let target = base.strip_prefix("origin/").unwrap_or(&base).to_string();
     forge.open_mr(&MrDraft { source, target, title: l.title, description: l.description, draft: l.draft })
+}
+
+/// Arm a ticket's open MR to merge once its gates pass. Refused while the ticket is held or has an
+/// open blocker: the fleet's gates must hold at the moment the arm happens, not only when the sailor
+/// launched (a hold or a blocker can land mid-sweep).
+fn arm(ledger: &Ledger, forge: &dyn Forge, key: &TicketKey) -> Result<()> {
+    let ticket = TicketRepo::get(ledger, key)?.ok_or_else(|| anyhow!("{}: not on the board", key.0))?;
+    anyhow::ensure!(!ticket.held, "{} is held — not arming (fleetc unhold it first)", key.0);
+    if !reconcile::blockers_terminal(ledger, &ticket.blocked_by)? {
+        let keys: Vec<&str> = ticket.blocked_by.iter().map(|b| b.0.as_str()).collect();
+        anyhow::bail!("{} is blocked by {} — not arming until it lands", key.0, keys.join(", "));
+    }
+    let ship = ledger
+        .armada()?
+        .into_iter()
+        .find(|s| s.ticket.as_ref() == Some(key) && s.ended_at.is_none())
+        .ok_or_else(|| anyhow!("{}: no open MR to arm", key.0))?;
+    forge.arm_merge(ship.iid)
 }
 
 /// Hold or release a ticket. An armed MR merges on the forge's own say, past every fleet gate, so a
@@ -531,6 +553,7 @@ mod tests {
     #[derive(Default)]
     struct FakeForge {
         disarmed: std::cell::RefCell<Vec<i64>>,
+        armed: std::cell::RefCell<Vec<i64>>,
         drafted: std::cell::RefCell<Vec<(i64, bool)>>,
         opened: std::cell::RefCell<Vec<MrDraft>>,
         no_drafts: bool, // a forge plan without drafts
@@ -557,7 +580,8 @@ mod tests {
         fn block_on(&self, _: i64, _: i64) -> Result<()> {
             Ok(())
         }
-        fn arm_merge(&self, _: i64) -> Result<()> {
+        fn arm_merge(&self, iid: i64) -> Result<()> {
+            self.armed.borrow_mut().push(iid);
             Ok(())
         }
         fn disarm(&self, iid: i64) -> Result<()> {
@@ -726,6 +750,39 @@ mod tests {
             "order fork base, then the default branch, and an explicit target wins — origin/ stripped"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn arm_is_refused_while_the_ticket_is_held_or_blocked() {
+        let db = Ledger::in_memory().unwrap();
+        let mut child = tt("PROJ-2", TicketStatus::InQa);
+        child.blocked_by = vec![TicketKey("PROJ-1".into())];
+        sync::sync_board(&db, &FakeTracker(vec![tt("PROJ-1", TicketStatus::InProgress), child]), "now").unwrap();
+        let ship = Ship {
+            id: ShipId(0),
+            ticket: Some(TicketKey("PROJ-2".into())),
+            iid: 7,
+            url: "u".into(),
+            target: "main".into(),
+            pilot: "me".into(),
+            created_at: "t".into(),
+            ended_at: None,
+            swept: None,
+            reviewed: None,
+        };
+        ShipRepo::upsert(&db, &ship).unwrap();
+        let (forge, key) = (FakeForge::default(), TicketKey("PROJ-2".into()));
+
+        let e = arm(&db, &forge, &key).unwrap_err().to_string();
+        assert!(e.contains("blocked by PROJ-1"), "{e}");
+
+        sync::sync_board(&db, &FakeTracker(vec![tt("PROJ-1", TicketStatus::Done)]), "now").unwrap(); // the blocker lands
+        TicketRepo::set_held(&db, &key, true, Some("late review"), "t").unwrap();
+        assert!(arm(&db, &forge, &key).unwrap_err().to_string().contains("is held"));
+
+        TicketRepo::set_held(&db, &key, false, None, "t").unwrap();
+        arm(&db, &forge, &key).unwrap();
+        assert_eq!(*forge.armed.borrow(), vec![7], "armed only once clear");
     }
 
     #[test]

@@ -85,6 +85,7 @@ fn handle(
         (Some("GET"), Some(p)) if p.starts_with("/review") => handle_review(cmds, p),
         (Some("POST"), Some(p)) if p.starts_with("/rebase") => handle_rebase(cmds, p),
         (Some("POST"), Some("/launch")) => handle_launch(&request, cmds, deployment),
+        (Some("POST"), Some("/arm")) => handle_arm(&request, cmds),
         (Some("GET"), Some(p)) if p.starts_with("/ticket?") => handle_ticket_view(cmds, p),
         (Some("POST"), Some("/ticket-new")) => handle_ticket_new(&request, cmds),
         (Some("POST"), Some("/ticket-block")) => handle_ticket_block(&request, cmds),
@@ -346,6 +347,28 @@ fn handle_rebase(cmds: &Sender<Command>, path: &str) -> String {
     }
     match reply_rx.recv() {
         Ok(Ok(())) => http_response("200 OK", "text/plain", "rebased"),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
+/// `POST /arm` — arm a ticket's open MR; 409 with the reason when it's held or blocked.
+fn handle_arm(request: &str, cmds: &Sender<Command>) -> String {
+    let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+    let dto: wire::ArmCmd = match serde_json::from_str(body) {
+        Ok(d) => d,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
+    };
+    let ticket = match parse_ticket(&dto.ticket) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::Arm { ticket, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(())) => http_response("200 OK", "text/plain", "armed"),
         Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
         Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
     }
@@ -713,6 +736,7 @@ mod tests {
                     Command::GetTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::NewTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }
+                    Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
                 }
             }
         });
@@ -762,6 +786,7 @@ mod tests {
                     Command::GetTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::NewTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }
+                    Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
                 }
             }
         });

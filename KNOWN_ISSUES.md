@@ -11,16 +11,8 @@ Accepted edge cases: understood, not fixed, each with its workaround.
   *Workaround:* a late dependency is the operator's or captain's call. Run
   `fleetc hold PROJ-2`: the hold disarms the MR and marks it draft. `fleetc unhold` it
   once PROJ-9 lands, and a fresh sailor re-sweeps it.
-  *Fix if it bites:* reconcile holds an armed MR on its own when a blocker appears.
-
-- **On a forge without drafts, a hold during a live sailor's sweep can be re-armed.**
-  *Scenario:* a sailor is mid-sweep on PROJ-2 when you run `fleetc hold PROJ-2`. The hold
-  disarms the MR, then the sailor finishes its sweep and arms it again. Where the forge
-  supports drafts (GitLab; GitHub public repos and paid plans) the hold's draft blocks
-  the merge anyway. Where it doesn't (GitHub private repos on some plans), `fleetc hold`
-  reports that the draft step failed, and the re-arm can still merge.
-  *Workaround:* hold again once the sailor reports `sleeping` (the sweep is short).
-  *Fix:* step 7 routes arming through `fleetc`, and the server refuses to arm a held ticket.
+  *Fix if it bites:* reconcile holds an armed MR on its own when a blocker appears. (An arm
+  *after* the blocker lands is already refused: `fleetc arm` checks for open blockers.)
 
 - **The Jira "is blocked by" link direction is unverified.**
   *Scenario:* `fleetc ticket block KEY --by BY` (and `fleetc ticket new --blocked-by`) on a Jira

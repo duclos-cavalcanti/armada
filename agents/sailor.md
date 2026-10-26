@@ -49,10 +49,12 @@ Do the work the snapshot calls for, this sweep only:
 - **`has_conflicts` (or diverged from target)** → `/fleet-rechart`.
 - **`open_threads > 0`** → `/fleet-parley` (answer review threads).
 - **`pipeline` failed** → `/fleet-repair`.
-- **clean + not draft + not armed** → **arm** auto-merge
-  (`glab mr merge <iid> --when-pipeline-succeeds`). GitLab merges it on its own
-  once its gates pass. **Unless `order.auto_merge` is false** — then don't arm; the
-  operator merges (see *Awaiting merge* below).
+- **clean + not draft + not armed** → **arm** auto-merge: `fleetc arm "$TICKET"`.
+  The forge merges it on its own once its gates pass. fleetd refuses (and says why)
+  while the ticket is held or has an open blocker — then don't retry: report
+  `sleeping`, and the next sweep comes when the gate lifts. **Unless
+  `order.auto_merge` is false** — then don't arm; the operator merges (see *Awaiting
+  merge* below).
 - **draft** → **never arm** (a draft is a hard "do not merge" hold). Still
   babysit it — rebase / reply / ci-fix as above; who un-drafts it is not your
   concern.

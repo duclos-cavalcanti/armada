@@ -337,7 +337,7 @@ pub(crate) fn is_ready(ledger: &Ledger, ticket: &Ticket) -> Result<bool> {
 
 /// Every blocker in `blockers` is terminal (Done/Cancelled) — the DAG-ready predicate shared by
 /// `is_ready` (the ticket itself) and `classify` (a candidate's single parent, one level deep).
-fn blockers_terminal(ledger: &Ledger, blockers: &[TicketKey]) -> Result<bool> {
+pub(crate) fn blockers_terminal(ledger: &Ledger, blockers: &[TicketKey]) -> Result<bool> {
     for b in blockers {
         let s = TicketRepo::get(ledger, b)?.and_then(|t| t.status);
         if !matches!(s, Some(TicketStatus::Done) | Some(TicketStatus::Cancelled)) {

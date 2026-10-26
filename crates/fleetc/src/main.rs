@@ -50,6 +50,7 @@ fn run() -> Result<()> {
         Some("rebase") => rebase(&args[1..]),
         Some("launch") => launch(&args[1..]),
         Some("ticket") => ticket(&args[1..]),
+        Some("arm") => arm(&args[1..]),
         Some("settings") => settings(&args[1..]),
         Some("project") => project(),
         Some("cost") => cost(&args[1..]),
@@ -72,6 +73,7 @@ fn run() -> Result<()> {
                  fleetc transcript --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] [--open]   (resolve a cog's transcript)\n  \
                  fleetc review   --iid <N>         (an MR's fresh review surface: open-thread count + floating notes)\n  \
                  fleetc rebase   --iid <N>         (server-side rebase an MR)\n  \
+                 fleetc arm      <KEY-N>          (arm the ticket's MR to merge once green; refused while held or blocked)\n  \
                  fleetc ticket   <KEY-N>                (a ticket's full text: type, status, links, description)\n  \
                  fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (prints the new key)\n  \
                  fleetc ticket   block <KEY-N> --by <KEY-N>   (record an 'is blocked by' edge)\n  \
@@ -600,6 +602,13 @@ fn launch(args: &[String]) -> Result<()> {
         description: description.ok_or_else(|| anyhow!("--body required"))?,
         draft,
     })
+}
+
+/// `fleetc arm <KEY-N>` — arm the ticket's open MR to merge once its gates pass (the sailor's land
+/// step). fleetd refuses while the ticket is held or has an open blocker, and says which.
+fn arm(args: &[String]) -> Result<()> {
+    let ticket = require_ticket(args, "arm")?;
+    post_and_print("/arm", &wire::ArmCmd { ticket })
 }
 
 /// `fleetc ticket <KEY-N> | new … | block …` — read or write tickets through the project's tracker
