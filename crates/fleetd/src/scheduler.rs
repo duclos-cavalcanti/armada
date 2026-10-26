@@ -572,7 +572,7 @@ mod tests {
         fn preflight(&self) -> Result<String> {
             Ok("fake".into())
         }
-        fn active_sprint(&self) -> Result<Vec<TrackerTicket>> {
+        fn board(&self) -> Result<Vec<TrackerTicket>> {
             Ok(self.0.clone())
         }
         fn get(&self, key: &TicketKey) -> Result<TrackerTicket> {
@@ -584,13 +584,7 @@ mod tests {
         fn assigned_to_peer(&self, _: &TicketKey) -> Result<bool> {
             Ok(false)
         }
-        fn assign_to_me(&self, _: &TicketKey) -> Result<()> {
-            Ok(())
-        }
-        fn add_claim_label(&self, _: &TicketKey) -> Result<()> {
-            Ok(())
-        }
-        fn add_to_active_sprint(&self, _: &TicketKey) -> Result<()> {
+        fn claim(&self, _: &TicketKey) -> Result<()> {
             Ok(())
         }
         fn parent_of(&self, _: &TicketKey) -> Result<Option<TicketKey>> {

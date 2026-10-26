@@ -7,11 +7,11 @@ use domain::ports::{Forge, ShipRepo, TicketRepo, Tracker};
 use domain::{Ship, ShipId, ShipSnapshot};
 use ledger::Ledger;
 
-/// Fetch the active sprint from the tracker and upsert each ticket (the board),
+/// Fetch the board from the tracker and upsert each ticket,
 /// preserving our own `held`/`created_at`. Run this BEFORE `sync_armada` so ships
 /// can link their `ticket` FK.
 pub fn sync_board(ledger: &Ledger, tracker: &dyn Tracker, now: &str) -> Result<usize> {
-    let tickets = tracker.active_sprint()?;
+    let tickets = tracker.board()?;
     let count = tickets.len();
     for t in &tickets {
         TicketRepo::sync(ledger, t, now)?;
@@ -190,7 +190,7 @@ mod tests {
         fn preflight(&self) -> Result<String> {
             Ok("fake".into())
         }
-        fn active_sprint(&self) -> Result<Vec<TrackerTicket>> {
+        fn board(&self) -> Result<Vec<TrackerTicket>> {
             Ok(self.0.clone())
         }
         fn get(&self, _: &TicketKey) -> Result<TrackerTicket> {
@@ -202,13 +202,7 @@ mod tests {
         fn assigned_to_peer(&self, _: &TicketKey) -> Result<bool> {
             Ok(false)
         }
-        fn assign_to_me(&self, _: &TicketKey) -> Result<()> {
-            Ok(())
-        }
-        fn add_claim_label(&self, _: &TicketKey) -> Result<()> {
-            Ok(())
-        }
-        fn add_to_active_sprint(&self, _: &TicketKey) -> Result<()> {
+        fn claim(&self, _: &TicketKey) -> Result<()> {
             Ok(())
         }
         fn parent_of(&self, _: &TicketKey) -> Result<Option<TicketKey>> {

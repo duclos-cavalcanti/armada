@@ -517,16 +517,10 @@ fn spawn<T: Tracker, H: SessionHost>(
         // The transition is the lock (claim.sh step 1): a peer who moved it past To Do fails here.
         tracker.transition(&tkey, TicketStatus::InProgress)?;
 
-        // Claim follow-ons (claim.sh steps 2-4), best-effort: a failure is a partial claim —
-        // logged, not fatal (the transition already locked the ticket and the cog must launch).
-        for (what, res) in [
-            ("assign", tracker.assign_to_me(&tkey)),
-            ("label", tracker.add_claim_label(&tkey)),
-            ("sprint", tracker.add_to_active_sprint(&tkey)),
-        ] {
-            if let Err(e) = res {
-                eprintln!("fleetd: spawn {ticket}: claim {what} failed (partial claim): {e:#}");
-            }
+        // Claim follow-ons, best-effort: a failure is a partial claim — logged, not fatal (the
+        // transition already locked the ticket and the cog must launch).
+        if let Err(e) = tracker.claim(&tkey) {
+            eprintln!("fleetd: spawn {ticket}: claim follow-ons failed: {e:#}");
         }
     }
 
@@ -1566,9 +1560,9 @@ mod tests {
     /// executor, so they're left unimplemented.
     struct FakeTracker {
         moves: RefCell<Vec<(String, TicketStatus)>>,
-        claims: RefCell<Vec<String>>, // "assign" / "label" / "sprint"
+        claims: RefCell<Vec<String>>, // tickets claimed
         peer: RefCell<bool>,          // what assigned_to_peer returns
-        fail: RefCell<Vec<String>>,   // follow-on names to force-fail (best-effort test)
+        fail_claim: RefCell<bool>,    // force the claim to fail (best-effort test)
         parent: RefCell<Option<TicketKey>>, // what parent_of returns
         subtasks: RefCell<Vec<TicketStatus>>, // what subtasks returns
     }
@@ -1578,25 +1572,17 @@ mod tests {
                 moves: RefCell::new(vec![]),
                 claims: RefCell::new(vec![]),
                 peer: RefCell::new(false),
-                fail: RefCell::new(vec![]),
+                fail_claim: RefCell::new(false),
                 parent: RefCell::new(None),
                 subtasks: RefCell::new(vec![]),
             }
-        }
-        fn claim(&self, what: &str) -> Result<()> {
-            let name = what.split(':').next().unwrap();
-            if self.fail.borrow().iter().any(|f| f == name) {
-                return Err(anyhow!("forced {what} failure"));
-            }
-            self.claims.borrow_mut().push(what.into());
-            Ok(())
         }
     }
     impl Tracker for FakeTracker {
         fn preflight(&self) -> Result<String> {
             Ok("fake".into())
         }
-        fn active_sprint(&self) -> Result<Vec<TrackerTicket>> {
+        fn board(&self) -> Result<Vec<TrackerTicket>> {
             Ok(vec![])
         }
         fn get(&self, _key: &TicketKey) -> Result<TrackerTicket> {
@@ -1609,14 +1595,12 @@ mod tests {
         fn assigned_to_peer(&self, _key: &TicketKey) -> Result<bool> {
             Ok(*self.peer.borrow())
         }
-        fn assign_to_me(&self, _key: &TicketKey) -> Result<()> {
-            self.claim("assign")
-        }
-        fn add_claim_label(&self, _key: &TicketKey) -> Result<()> {
-            self.claim("label")
-        }
-        fn add_to_active_sprint(&self, _key: &TicketKey) -> Result<()> {
-            self.claim("sprint")
+        fn claim(&self, key: &TicketKey) -> Result<()> {
+            if *self.fail_claim.borrow() {
+                return Err(anyhow!("forced partial claim"));
+            }
+            self.claims.borrow_mut().push(key.0.clone());
+            Ok(())
         }
         fn parent_of(&self, _key: &TicketKey) -> Result<Option<TicketKey>> {
             Ok(self.parent.borrow().clone())
@@ -1728,11 +1712,8 @@ mod tests {
             tracker.moves.borrow().as_slice(),
             &[("PROJ-1".to_string(), TicketStatus::InProgress)]
         );
-        // ...then the three claim follow-ons: self-assign, claim label, active sprint.
-        assert_eq!(
-            tracker.claims.borrow().as_slice(),
-            &["assign".to_string(), "label".to_string(), "sprint".to_string()]
-        );
+        // ...then the claim follow-ons.
+        assert_eq!(tracker.claims.borrow().as_slice(), &["PROJ-1".to_string()]);
         // a live worker session now exists in the order's worktree.
         let sessions = SessionRepo::for_ticket(&db, &TicketKey("PROJ-1".into())).unwrap();
         assert_eq!(sessions.len(), 1);
@@ -1867,20 +1848,18 @@ mod tests {
 
     #[test]
     fn spawn_survives_a_partial_claim() {
-        // A follow-on failing (here: label) is a partial claim — logged, not fatal: the ticket is
-        // still transitioned, the session recorded, the cog launched.
+        // A claim follow-on failing is a partial claim — logged, not fatal: the ticket is still
+        // transitioned, the session recorded, the cog launched.
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::Todo, false, vec![]);
         order_wt(&db, "PROJ-1", true, Some("/wt/PROJ-1"));
         let tracker = FakeTracker::new();
-        tracker.fail.borrow_mut().push("label".into());
+        *tracker.fail_claim.borrow_mut() = true;
         let host = FakeHost::new();
 
         spawn(&db, &tracker, &host, "PROJ-1", "worker").unwrap();
 
         assert_eq!(tracker.moves.borrow().len(), 1, "transitioned despite the partial claim");
-        // assign + sprint recorded; the label was forced to fail and skipped.
-        assert_eq!(tracker.claims.borrow().as_slice(), &["assign".to_string(), "sprint".to_string()]);
         assert_eq!(SessionRepo::for_ticket(&db, &TicketKey("PROJ-1".into())).unwrap().len(), 1);
         assert_eq!(host.spawned.borrow().len(), 1, "the cog still launched");
     }

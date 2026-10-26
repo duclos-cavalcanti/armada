@@ -54,6 +54,38 @@ impl JiraTracker {
         );
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
+
+    /// assign to the operator. jira-cli's `assign` needs an exact email (no `me` keyword),
+    /// so resolve it via `jira me` first — the documented self-assign idiom.
+    fn assign_to_me(&self, key: &TicketKey) -> Result<()> {
+        let me = self.jira(&["me"])?;
+        let me = me.trim();
+        ensure!(!me.is_empty(), "jira me returned empty");
+        self.jira(&["issue", "assign", &key.0, me])?;
+        Ok(())
+    }
+
+    fn add_claim_label(&self, key: &TicketKey) -> Result<()> {
+        if let Some(label) = &self.claim_label {
+            self.jira(&["issue", "edit", &key.0, "--no-input", "--label", label])?;
+        }
+        Ok(())
+    }
+
+    /// add to the active sprint. jira-cli 1.7.0: `sprint list --plain --columns ID` + the
+    /// positional `sprint add <SPRINT_ID> <ISSUE>` are the verified forms.
+    fn add_to_active_sprint(&self, key: &TicketKey) -> Result<()> {
+        let list = self.jira(&[
+            "sprint", "list", "-p", &self.project, "--state", "active", "--plain", "--no-headers", "--columns", "ID",
+        ])?;
+        let id = list
+            .lines()
+            .next()
+            .and_then(|l| l.split_whitespace().next())
+            .context("no active sprint")?;
+        self.jira(&["sprint", "add", id, &key.0])?;
+        Ok(())
+    }
 }
 
 impl Tracker for JiraTracker {
@@ -68,7 +100,7 @@ impl Tracker for JiraTracker {
         Ok(format!("jira logged in as {me} · project {}", self.project))
     }
 
-    fn active_sprint(&self) -> Result<Vec<TrackerTicket>> {
+    fn board(&self) -> Result<Vec<TrackerTicket>> {
         self.all_issues("sprint in openSprints()") // `-p` scopes it to the project
     }
 
@@ -112,35 +144,12 @@ impl Tracker for JiraTracker {
         Ok(false) // empty match → no peer → claimable
     }
 
-    /// assign to the operator. jira-cli's `assign` needs an exact email (no `me` keyword),
-    /// so resolve it via `jira me` first — the documented self-assign idiom.
-    fn assign_to_me(&self, key: &TicketKey) -> Result<()> {
-        let me = self.jira(&["me"])?;
-        let me = me.trim();
-        ensure!(!me.is_empty(), "jira me returned empty");
-        self.jira(&["issue", "assign", &key.0, me])?;
-        Ok(())
-    }
-
-    fn add_claim_label(&self, key: &TicketKey) -> Result<()> {
-        if let Some(label) = &self.claim_label {
-            self.jira(&["issue", "edit", &key.0, "--no-input", "--label", label])?;
-        }
-        Ok(())
-    }
-
-    /// add to the active sprint. jira-cli 1.7.0: `sprint list --plain --columns ID` + the
-    /// positional `sprint add <SPRINT_ID> <ISSUE>` are the verified forms.
-    fn add_to_active_sprint(&self, key: &TicketKey) -> Result<()> {
-        let list = self.jira(&[
-            "sprint", "list", "-p", &self.project, "--state", "active", "--plain", "--no-headers", "--columns", "ID",
-        ])?;
-        let id = list
-            .lines()
-            .next()
-            .and_then(|l| l.split_whitespace().next())
-            .context("no active sprint")?;
-        self.jira(&["sprint", "add", id, &key.0])?;
+    fn claim(&self, key: &TicketKey) -> Result<()> {
+        let failed: Vec<String> = [("assign", self.assign_to_me(key)), ("label", self.add_claim_label(key)), ("sprint", self.add_to_active_sprint(key))]
+            .into_iter()
+            .filter_map(|(step, res)| res.err().map(|e| format!("{step}: {e:#}")))
+            .collect();
+        ensure!(failed.is_empty(), "partial claim — {}", failed.join("; "));
         Ok(())
     }
 

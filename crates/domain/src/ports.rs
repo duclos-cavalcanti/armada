@@ -170,18 +170,17 @@ pub trait Tracker {
     /// Preflight: verify this adapter can work — its CLI is installed, authenticated, and reaches
     /// the configured target. `Ok` carries a one-line confirmation for the checklist.
     fn preflight(&self) -> Result<String>;
-    fn active_sprint(&self) -> Result<Vec<TrackerTicket>>; // openSprints()
+    /// The board — the tickets the fleet works from (Jira: the open sprint; filesystem: every file).
+    fn board(&self) -> Result<Vec<TrackerTicket>>;
     fn get(&self, key: &TicketKey) -> Result<TrackerTicket>;
     fn transition(&self, key: &TicketKey, to: TicketStatus) -> Result<()>;
     /// True when the ticket is assigned to someone OTHER than the operator — the claim gate
     /// (never stomp a peer). `false` = unassigned or already ours, so it's safe to claim.
     fn assigned_to_peer(&self, key: &TicketKey) -> Result<bool>;
-    /// Assign the ticket to the operator (current user) — a claim follow-on.
-    fn assign_to_me(&self, key: &TicketKey) -> Result<()>;
-    /// Add the deployment's claim label, if it has one (idempotent) — a claim follow-on.
-    fn add_claim_label(&self, key: &TicketKey) -> Result<()>;
-    /// Add the ticket to the active sprint (idempotent) — a claim follow-on.
-    fn add_to_active_sprint(&self, key: &TicketKey) -> Result<()>;
+    /// Mark the ticket as the operator's active work, after the In Progress transition locked it
+    /// (Jira: assign to me, add the claim label, join the active sprint; filesystem: assign to me).
+    /// Best-effort follow-ons: try every step, then report the ones that failed (idempotent).
+    fn claim(&self, key: &TicketKey) -> Result<()>;
     /// The ticket's parent story (`None` if it isn't a sub-task) — for parent roll-up.
     fn parent_of(&self, key: &TicketKey) -> Result<Option<TicketKey>>;
     /// A parent's native sub-task statuses (empty = not a sub-task container, e.g. an Epic).
