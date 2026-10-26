@@ -59,7 +59,8 @@ reason (`fleetc hold <KEY> --reason "<what's missing>"`).
 1. **Every acceptance criterion met, each proven** — by a test, or by a verification
    stated in the MR. Believed-done isn't done.
 2. **Tests ship in the same MR** as the change they cover.
-3. **Review reaches nits only** — every finding above a nit is fixed or answered.
+3. **Review reaches nits only** — every finding above a nit is fixed or answered. For a
+   worker, that's the `surveyor`'s verdict: an independent review in a fresh context.
 4. **CI green** on the MR's head.
 5. **Scope held** — the MR does what the ticket says. Anything found along the way that
    isn't in it is filed as its own ticket (`/fleet-commission`), not left as a note.
