@@ -1,0 +1,15 @@
+{
+  "autoMode": {
+    "environment": [
+      "$defaults",
+      "Organization: <who you are> — <what the fleet builds here>. Primary use: backend software development.",
+      "Source control: github.com/<owner>/<repo>. Agents push branches and open PRs there; merges land through PR auto-merge."
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(gh *)"
+    ]
+  },
+  "enabledPlugins": {}
+}

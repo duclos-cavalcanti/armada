@@ -23,7 +23,3 @@
 - Always use the /worktree skill when creating a new branch, unless explicitly told otherwise.
 - Never `git add .` or `git add -A` —  stage files explicitly.
 - Use `glab` for GitLab operations.
-
-## Slack
-
-- Daniel/Me: `<redacted>`
