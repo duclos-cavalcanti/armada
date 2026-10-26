@@ -109,9 +109,40 @@ impl Ledger {
     }
 }
 
-fn init(conn: &Connection) -> rusqlite::Result<()> {
+fn init(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    conn.execute_batch(SCHEMA)
+    conn.execute_batch(SCHEMA)?;
+    stamp(conn, SCHEMA_VERSION, "ledger")
+}
+
+/// The ledger's schema version (SQLite `user_version`). There are no migrations: bump this when
+/// `schema.sql` changes shape, so a ledger or an export from another version is refused by name
+/// instead of failing later on a missing column.
+pub const SCHEMA_VERSION: i64 = 1;
+
+/// Stamp a fresh database with `version`; refuse one stamped with another. (`0` = never stamped.)
+pub(crate) fn stamp(conn: &Connection, version: i64, what: &str) -> Result<()> {
+    let found: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    match found {
+        0 => Ok(conn.pragma_update(None, "user_version", version)?),
+        v if v == version => Ok(()),
+        v => anyhow::bail!("{what} schema v{v}, but this build expects v{version} — no migrations: start fresh or use a matching build"),
+    }
+}
+
+/// A database file's schema version (`user_version`), read-only — what `fleetc import` checks.
+pub fn schema_version(path: &str) -> Result<i64> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    Ok(conn.pragma_query_value(None, "user_version", |r| r.get(0))?)
+}
+
+/// Snapshot a live database (the ledger or telemetry) into `to`: `VACUUM INTO` writes a
+/// consistent, compacted, standalone copy (no WAL beside it) from a read-only connection, so it
+/// runs beside fleetd's writer. `to` must not exist yet.
+pub fn snapshot(from: &str, to: &str) -> Result<()> {
+    let conn = Connection::open_with_flags(from, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    conn.execute("VACUUM INTO ?1", params![to])?;
+    Ok(())
 }
 
 /// Map an `Option<T>` (a failed enum parse) to a rusqlite conversion error. The DB
@@ -464,6 +495,40 @@ impl ReportRepo for Ledger {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_ledger_is_stamped_and_another_version_is_refused() {
+        let dir = std::env::temp_dir().join(format!("ledger-version-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ledger.db").to_string_lossy().into_owned();
+        drop(Ledger::open(&path).unwrap());
+        assert_eq!(schema_version(&path).unwrap(), SCHEMA_VERSION, "stamped on first open");
+
+        let conn = Connection::open(&path).unwrap();
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1).unwrap();
+        drop(conn);
+        let e = Ledger::open(&path).err().unwrap().to_string();
+        assert!(e.contains("schema v2") && e.contains("expects v1"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_snapshot_is_a_standalone_copy_of_the_live_ledger() {
+        let dir = std::env::temp_dir().join(format!("ledger-snapshot-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (live, copy) = (dir.join("ledger.db"), dir.join("copy.db"));
+        let (live, copy) = (live.to_string_lossy().into_owned(), copy.to_string_lossy().into_owned());
+        let db = Ledger::open(&live).unwrap(); // stays open, as fleetd's writer would
+        db.setting_set("poll_secs", "9").unwrap();
+        snapshot(&live, &copy).unwrap();
+        assert!(!std::path::Path::new(&format!("{copy}-wal")).exists(), "no WAL beside the copy");
+        assert_eq!(schema_version(&copy).unwrap(), SCHEMA_VERSION);
+        let restored = Ledger::open_readonly(&copy).unwrap();
+        assert_eq!(restored.setting_get("poll_secs").unwrap().as_deref(), Some("9"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn bare_ticket(key: &str) -> Ticket {
         Ticket {

@@ -44,6 +44,9 @@ pub struct TelemetryRow {
     pub attrs_json: String,
 }
 
+/// The telemetry DB's schema version (`user_version`) — bump with `SCHEMA` (see the ledger's).
+pub const SCHEMA_VERSION: i64 = 1;
+
 /// The telemetry store — a dedicated SQLite DB, separate from the operational ledger.
 pub struct TelemetryStore {
     conn: Connection,
@@ -54,6 +57,7 @@ impl TelemetryStore {
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch(SCHEMA)?;
+        crate::stamp(&conn, SCHEMA_VERSION, "telemetry")?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         Ok(Self { conn })
     }
