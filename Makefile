@@ -9,7 +9,7 @@
 # `make` with no target prints the help summary.
 
 .DEFAULT_GOAL := help
-.PHONY: help install uninstall need-project preflight run stop dashboard export
+.PHONY: help install uninstall .project preflight run stop dashboard export
 
 help:                            ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / { printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -23,21 +23,21 @@ uninstall:                       ## Uninstall the kit and remove fleetc
 	./install.sh --uninstall
 
 # The fleet targets need P=<name> — the project folder projects/<name>/.
-need-project:
+.project:
 	@if [ -z "$(P)" ]; then echo "P=<name> required — one of: $$(command ls projects | tr '\n' ' ')"; exit 1; fi
 
-preflight: need-project          ## Check project P's setup: runtime state, checkout, forge + tracker CLIs, tmux + claude
+preflight: .project              ## Check project P's setup: runtime state, checkout, forge + tracker CLIs, tmux + claude
 	cargo run -q -p fleetd -- -C projects/$(P) preflight
 
-run: need-project                ## Build + run project P's fleet daemon in the foreground (open a pane first; Ctrl-C to stop)
+run: .project                    ## Build + run project P's fleet daemon in the foreground (open a pane first; Ctrl-C to stop)
 	@if pgrep -x fleetd >/dev/null; then echo "fleetd already running — make stop first"; exit 1; fi
 	cargo run -p fleetd -- -C projects/$(P)
 
-export: need-project             ## Snapshot project P's ledger to projects/P/exports/P-<UTC stamp>.db (safe while running)
+export: .project                 ## Snapshot project P's ledger to projects/P/exports/P-<UTC stamp>.db (safe while running)
 	cargo run -q -p fleetc -- -C projects/$(P) export "projects/$(P)/exports/$(P)-$$(date -u +%Y%m%dT%H%M%SZ).db"
 
-stop: need-project               ## Stop project P's fleet daemon
+stop: .project                   ## Stop project P's fleet daemon
 	@pkill -f '/fleetd -C projects/$(P)$$' && echo "fleetd stopped ($(P))" || echo "fleetd not running ($(P))"
 
-dashboard: need-project          ## Build + run the TUI dashboard over project P (cargo run --release)
+dashboard: .project              ## Build + run the TUI dashboard over project P (cargo run --release)
 	cargo run --release -p dashboard -- -C projects/$(P)
