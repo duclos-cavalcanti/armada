@@ -318,7 +318,17 @@ fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Resul
             Some(s) => ShipRepo::snapshot(ledger, &s.id)?.map(|snap| snap.state),
             None => None,
         };
-        tickets.push(ConvoyTicketView { key: t.key, status: t.status, classification, dispatched, live_cog, ship_state });
+        // A STACKED ticket forks off its in-flight parent: the blocker that has an open ship.
+        let fork_from = match classification {
+            Some(domain::Classification::Stacked) => t.blocked_by.iter().find_map(|b| {
+                armada
+                    .iter()
+                    .find(|s| s.ticket.as_ref() == Some(b) && s.ended_at.is_none() && !s.source.is_empty())
+                    .map(|s| format!("origin/{}", s.source))
+            }),
+            _ => None,
+        };
+        tickets.push(ConvoyTicketView { key: t.key, status: t.status, classification, dispatched, live_cog, ship_state, fork_from });
     }
     Ok(ConvoyView { convoy: convoy.clone(), tickets })
 }
@@ -675,6 +685,7 @@ mod tests {
             iid: 7,
             url: "u".into(),
             target: "master".into(),
+            source: String::new(),
             pilot: "me".into(),
             created_at: "t".into(),
             ended_at: None,
@@ -764,6 +775,7 @@ mod tests {
             iid: 7,
             url: "u".into(),
             target: "main".into(),
+            source: String::new(),
             pilot: "me".into(),
             created_at: "t".into(),
             ended_at: None,
@@ -1061,6 +1073,7 @@ mod tests {
                 iid: 7,
                 url: "u".into(),
                 target: "master".into(),
+                source: String::new(),
                 pilot: "me".into(),
                 created_at: "t".into(),
                 ended_at: None,
@@ -1090,6 +1103,43 @@ mod tests {
         assert_eq!(p.ship.unwrap().iid, 7);
         assert_eq!(p.snapshot.unwrap().state, ShipState::Open);
         assert_eq!(p.ticket.unwrap().key, TicketKey("PROJ-1".into()));
+    }
+
+    #[test]
+    fn convoy_view_hands_a_stacked_ticket_its_parents_branch() {
+        let db = Ledger::in_memory().unwrap();
+        let convoy = ConvoyKey("PROJ-100".into());
+        let tt = |key: &str, status: TicketStatus, blocked_by: Vec<&str>| TrackerTicket {
+            key: TicketKey(key.into()),
+            title: "T".into(),
+            status,
+            assignee: None,
+            convoy: Some(convoy.clone()),
+            blocked_by: blocked_by.into_iter().map(|b| TicketKey(b.into())).collect(),
+        };
+        let tickets = vec![tt("PROJ-1", TicketStatus::InQa, vec![]), tt("PROJ-2", TicketStatus::Todo, vec!["PROJ-1"])];
+        sync::sync_board(&db, &FakeTracker(tickets), "now").unwrap();
+        let parent = Ship {
+            id: ShipId(0),
+            ticket: Some(TicketKey("PROJ-1".into())),
+            iid: 1,
+            url: "u".into(),
+            target: "main".into(),
+            source: "feature/PROJ-1-parent".into(),
+            pilot: "me".into(),
+            created_at: "t".into(),
+            ended_at: None,
+            swept: None,
+            reviewed: None,
+        };
+        ShipRepo::upsert(&db, &parent).unwrap();
+
+        let view = build_convoy_view(&db, &convoy, true).unwrap();
+        let child = view.tickets.iter().find(|t| t.key.0 == "PROJ-2").unwrap();
+        assert_eq!(child.classification, Some(domain::Classification::Stacked));
+        assert_eq!(child.fork_from.as_deref(), Some("origin/feature/PROJ-1-parent"));
+        let view = build_convoy_view(&db, &convoy, false).unwrap();
+        assert_eq!(view.tickets.iter().find(|t| t.key.0 == "PROJ-2").unwrap().fork_from, None, "no stacking, no fork base");
     }
 
     #[test]

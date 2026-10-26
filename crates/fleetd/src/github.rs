@@ -182,6 +182,7 @@ fn pr_to_ship(p: &Value, prefix: &str) -> Option<ForgeShip> {
         iid: p.get("number")?.as_i64()?,
         url: s("url").to_string(),
         target: s("baseRefName").to_string(),
+        source: s("headRefName").to_string(),
         pilot: p.pointer("/author/login").and_then(Value::as_str).unwrap_or("").to_string(),
         ticket: TicketKey::find_in(s("headRefName"), prefix).or_else(|| TicketKey::find_in(&title, prefix)),
         title,

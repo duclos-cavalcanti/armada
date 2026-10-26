@@ -40,7 +40,8 @@ fleetc context --convoy "$FLEET_CONVOY"
 ```
 
 The slice is `{ convoy, tickets: [ { key, status, classification, dispatched,
-live_cog, ship_state } ] }`. fleetd has already done the deterministic work — the
+live_cog, ship_state, fork_from } ] }` (`fork_from` is set on a `stacked` ticket: its
+parent's branch). fleetd has already done the deterministic work — the
 DAG, the blockers, the holds — and handed you a verdict per ticket:
 
 - **`classification`** — fleetd's dispatch verdict (`null` once a ticket is past the
@@ -65,11 +66,10 @@ can't — a grooming glance — then act on it:
 2. **Well-formed** → dispatch it, forking off the right base:
    - **`clean`** → fork the default branch: `/fleet-berth <TICKET>` emits the path, then
      `fleetc dispatch --ticket <TICKET> --ac "<summary>" --worktree <path>`.
-   - **`stacked`** → fork the **parent's branch**. Resolve it — the child's single
-     `blocked_by` ticket, its open MR's `source_branch`
-     (`glab mr view <parent-iid> -F json | jq -r .source_branch`). Then
-     `/fleet-berth <TICKET> <parent-branch>` (cuts the worktree off the parent) and
-     `fleetc dispatch --ticket <TICKET> --ac "<summary>" --fork-from <parent-branch> --worktree <path>`.
+   - **`stacked`** → fork the **parent's branch**: the slice's `fork_from` for that
+     ticket (`origin/<parent-branch>`, from the in-flight parent's MR). Then
+     `/fleet-berth <TICKET> <fork_from>` (cuts the worktree off the parent) and
+     `fleetc dispatch --ticket <TICKET> --ac "<summary>" --fork-from <fork_from> --worktree <path>`.
      The child's MR targets the parent branch; fleetd declares the block, the sailor
      keeps it rebased on the parent, and it unwinds onto the default branch when the parent merges —
      all automatic.

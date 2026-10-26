@@ -1,6 +1,5 @@
 ---
-description: Rebase the current branch's MR against its target. Clean divergence → trigger GitLab's server-side rebase via `fleetc rebase` and exit (the sailor re-fires on the result). Conflict → resolve locally with project/code understanding and force-push. Escalate only when the conflict needs a product/design decision.
-argument-hint: [MR_IID]
+description: Rebase the ticket's MR against its target. Clean divergence → trigger the forge's server-side rebase via `fleetc rebase` and exit (the sailor re-fires on the result). Conflict → resolve locally with project/code understanding and force-push. Escalate only when the conflict needs a product/design decision.
 ---
 
 # Skill: fleet-rechart
@@ -9,7 +8,7 @@ Rebase the current branch's open MR against its target branch. The decision turn
 on **whether the MR is conflicted**:
 
 - **Not conflicted** (behind target / `need_rebase`) → the rebase is mechanical:
-  trigger GitLab's server-side rebase (`fleetc rebase`) and exit. You do **not**
+  trigger the forge's server-side rebase (`fleetc rebase`) and exit. You do **not**
   wait for it — the sailor re-fires when the result lands (the rebase moves
   `head_sha`, which the fleet's fingerprint watches).
 - **Conflicted** → a server-side rebase can't resolve it (GitLab aborts). This is
@@ -30,23 +29,22 @@ on **whether the MR is conflicted**:
 
 ## Steps
 
-### 1 — Resolve the MR IID
+### 1 — Read the MR from fleetd's packet
 
-Use the passed argument if given; otherwise discover from the branch:
+fleetd fresh-polled the MR when it launched you; its packet carries the iid, the target, and
+the merge-readiness (the same vocabulary on every forge):
 
 ```bash
-MR_IID="${ARG_IID:-$(glab mr list --source-branch "$(git branch --show-current)" --output json | jq -r '.[0].iid // empty')}"
-[ -n "$MR_IID" ] || { echo "no open MR for this branch" >&2; exit 1; }
+PACKET=$(fleetc packet "$FLEET_TICKET")
+MR_IID=$(printf '%s' "$PACKET" | jq -r '.ship.iid // empty')
+[ -n "$MR_IID" ] || { echo "no open MR for $FLEET_TICKET" >&2; exit 1; }
+TARGET=$(printf '%s' "$PACKET" | jq -r '.ship.target')
 ```
 
 ### 2 — Branch on conflict state
 
-Read GitLab's merge-readiness fresh and split clean-vs-conflict:
-
 ```bash
-MR=$(glab api "projects/:fullpath/merge_requests/$MR_IID")
-CONFLICTED=$(printf '%s' "$MR" | jq -r 'if (.has_conflicts==true) or (.detailed_merge_status=="conflict") then "true" else "false" end')
-TARGET=$(printf '%s' "$MR" | jq -r '.target_branch')
+CONFLICTED=$(printf '%s' "$PACKET" | jq -r 'if (.snapshot.has_conflicts==true) or (.snapshot.merge_status=="conflict") then "true" else "false" end')
 
 if [ "$CONFLICTED" = "false" ]; then
   # Clean divergence — trigger the server-side rebase (disarms MWPS if needed) and exit.

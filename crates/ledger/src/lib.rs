@@ -743,6 +743,7 @@ fn row_to_ship(r: &rusqlite::Row) -> rusqlite::Result<Ship> {
         iid: r.get("iid")?,
         url: r.get("url")?,
         target: r.get("target")?,
+        source: r.get("source")?,
         pilot: r.get("pilot")?,
         created_at: r.get("created_at")?,
         ended_at: r.get("ended_at")?,
@@ -780,12 +781,13 @@ fn row_to_snapshot(r: &rusqlite::Row) -> rusqlite::Result<ShipSnapshot> {
 impl ShipRepo for Ledger {
     fn upsert(&self, s: &Ship) -> Result<ShipId> {
         let id: i64 = self.conn.query_row(
-            "INSERT INTO ships(ticket, iid, url, target, pilot, created_at, ended_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO ships(ticket, iid, url, target, source, pilot, created_at, ended_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(iid) DO UPDATE SET
                ticket   = excluded.ticket,
                url      = excluded.url,
                target   = excluded.target,
+               source   = excluded.source,
                pilot    = excluded.pilot,
                ended_at = excluded.ended_at
              RETURNING id",
@@ -794,6 +796,7 @@ impl ShipRepo for Ledger {
                 s.iid,
                 s.url,
                 s.target,
+                s.source,
                 s.pilot,
                 s.created_at,
                 s.ended_at,
@@ -1195,6 +1198,7 @@ mod repo_tests {
             iid: 42,
             url: "u".into(),
             target: "master".into(),
+            source: String::new(),
             pilot: "me".into(),
             created_at: "t".into(),
             ended_at: None,
@@ -1228,7 +1232,7 @@ mod repo_tests {
         // An allied ship (no ticket) also fits the one shape.
         let ally = Ship {
             id: ShipId(0), ticket: None, iid: 99, url: "u2".into(),
-            target: "master".into(), pilot: "ally".into(), created_at: "t".into(), ended_at: None,
+            target: "master".into(), source: String::new(), pilot: "ally".into(), created_at: "t".into(), ended_at: None,
             swept: None,
             reviewed: None,
         };

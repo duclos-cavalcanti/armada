@@ -341,6 +341,7 @@ fn mr_to_ship(m: &serde_json::Value, prefix: &str) -> Option<ForgeShip> {
         iid,
         url: s("web_url"),
         target: m.get("target_branch").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        source: source.to_string(),
         pilot,
         ticket: TicketKey::find_in(source, prefix).or_else(|| TicketKey::find_in(&title, prefix)),
         title,

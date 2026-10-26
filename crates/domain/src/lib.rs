@@ -260,6 +260,8 @@ pub struct ConvoyTicketView {
     pub dispatched: bool,
     pub live_cog: Option<CrewKind>,
     pub ship_state: Option<ShipState>,
+    /// For a STACKED ticket: the ref to fork it off — its in-flight parent's branch (`origin/<branch>`).
+    pub fork_from: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -273,6 +275,8 @@ pub struct Ship {
     pub iid: i64,                  // the forge's MR number
     pub url: String,
     pub target: String,
+    /// The MR's head (source) branch — what a stacked child forks off.
+    pub source: String,
     pub pilot: String,             // author — ours vs allied differentiator
     pub created_at: Timestamp,
     pub ended_at: Option<Timestamp>,
@@ -319,6 +323,7 @@ pub struct ForgeShip {
     pub iid: i64,
     pub url: String,
     pub target: String,
+    pub source: String,
     pub pilot: String,
     pub ticket: Option<TicketKey>,
     pub title: String,

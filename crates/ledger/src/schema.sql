@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS ships (
     iid        INTEGER NOT NULL UNIQUE,
     url        TEXT NOT NULL,
     target     TEXT NOT NULL,
+    source     TEXT NOT NULL DEFAULT '',               -- head branch (a stacked child's fork base)
     pilot      TEXT NOT NULL,                          -- author (ours vs allied)
     created_at TEXT NOT NULL,
     ended_at   TEXT,

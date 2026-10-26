@@ -36,13 +36,13 @@ surface).
 ```bash
 set -euo pipefail
 
-# Discover the open MR for this branch, then read its fresh review surface via fleetc.
+# Find the ticket's open MR (fleetd's packet), then read its fresh review surface via fleetc.
 # `fleetc review` is one call to the factory's forge that returns BOTH the merge-blocking
 # open-thread count (resolvable && !resolved && !system) AND the floating notes the count
 # EXCLUDES (!resolvable && !system) — the same structural filters that kept the bash
 # count-gate false-positive-free, now homed in forge.rs (not re-implemented inline).
-MR_IID=$(glab mr list --source-branch "$(git branch --show-current)" --output json | jq -r '.[0].iid // empty')
-[ -n "$MR_IID" ] || { echo "no open MR for this branch" >&2; exit 1; }
+MR_IID=$(fleetc packet "$FLEET_TICKET" | jq -r '.ship.iid // empty')
+[ -n "$MR_IID" ] || { echo "no open MR for $FLEET_TICKET" >&2; exit 1; }
 REVIEW=$(fleetc review --iid "$MR_IID")
 OPEN=$(printf '%s' "$REVIEW" | jq '.open_threads')
 

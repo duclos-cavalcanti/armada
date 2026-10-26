@@ -42,9 +42,9 @@ expanding scope beyond the ticket. If uncertain, escalate rather than improvise.
 ```bash
 set -euo pipefail
 
-# Discover the open MR for this branch. Empty = no open MR → nothing to fix.
-MR_IID=$(glab mr list --source-branch "$(git branch --show-current)" --output json | jq -r '.[0].iid // empty')
-[ -n "$MR_IID" ] || { echo "no open MR for this branch" >&2; exit 1; }
+# Find the ticket's open MR (fleetd's packet). Empty = no open MR → nothing to fix.
+MR_IID=$(fleetc packet "$FLEET_TICKET" | jq -r '.ship.iid // empty')
+[ -n "$MR_IID" ] || { echo "no open MR for $FLEET_TICKET" >&2; exit 1; }
 
 # Fetch the latest pipeline for the MR. The ${MR_IID} suffix keeps concurrent
 # cogs from clobbering each other's tempfile in the shared /tmp.
