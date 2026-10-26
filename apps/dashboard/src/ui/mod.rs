@@ -58,15 +58,6 @@ fn render_body(f: &mut Frame, area: Rect, app: &App) {
 fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<'static>>) {
     let f = &app.fleet;
     match pane {
-        Pane::NeedsYou => (
-            format!(
-                " Needs you · {} proposals · {} held · enter read · a accept · d drop · u unhold ",
-                f.proposals.len(),
-                f.held.len()
-            ),
-            Some(header(&[("What", 9), ("Ref", 12), ("From", 12), ("Convoy", 12), ("Age", 6), ("Detail", 0)])),
-            f.proposals.iter().map(needs_proposal_row).chain(f.held.iter().map(|t| held_row(t, &f.held_reasons))).collect(),
-        ),
         Pane::Dispatched => (
             format!(" Dispatch · {} orders ", f.dispatched.len()),
             Some(header(&[
@@ -120,14 +111,18 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             ticket_rows(&f.board, &f.held_reasons),
         ),
         Pane::Convoys => (
-            format!(" convoys · {} active ", f.convoys.len()),
-            None,
-            f.convoys.iter().map(|c| convoy_row(c, f.captain_of(&c.key))).collect(),
+            format!(" Convoys · {} open · enter captain ", f.convoys.len()),
+            Some(header(&[("Convoy", 12), ("Captain", 8), ("Tmux", 5), ("Open", 6), ("Title", 0)])),
+            f.convoys.iter().map(|c| convoy_row(c, f)).collect(),
         ),
         Pane::Proposals => (
-            format!(" Proposals · {} open · enter read · a accept · d drop ", f.proposals.len()),
-            Some(header(&[("Id", 4), ("From", 12), ("Convoy", 12), ("Type", 6), ("Age", 6), ("Proposed", 0)])),
-            f.proposals.iter().map(proposal_row).collect(),
+            format!(
+                " Proposals · {} open · {} held · enter read · a accept · d drop · u unhold ",
+                f.proposals.len(),
+                f.held.len()
+            ),
+            Some(header(&[("What", 9), ("Ref", 12), ("From", 12), ("Convoy", 12), ("Age", 6), ("Detail", 0)])),
+            f.proposals.iter().map(proposal_row).chain(f.held.iter().map(|t| held_row(t, &f.held_reasons))).collect(),
         ),
         Pane::Log => (
             format!(
@@ -156,7 +151,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     };
     let status = if app.fleet.fleetd_up { status } else { format!("fleetd down (see Log) · {status}") };
     let body = format!(
-        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-4 pane · j/k row · y/Y yank",
+        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-5 pane · j/k row · y/Y yank",
         flash, zoom, status,
     );
     f.render_widget(Paragraph::new(Line::from(body)).style(dim), area);
@@ -332,21 +327,30 @@ fn ticket_rows(board: &[Ticket], held_reasons: &HashMap<String, String>) -> Vec<
         .collect()
 }
 
-/// A convoy row carries its captain (the cog that dispatches it), when one is live.
-fn convoy_row(c: &Convoy, captain: Option<&CogRow>) -> Line<'static> {
-    let anchor = if c.anchored_at.is_some() { " ⚓" } else { "" };
-    let captain = match captain {
-        Some(cap) => format!(
-            "  ⚑ captain {}",
-            cap.liveness.as_deref().map(str::to_lowercase).unwrap_or_else(|| "live".into())
-        ),
-        None => String::new(),
+/// An open convoy: its captain (the cog that dispatches it) while one is live — `enter` switches
+/// to it — and how many of its tickets are still open (not done / cancelled).
+fn convoy_row(c: &Convoy, f: &crate::source::Fleet) -> Line<'static> {
+    let members: Vec<&Ticket> = f.board.iter().filter(|t| t.convoy.as_ref() == Some(&c.key)).collect();
+    let open = members
+        .iter()
+        .filter(|t| !matches!(t.status, Some(domain::TicketStatus::Done) | Some(domain::TicketStatus::Cancelled)))
+        .count();
+    let (live, up) = match f.captain_of(&c.key) {
+        Some(cap) => (live_cell(cap.liveness.as_deref()), f.is_up(cap)),
+        None => (("off".into(), 7, dim()), false),
     };
-    Line::from(format!("{:<12} {}{}{}", c.key.0, short(c.title.as_deref().unwrap_or(""), 50), anchor, captain))
+    let anchor = if c.anchored_at.is_some() { "⚓ " } else { "" };
+    cells(vec![
+        (c.key.0.clone(), 12, Style::default()),
+        (live.0, 8, live.2),
+        tmux_cell(up),
+        (format!("{open}/{}", members.len()), 6, Style::default()),
+        (format!("{anchor}{}", c.title.as_deref().unwrap_or("")), 0, Style::default()),
+    ])
 }
 
-/// Needs you · a proposal: accept or drop it.
-fn needs_proposal_row(p: &Proposal) -> Line<'static> {
+/// Proposals · a proposal: accept or drop it.
+fn proposal_row(p: &Proposal) -> Line<'static> {
     let key = |k: Option<&String>| k.cloned().unwrap_or_else(|| "—".into());
     let (detail, style) = match &p.proposed {
         Proposed::New(d) => (format!("new {}: {}", d.kind, d.title), Style::default()),
@@ -362,7 +366,7 @@ fn needs_proposal_row(p: &Proposal) -> Line<'static> {
     ])
 }
 
-/// Needs you · a convoy ticket a captain held (not Ready): fix it, then unhold it.
+/// Proposals · a convoy ticket a captain held (not Ready): fix it, then unhold it.
 fn held_row(t: &Ticket, reasons: &HashMap<String, String>) -> Line<'static> {
     let reason = reasons.get(&t.key.0).map(String::as_str).filter(|r| !r.is_empty()).unwrap_or("(no reason given)");
     cells(vec![
@@ -372,24 +376,6 @@ fn held_row(t: &Ticket, reasons: &HashMap<String, String>) -> Line<'static> {
         (t.convoy.as_ref().map(|c| c.0.clone()).unwrap_or_default(), 12, Style::default()),
         ("—".into(), 6, dim()),
         (format!("✋ {reason}"), 0, yellow()),
-    ])
-}
-
-/// A new ticket shows its draft's title; an existing one, its key and why (in cyan: nothing to file).
-fn proposal_row(p: &Proposal) -> Line<'static> {
-    let key = |k: Option<&String>| k.cloned().unwrap_or_else(|| "—".into());
-    let convoy = key(p.proposed.convoy().map(|c| &c.0));
-    let (kind, what, style) = match &p.proposed {
-        Proposed::New(d) => (d.kind.clone(), d.title.clone(), Style::default()),
-        Proposed::Existing { ticket, why, .. } => ("exists".into(), format!("{} · {why}", ticket.0), Style::default().fg(Color::Cyan)),
-    };
-    cells(vec![
-        (p.id.0.to_string(), 4, Style::default()),
-        (key(p.from_ticket.as_ref().map(|k| &k.0)), 12, Style::default()),
-        (convoy, 12, Style::default()),
-        (kind, 6, style),
-        (fmt_age(age_of(&p.created_at)), 6, dim()),
-        (what, 0, style),
     ])
 }
 

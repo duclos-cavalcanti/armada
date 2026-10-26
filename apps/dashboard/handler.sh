@@ -12,14 +12,13 @@
 #
 # Row-field contract per coordinate (coord + key are stripped, so $1 is the first
 # field — these positions match the dashboard's `focused_action()`):
-#   fleet/needs        $1=kind(proposal|held)  $2=ref(proposal id | ticket key)
 #   fleet/dispatched   $1=ticket  $2=crew(worker|hand)
 #   fleet/impl         $1=ticket  $2=kind  $3=tmux_session  $4=state  $5=mr_iid
 #   fleet/merge        $1=ticket  $2=mr_iid  $3=url  $4=sailor_tmux(only when up)  $5=sailor_state
 #   ships/list         $1=iid  $2=ticket  $3=pilot  $4=url
 #   board/tickets      $1=key  $2=status  $3=convoy
-#   board/convoys      $1=key  $2=title  $3=captain_tmux(live only)
-#   board/proposals    $1=id  $2=from_ticket
+#   convoys            $1=key  $2=title  $3=captain_tmux(only when up)     (Fleet + Board)
+#   proposals          $1=kind(proposal|held)  $2=ref(proposal id | ticket key)   (Fleet + Board)
 #
 # Forge- and tracker-neutral: links come from the fleet itself (`fleetc -C "$FLEET_PROJECT"`,
 # the project folder the dashboard passes in), never from hardcoded hosts.
@@ -58,15 +57,22 @@ main() {
     shift 2   # remaining positionals ($1..) are the focused row's fields
 
     case "$coord/$key" in
-        # ---- Fleet · needs you (proposals + held convoy tickets) ------------
+        # ---- Convoys (Fleet + Board) -------------------------------------
+        # enter switches to the convoy's live captain, or — none up — opens the convoy's ticket.
+        convoys/enter)
+            if [ -n "${3:-}" ]; then launch_tmux "${3}"; else launch_ticket "${1:-}"; fi
+            ;;
+        convoys/t) launch_ticket "${1:-}" ;;
+
+        # ---- Proposals (Fleet + Board): proposals + held convoy tickets ----
         # enter reads a proposal / opens a held ticket; a/d settle a proposal; u unholds a ticket.
-        fleet/needs/enter)
+        proposals/enter)
             if [ "${1:-}" = proposal ]; then read_proposal "${2:-}"; else launch_ticket "${2:-}"; fi
             ;;
-        fleet/needs/t) [ "${1:-}" = held ] && launch_ticket "${2:-}" ;;
-        fleet/needs/a) [ "${1:-}" = proposal ] && settle_proposal accept "${2:-}" ;;
-        fleet/needs/d) [ "${1:-}" = proposal ] && settle_proposal drop "${2:-}" ;;
-        fleet/needs/u) [ "${1:-}" = held ] && confirm_fleet "unhold ${2:-}?" unhold "${2:-}" ;;
+        proposals/t) [ "${1:-}" = held ] && launch_ticket "${2:-}" ;;
+        proposals/a) [ "${1:-}" = proposal ] && settle_proposal accept "${2:-}" ;;
+        proposals/d) [ "${1:-}" = proposal ] && settle_proposal drop "${2:-}" ;;
+        proposals/u) [ "${1:-}" = held ] && confirm_fleet "unhold ${2:-}?" unhold "${2:-}" ;;
 
         # ---- Fleet · dispatched / impl / merge (the line, by phase) --------
         # t opens the ticket everywhere; enter attaches the cog at work; m opens the MR.
@@ -89,15 +95,8 @@ main() {
         ships/list/t) [ -n "${2:-}" ] && launch_ticket "${2:-}" || echo "allied ship has no ticket" >&2 ;;
         ships/list/l) launch_tmux lookout ;;
 
-        # ---- Board · tickets / convoys ------------------------------------
+        # ---- Board · tickets -----------------------------------------------
         board/tickets/enter | board/tickets/t) launch_ticket "${1:-}" ;;
-        board/convoys/enter) launch_ticket "${1:-}" ;;
-        board/convoys/a) [ -n "${3:-}" ] && launch_tmux "${3}" || echo "no live captain on ${1:-}" >&2 ;;
-        # enter reads a proposal in full; a accepts it (a new ticket is filed into its convoy —
-        # another: `fleetc proposal accept <id> --convoy <KEY>`); d drops it.
-        board/proposals/enter) read_proposal "${1:-}" ;;
-        board/proposals/a) settle_proposal accept "${1:-}" ;;
-        board/proposals/d) settle_proposal drop "${1:-}" ;;
 
         *) : ;; # unhandled (coordinate, key) — no-op
     esac

@@ -11,9 +11,11 @@ single static binary, no runtime dependencies.
 
 Cycle with `Tab` / `S-Tab`:
 
-- **Fleet** — the line, top-down: what's waiting to enter it, every order, then the builders and
-  the ships being landed:
-  - **Needs you** — what waits on you before it can enter the line: open proposals (`a` accept,
+- **Fleet** — the line, top-down: the open convoys, what waits to enter the line, every order,
+  then the builders and the ships being landed:
+  - **Convoys** — the open convoys: the captain (live / off), whether its tmux is up, how many
+    tickets are still open; `enter` switches to the live captain (none up: opens the convoy's ticket);
+  - **Proposals** — what waits on you before it can enter the line: open proposals (`a` accept,
     `d` drop) and convoy tickets a captain held as not Ready (`✋ <reason>`; fix the ticket, then
     `u` unhold). `enter` reads a proposal or opens a held ticket;
   - **Dispatch** — every order the fleet is working, with its phase (waiting / implementation /
@@ -22,10 +24,8 @@ Cycle with `Tab` / `S-Tab`:
   - **Merge** — our ships being landed: the sailor's state (dimmed once it's stood down),
     pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status;
 - **Ships** — every open MR fleetd tracks, ours + allies; the title shows the lookout.
-- **Board** — the sprint tickets, the convoys (a convoy shows its captain while one is live), and
-  the proposals: work cogs found mid-ticket — a new ticket drafted, or an existing one to take
-  on — waiting on you: `enter` reads one, `a` accepts it (a new one is filed into the tracker),
-  `d` drops it (both ask first).
+- **Board** — the sprint tickets, with the Convoys and Proposals panes again (the same panes as
+  on Fleet).
 - **Log** — fleetd's log (`.fleet/fleetd.log`), newest first, warnings yellow and errors red;
   the title says whether fleetd is up. The footer flags a down fleetd from every tab.
 
@@ -37,7 +37,7 @@ Cycle with `Tab` / `S-Tab`:
 | `r` | refresh now |
 | `Tab` / `S-Tab` | next / previous tab |
 | `↑` / `↓`, `C-p` / `C-n` | previous / next pane |
-| `1`–`4` | focus the Nth pane |
+| `1`–`5` | focus the Nth pane |
 | `j` / `k` | move the cursor within the focused pane |
 | `space` | zoom the focused pane (toggle) |
 | `y` / `Y` | yank the focused pane / the whole page |
