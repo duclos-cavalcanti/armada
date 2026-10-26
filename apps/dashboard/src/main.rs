@@ -247,6 +247,15 @@ impl App {
         if key.kind != KeyEventKind::Press {
             return;
         }
+        // Ctrl-n / Ctrl-p — emacs-style aliases for ↓ / ↑ (next / previous pane). Matched before
+        // the bare-keycode match below, which ignores modifiers.
+        if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('n') => return self.step_pane(1),
+                KeyCode::Char('p') => return self.step_pane(-1),
+                _ => {}
+            }
+        }
         // Reserved navigation keys — handled here, never routed to the action handler.
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {

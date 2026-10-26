@@ -135,7 +135,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         None => tick_summary(&app.fleet.tick),
     };
     let body = format!(
-        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/1-4 pane · j/k row · y/Y yank",
+        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-4 pane · j/k row · y/Y yank",
         flash, zoom, status,
     );
     f.render_widget(Paragraph::new(Line::from(body)).style(dim), area);

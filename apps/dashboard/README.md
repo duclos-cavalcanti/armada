@@ -27,7 +27,7 @@ Cycle with `Tab` / `S-Tab`:
 | `q` / `Esc` | quit |
 | `r` | refresh now |
 | `Tab` / `S-Tab` | next / previous tab |
-| `↑` / `↓` | previous / next pane |
+| `↑` / `↓`, `C-p` / `C-n` | previous / next pane |
 | `1`–`4` | focus the Nth pane |
 | `j` / `k` | move the cursor within the focused pane |
 | `space` | zoom the focused pane (toggle) |
