@@ -546,7 +546,7 @@ fn spawn<T: Tracker + ?Sized, H: SessionHost>(
         None => return Ok(()),
     };
 
-    host.spawn(&tmux_session, Path::new(&worktree), &ticket_launch_cmd(kind, ticket, Some(&hid)))?;
+    host.spawn(&tmux_session, Path::new(&worktree), &ticket_launch_cmd(kind, ticket, Launch::Fresh(&hid)))?;
 
     ledger.append(
         &now_rfc3339(),
@@ -587,7 +587,7 @@ pub(crate) fn spawn_ticketless_hand<H: SessionHost>(ledger: &Ledger, host: &H, w
     )?
     .ok_or_else(|| anyhow!("spawn_ticketless_hand: session not recorded"))?;
 
-    host.spawn(&tmux_session, Path::new(worktree), &launch_cmd("hand", Some(&hid)))?;
+    host.spawn(&tmux_session, Path::new(worktree), &launch_cmd("hand", Launch::Fresh(&hid)))?;
 
     ledger.append(
         &now_rfc3339(),
@@ -744,9 +744,8 @@ fn heal<H: SessionHost>(ledger: &Ledger, host: &H, ticket: &str, kind: &str) -> 
         .iter()
         .find(|s| s.kind == crew && s.ended_at.is_none())
         .ok_or_else(|| anyhow!("heal {ticket}: no live {kind} session to respawn"))?;
-    // Relaunch with the session's OWN id so the transcript stays one continuous file across the
-    // crash (`None` for a pre-capture session → a plain launch; it resolves by convention).
-    let cmd = ticket_launch_cmd(kind, ticket, session.harness_session_id.as_deref());
+    // Relaunch on the session's OWN id so the transcript stays one continuous file across the crash.
+    let cmd = ticket_launch_cmd(kind, ticket, Launch::relaunch(session));
     host.spawn(&session.tmux_session, Path::new(&session.worktree_path), &cmd)?;
     Ok(())
 }
@@ -804,7 +803,7 @@ fn launch_captain<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, conv
         None => return Ok(()),
     };
 
-    let cmd = format!("FLEET_CONVOY={convoy} {}", launch_cmd("captain", Some(&hid)));
+    let cmd = format!("FLEET_CONVOY={convoy} {}", launch_cmd("captain", Launch::Fresh(&hid)));
     host.spawn(&tmux_session, Path::new(project), &cmd)?;
 
     ledger.append(
@@ -948,7 +947,7 @@ fn launch_sailor<H: SessionHost, F: Forge + ?Sized>(
         None => return Ok(()), // a live sailor already holds the lock — benign skip
     };
 
-    host.spawn(&sailor_tmux, Path::new(&worktree), &ticket_launch_cmd("sailor", ticket, Some(&hid)))?;
+    host.spawn(&sailor_tmux, Path::new(&worktree), &ticket_launch_cmd("sailor", ticket, Launch::Fresh(&hid)))?;
     ledger.append(
         &now_rfc3339(),
         EventKind::SessionStarted,
@@ -1001,7 +1000,7 @@ fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
         None => return Ok(()), // the singleton lock holds → a lookout is already reviewing. Benign skip.
     };
 
-    let cmd = format!("FLEET_SHIP={iid} {}", launch_cmd("lookout", Some(&hid)));
+    let cmd = format!("FLEET_SHIP={iid} {}", launch_cmd("lookout", Launch::Fresh(&hid)));
     host.spawn(&lookout_tmux, Path::new(project), &cmd)?;
     ledger.append(
         &now_rfc3339(),
@@ -1033,24 +1032,45 @@ fn stand_down_lookout<H: SessionHost>(ledger: &Ledger, host: &H) -> Result<()> {
     Ok(())
 }
 
-/// The command a cog runs inside its session — `claude --session-id <uuid> --agent <kind>`.
-/// fleetd mints the session id and passes it in, so the cog's transcript lands at a known path
-/// (`~/.claude/projects/<cwd-encoded>/<uuid>.jsonl`) that `fleetc transcript` resolves directly —
-/// no guessing. `session_id` is `None` only for a heal of a pre-capture session (no stored id),
-/// which falls back to a plain launch (its transcript resolves by convention). `TmuxHost` runs it
-/// in a detached tmux session + injects the per-cog OTEL attribution (see tmux.rs).
-fn launch_cmd(kind: &str, session_id: Option<&str>) -> String {
-    match session_id {
-        Some(id) => format!("claude --session-id {id} --agent {kind}"),
-        None => format!("claude --agent {kind}"),
+/// How a cog's claude starts. fleetd mints the session id, so the transcript lands at a known
+/// path (`Session::transcript`) that `fleetc transcript` resolves directly — no guessing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Launch<'a> {
+    /// A new conversation under this id (`--session-id`; claude refuses it if the transcript exists).
+    Fresh(&'a str),
+    /// Continue this id's existing transcript (`--resume`; claude refuses it if there is none).
+    Resume(&'a str),
+    /// No stored id — a heal of a pre-capture session; its transcript resolves by convention.
+    Plain,
+}
+
+impl<'a> Launch<'a> {
+    /// A heal's relaunch: resume the cog's own transcript when it exists, else start that id fresh
+    /// (the cog died before claude wrote anything).
+    fn relaunch(session: &'a domain::Session) -> Self {
+        match session.harness_session_id.as_deref() {
+            Some(id) if session.transcript().is_some_and(|t| t.exists()) => Launch::Resume(id),
+            Some(id) => Launch::Fresh(id),
+            None => Launch::Plain,
+        }
+    }
+}
+
+/// The command a cog runs inside its session — `claude <launch> --agent <kind>`. `TmuxHost` runs
+/// it in a detached tmux session + injects the per-cog OTEL attribution (see tmux.rs).
+fn launch_cmd(kind: &str, launch: Launch) -> String {
+    match launch {
+        Launch::Fresh(id) => format!("claude --session-id {id} --agent {kind}"),
+        Launch::Resume(id) => format!("claude --resume {id} --agent {kind}"),
+        Launch::Plain => format!("claude --agent {kind}"),
     }
 }
 
 /// `launch_cmd` for a ticketed cog (worker / sailor / hand): the ticket rides in as `FLEET_TICKET`
 /// (as a captain's convoy rides in `FLEET_CONVOY`), so the cog never infers it from its branch.
 /// The key is `<PREFIX>-<n>`-validated on the way in, so it is shell-safe here.
-fn ticket_launch_cmd(kind: &str, ticket: &str, session_id: Option<&str>) -> String {
-    format!("FLEET_TICKET={ticket} {}", launch_cmd(kind, session_id))
+fn ticket_launch_cmd(kind: &str, ticket: &str, launch: Launch) -> String {
+    format!("FLEET_TICKET={ticket} {}", launch_cmd(kind, launch))
 }
 
 /// Mint a fresh harness session id — a v4 UUID fleetd hands to `claude --session-id` so the
@@ -1497,6 +1517,22 @@ mod tests {
     }
 
     // ── heal ──────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn heal_relaunches_its_own_id_fresh_when_no_transcript_exists() {
+        // `/wt` has no transcript, so claude must start the id fresh (`--resume` would refuse).
+        let mut cog = dead_cog("PROJ-1", CrewKind::Hand);
+        assert_eq!(Launch::relaunch(&cog.session), Launch::Plain, "no stored id");
+        cog.session.harness_session_id = Some("abc-123".into());
+        assert_eq!(Launch::relaunch(&cog.session), Launch::Fresh("abc-123"));
+    }
+
+    #[test]
+    fn launch_cmd_resumes_or_starts_fresh() {
+        assert_eq!(launch_cmd("hand", Launch::Resume("abc")), "claude --resume abc --agent hand");
+        assert_eq!(launch_cmd("hand", Launch::Fresh("abc")), "claude --session-id abc --agent hand");
+        assert_eq!(launch_cmd("hand", Launch::Plain), "claude --agent hand");
+    }
 
     #[test]
     fn heal_a_dead_live_session_on_an_active_ticket() {

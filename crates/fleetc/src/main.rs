@@ -544,19 +544,13 @@ fn matches_target(s: &domain::Session, t: &wire::CogTarget) -> bool {
     }
 }
 
-/// Map a live session to its transcript jsonl. Primary: the stored harness id under the canonical
-/// project dir. Fallback (no stored id): the newest jsonl in that dir. Claude encodes the session's
-/// REAL cwd (symlinks resolved) with `/`→`-`, so canonicalize the worktree to match its path.
+/// Map a live session to its transcript jsonl: the stored harness id's file, or — no stored id —
+/// the newest jsonl in the session's transcript folder.
 fn transcript_path(s: &domain::Session) -> Result<std::path::PathBuf> {
-    let home = std::env::var("HOME").map_err(|_| anyhow!("HOME unset"))?;
-    let cwd = std::fs::canonicalize(&s.worktree_path)
-        .unwrap_or_else(|_| std::path::PathBuf::from(&s.worktree_path));
-    let encoded = cwd.to_string_lossy().replace('/', "-");
-    let project_dir = std::path::Path::new(&home).join(".claude/projects").join(encoded);
-
-    if let Some(id) = &s.harness_session_id {
-        return Ok(project_dir.join(format!("{id}.jsonl")));
+    if let Some(path) = s.transcript() {
+        return Ok(path);
     }
+    let project_dir = s.transcript_dir().ok_or_else(|| anyhow!("HOME unset"))?;
     newest_jsonl(&project_dir)
         .ok_or_else(|| anyhow!("no transcript under {} (cog not started yet?)", project_dir.display()))
 }

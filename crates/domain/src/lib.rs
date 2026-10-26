@@ -177,6 +177,24 @@ pub struct Session {
     pub anchored_at: Option<Timestamp>,
 }
 
+impl Session {
+    /// Claude Code's transcript folder for this session: `~/.claude/projects/<cwd>`, where `<cwd>`
+    /// is the worktree's real path (symlinks resolved) with every non-alphanumeric char → `-`.
+    pub fn transcript_dir(&self) -> Option<std::path::PathBuf> {
+        let home = std::env::var_os("HOME")?;
+        let cwd = std::fs::canonicalize(&self.worktree_path)
+            .unwrap_or_else(|_| std::path::PathBuf::from(&self.worktree_path));
+        let encoded: String =
+            cwd.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+        Some(std::path::Path::new(&home).join(".claude/projects").join(encoded))
+    }
+
+    /// The transcript of the stored harness id — `None` for a pre-capture session (no stored id).
+    pub fn transcript(&self) -> Option<std::path::PathBuf> {
+        Some(self.transcript_dir()?.join(format!("{}.jsonl", self.harness_session_id.as_ref()?)))
+    }
+}
+
 /// A crew member's latest self-report (PLAN §3.1 `reports`). Written via `fleetc
 /// status` — the per-cog enum validates it at the write boundary — stored verbatim
 /// (latest wins). reconcile reacts to `state`; full history lives in the event log
@@ -878,5 +896,26 @@ mod liveness_tests {
         assert_eq!(k("XPROJ-3 then PROJ-4").as_deref(), Some("PROJ-4"), "word boundary");
         assert_eq!(k("PROJ-x"), None);
         assert_eq!(k("Fix UTF-8 decoding"), None, "other prefixes never match");
+    }
+
+    #[test]
+    fn transcript_encodes_every_non_alphanumeric_char_of_the_cwd() {
+        // A non-existent worktree → canonicalize falls back to the raw path.
+        let s = Session {
+            id: SessionId(1),
+            kind: CrewKind::Hand,
+            ticket: None,
+            convoy: None,
+            worktree_path: "/wt/feature-PROJ-1.Some_Thing x".into(),
+            tmux_session: "hand".into(),
+            harness_session_id: Some("abc-123".into()),
+            created_at: "t".into(),
+            ended_at: None,
+            anchored_at: None,
+        };
+        let home = std::env::var("HOME").unwrap();
+        let want = format!("{home}/.claude/projects/-wt-feature-PROJ-1-Some-Thing-x/abc-123.jsonl");
+        assert_eq!(s.transcript().unwrap().to_string_lossy(), want);
+        assert_eq!(Session { harness_session_id: None, ..s }.transcript(), None, "pre-capture: no id");
     }
 }
