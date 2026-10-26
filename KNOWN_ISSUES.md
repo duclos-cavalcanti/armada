@@ -21,3 +21,12 @@ Accepted edge cases: understood, not fixed, each with its workaround.
   reports that the draft step failed, and the re-arm can still merge.
   *Workaround:* hold again once the sailor reports `sleeping` (the sweep is short).
   *Fix:* step 7 routes arming through `fleetc`, and the server refuses to arm a held ticket.
+
+- **The Jira "is blocked by" link direction is unverified.**
+  *Scenario:* `fleetc ticket block KEY --by BY` (and `fleetc ticket new --blocked-by`) on a Jira
+  tracker runs `jira issue link BY KEY Blocks`, assuming Jira's convention that the first issue
+  blocks the second. If it's reversed, the edge lands backwards and fleetd waits on the wrong
+  ticket.
+  *Workaround:* after the first block on a Jira project, check the edge in Jira's UI ("KEY is
+  blocked by BY") before relying on it.
+  *Fix:* verify against a live Jira; if reversed, swap the two keys in `JiraTracker::block`.
