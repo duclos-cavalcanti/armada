@@ -163,7 +163,7 @@ impl App {
     /// Field schema per coordinate (the handler reads these positionally; empty = n/a):
     ///   fleet/dispatched   ticket  crew(worker|hand)
     ///   fleet/impl         ticket  kind  tmux_session  state  mr_iid
-    ///   fleet/merge        ticket  mr_iid  url  sailor_tmux(live only)  sailor_state
+    ///   fleet/merge        ticket  mr_iid  url  sailor_tmux(only when up)  sailor_state
     ///   fleet/escalations  ticket  raised_by  ship_iid
     ///   ships/list         iid  ticket  pilot  url
     ///   board/tickets      key  status  convoy
@@ -189,7 +189,7 @@ impl App {
                 ]
             }),
             Pane::Merge => f.landing.get(i).map(|r| {
-                let tmux = r.sailor.as_ref().filter(|_| r.live).map(|s| s.session.tmux_session.clone());
+                let tmux = r.sailor.as_ref().filter(|s| f.is_up(s)).map(|s| s.session.tmux_session.clone());
                 vec![
                     key(r.ship.ticket.as_ref()),
                     r.ship.iid.to_string(),

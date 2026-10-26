@@ -78,12 +78,13 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 ("Crew", 7),
                 ("State", 13),
                 ("Live", 7),
+                ("Tmux", 5),
                 ("MR", 7),
                 ("Pipeline", 9),
                 ("Age", 6),
                 ("Last action", 0),
             ])),
-            f.builders.iter().map(|c| builder_row(c, f.ship_of(c.session.ticket.as_ref()))).collect(),
+            f.builders.iter().map(|c| builder_row(c, f.is_up(c), f.ship_of(c.session.ticket.as_ref()))).collect(),
         ),
         Pane::Merge => (
             format!(" merge · {} landing ", f.landing.len()),
@@ -91,6 +92,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 ("Ticket", 12),
                 ("Sailor", 15),
                 ("Live", 7),
+                ("Tmux", 5),
                 ("MR", 7),
                 ("Pipeline", 9),
                 ("Appr", 5),
@@ -100,7 +102,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 ("Age", 6),
                 ("Merge status", 0),
             ])),
-            f.landing.iter().map(landing_row).collect(),
+            f.landing.iter().map(|r| landing_row(r, r.sailor.as_ref().is_some_and(|s| f.is_up(s)))).collect(),
         ),
         Pane::Escalations => (
             format!(" escalations · {} open ", f.escalations.len()),
@@ -166,7 +168,7 @@ fn order_row(o: &OrderRow) -> Line<'static> {
     ])
 }
 
-fn builder_row(c: &CogRow, ship: Option<&ShipRow>) -> Line<'static> {
+fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>) -> Line<'static> {
     let s = &c.session;
     let state = c.state.clone().unwrap_or_else(|| "·".into());
     let anchor = if s.anchored_at.is_some() { "⚓ " } else { "" };
@@ -179,6 +181,7 @@ fn builder_row(c: &CogRow, ship: Option<&ShipRow>) -> Line<'static> {
         (s.kind.as_str().into(), 7, Style::default()),
         (state.clone(), 13, state_style(&state)),
         live_cell(c.liveness.as_deref()),
+        tmux_cell(up),
         (mr, 7, Style::default()),
         (pipe.0, 9, pipe.1),
         (fmt_age(c.age_secs), 6, dim()),
@@ -186,7 +189,7 @@ fn builder_row(c: &CogRow, ship: Option<&ShipRow>) -> Line<'static> {
     ])
 }
 
-fn landing_row(r: &LandingRow) -> Line<'static> {
+fn landing_row(r: &LandingRow, up: bool) -> Line<'static> {
     let snap = r.snapshot.as_ref();
     let (sailor, sailor_style, age) = match &r.sailor {
         Some(s) => {
@@ -226,6 +229,7 @@ fn landing_row(r: &LandingRow) -> Line<'static> {
         (r.ship.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_default(), 12, Style::default()),
         (sailor, 15, sailor_style),
         live,
+        tmux_cell(up),
         (format!("!{}", r.ship.iid), 7, Style::default()),
         (pipe.0, 9, pipe.1),
         (appr, 5, appr_style),
@@ -390,6 +394,15 @@ fn live_cell(liveness: Option<&str>) -> (String, usize, Style) {
         _ => dim(),
     };
     (live, 7, style)
+}
+
+/// Is the cog's tmux session up — does `enter` land on it?
+fn tmux_cell(up: bool) -> (String, usize, Style) {
+    if up {
+        ("up".into(), 5, green())
+    } else {
+        ("—".into(), 5, dim())
+    }
 }
 
 fn pipeline(snap: Option<&ShipSnapshot>) -> (String, Style) {

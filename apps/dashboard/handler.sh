@@ -14,7 +14,7 @@
 # field — these positions match the dashboard's `focused_action()`):
 #   fleet/dispatched   $1=ticket  $2=crew(worker|hand)
 #   fleet/impl         $1=ticket  $2=kind  $3=tmux_session  $4=state  $5=mr_iid
-#   fleet/merge        $1=ticket  $2=mr_iid  $3=url  $4=sailor_tmux(live only)  $5=sailor_state
+#   fleet/merge        $1=ticket  $2=mr_iid  $3=url  $4=sailor_tmux(only when up)  $5=sailor_state
 #   fleet/escalations  $1=ticket  $2=raised_by  $3=ship_iid
 #   ships/list         $1=iid  $2=ticket  $3=pilot  $4=url
 #   board/tickets      $1=key  $2=status  $3=convoy

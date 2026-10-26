@@ -95,6 +95,8 @@ pub struct Fleet {
     pub escalations: Vec<Escalation>,
     /// The latest reconcile `TickRan` event — fleetd's last plan (applied/failed/planned).
     pub tick: Option<Event>,
+    /// The tmux sessions up right now — whether `enter` on a cog has a pane to switch to.
+    pub tmux_up: HashSet<String>,
 }
 
 impl Fleet {
@@ -210,7 +212,13 @@ impl Fleet {
             convoys: ConvoyRepo::active(&db)?,
             escalations: EscalationRepo::list_open(&db)?,
             tick: db.latest_tick()?,
+            tmux_up: tmux_sessions(),
         })
+    }
+
+    /// Is this cog's tmux session up (so `enter` lands on it)?
+    pub fn is_up(&self, cog: &CogRow) -> bool {
+        self.tmux_up.contains(&cog.session.tmux_session)
     }
 
     /// A ticket's open ship, if it has one.
@@ -257,6 +265,15 @@ fn age_secs(now: chrono::DateTime<chrono::Utc>, ts: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(ts)
         .ok()
         .map(|t| (now - t.with_timezone(&chrono::Utc)).num_seconds())
+}
+
+/// The names of the tmux sessions up right now (empty when tmux isn't running).
+fn tmux_sessions() -> HashSet<String> {
+    std::process::Command::new("tmux")
+        .args(["list-sessions", "-F", "#S"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(str::to_string).collect())
+        .unwrap_or_default()
 }
 
 /// Overlay fleetd's live, tmux-probe-derived liveness (`Active/Quiet/Idle/Dead`) by
