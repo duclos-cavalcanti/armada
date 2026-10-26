@@ -11,7 +11,9 @@ single static binary, no runtime dependencies.
 
 Cycle with `Tab` / `S-Tab`:
 
-- **Fleet** — the line, top-down: every order, then the builders and the ships being landed:
+- **Fleet** — the line, top-down: what's waiting to enter it, every order, then the builders and
+  the ships being landed:
+  - **Proposals** — the open proposals (as on Board), waiting on you to accept or drop;
   - **Dispatch** — every order the fleet is working, with its phase (waiting / implementation /
     merge) and what it waits on (held ✋ / blocked ⛔);
   - **Implementation** — builders at work (workers + hands): state, liveness, MR + pipeline, last action;
@@ -33,7 +35,7 @@ Cycle with `Tab` / `S-Tab`:
 | `r` | refresh now |
 | `Tab` / `S-Tab` | next / previous tab |
 | `↑` / `↓`, `C-p` / `C-n` | previous / next pane |
-| `1`–`3` | focus the Nth pane |
+| `1`–`4` | focus the Nth pane |
 | `j` / `k` | move the cursor within the focused pane |
 | `space` | zoom the focused pane (toggle) |
 | `y` / `Y` | yank the focused pane / the whole page |

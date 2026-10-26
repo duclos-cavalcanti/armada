@@ -53,10 +53,11 @@ impl TabId {
         let all = Self::all();
         all[(self as isize + delta).rem_euclid(all.len() as isize) as usize]
     }
-    /// The tab's panes, top to bottom — `1`..`3` focus them, `↑`/`↓` cycle them.
+    /// The tab's panes, top to bottom — `1`..`4` focus them, `↑`/`↓` cycle them. Proposals head
+    /// the Fleet tab too: work waiting on the operator before it can enter the line.
     pub fn panes(self) -> &'static [Pane] {
         match self {
-            TabId::Fleet => &[Pane::Dispatched, Pane::Impl, Pane::Merge],
+            TabId::Fleet => &[Pane::Proposals, Pane::Dispatched, Pane::Impl, Pane::Merge],
             TabId::Ships => &[Pane::Ships],
             TabId::Board => &[Pane::Tickets, Pane::Convoys, Pane::Proposals],
             TabId::Log => &[Pane::Log],
@@ -299,7 +300,7 @@ impl App {
                 self.step_pane(1);
                 return;
             }
-            KeyCode::Char(c @ '1'..='3') => {
+            KeyCode::Char(c @ '1'..='4') => {
                 self.focus_nth_pane(c as usize - '1' as usize);
                 return;
             }

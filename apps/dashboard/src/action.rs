@@ -70,6 +70,7 @@ pub fn is_reserved(code: KeyCode, mods: KeyModifiers) -> bool {
             | KeyCode::Char('1')
             | KeyCode::Char('2')
             | KeyCode::Char('3')
+            | KeyCode::Char('4')
             | KeyCode::Char(' ')
     )
 }

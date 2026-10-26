@@ -116,7 +116,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             f.convoys.iter().map(|c| convoy_row(c, f.captain_of(&c.key))).collect(),
         ),
         Pane::Proposals => (
-            format!(" proposals · {} open · enter read · a accept · d drop ", f.proposals.len()),
+            format!(" Proposals · {} open · enter read · a accept · d drop ", f.proposals.len()),
             Some(header(&[("Id", 4), ("From", 12), ("Convoy", 12), ("Type", 6), ("Age", 6), ("Proposed", 0)])),
             f.proposals.iter().map(proposal_row).collect(),
         ),
@@ -147,7 +147,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     };
     let status = if app.fleet.fleetd_up { status } else { format!("fleetd down (see Log) · {status}") };
     let body = format!(
-        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-3 pane · j/k row · y/Y yank",
+        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-4 pane · j/k row · y/Y yank",
         flash, zoom, status,
     );
     f.render_widget(Paragraph::new(Line::from(body)).style(dim), area);
