@@ -3,8 +3,8 @@
 //! liveness poll. For now `fleetd sync` runs the armada sync on demand.
 
 use anyhow::Result;
-use domain::ports::{ConvoyRepo, Forge, ShipRepo, TicketRepo, Tracker};
-use domain::{Ship, ShipId, ShipSnapshot};
+use domain::ports::{ConvoyRepo, Forge, OrderRepo, ShipRepo, TicketRepo, Tracker};
+use domain::{Ship, ShipId, ShipSnapshot, TicketKey};
 use ledger::Ledger;
 
 /// Fetch the board from the tracker and upsert each ticket,
@@ -16,14 +16,27 @@ pub fn sync_board(ledger: &Ledger, tracker: &dyn Tracker, now: &str) -> Result<u
     for t in &tickets {
         TicketRepo::sync(ledger, t, now)?;
     }
-    // A ticket added to a convoy from another epic may be off the board (another team's sprint):
-    // refresh it too, or its captain would never see it land. Best-effort, one ticket at a time.
-    for key in ledger.added_members()? {
-        if tickets.iter().any(|t| t.key == key) {
+    // Off the board (no sprint, or another team's), the fleet still tracks what it works (an
+    // order), what a convoy took on from another epic, and what those wait on: refresh them too, or
+    // their status and `is blocked by` edges go stale — a sailor would boot blind to its blocker,
+    // and the gate would never lift. A blocker syncs before its dependent, so the edge has its FK.
+    let mut done: std::collections::HashSet<TicketKey> = tickets.iter().map(|t| t.key.clone()).collect();
+    let tracked = OrderRepo::queue(ledger)?.into_iter().map(|o| o.ticket).chain(ledger.added_members()?);
+    for key in tracked {
+        if !done.insert(key.clone()) {
             continue;
         }
-        if let Err(e) = tracker.get(&key).and_then(|t| TicketRepo::sync(ledger, &t, now)) {
-            tracing::warn!("sync: convoy member {} not refreshed: {e:#}", key.0);
+        let refreshed = tracker.get(&key).and_then(|t| {
+            for b in t.blocked_by.iter().filter(|b| !done.contains(*b)).cloned().collect::<Vec<_>>() {
+                done.insert(b.clone());
+                if let Err(e) = tracker.get(&b).and_then(|bt| TicketRepo::sync(ledger, &bt, now)) {
+                    tracing::warn!("sync: blocker {} of {} not refreshed: {e:#}", b.0, key.0);
+                }
+            }
+            TicketRepo::sync(ledger, &t, now)
+        });
+        if let Err(e) = refreshed {
+            tracing::warn!("sync: {} (off the board) not refreshed: {e:#}", key.0);
         }
     }
     Ok(count)
@@ -212,7 +225,8 @@ mod tests {
         assert_eq!(db.snapshot(&ally).unwrap().unwrap().approvals, Approvals { current: 0, required: 0 });
     }
 
-    struct FakeTracker(Vec<TrackerTicket>);
+    /// The sprint board (`.0`) plus tickets only `get` reaches (`.1`): off the board, in no sprint.
+    struct FakeTracker(Vec<TrackerTicket>, Vec<TrackerTicket>);
     impl Tracker for FakeTracker {
         fn preflight(&self) -> Result<String> {
             Ok("fake".into())
@@ -220,8 +234,8 @@ mod tests {
         fn board(&self) -> Result<Vec<TrackerTicket>> {
             Ok(self.0.clone())
         }
-        fn get(&self, _: &TicketKey) -> Result<TrackerTicket> {
-            unimplemented!()
+        fn get(&self, key: &TicketKey) -> Result<TrackerTicket> {
+            self.0.iter().chain(&self.1).find(|t| &t.key == key).cloned().ok_or_else(|| anyhow::anyhow!("no {}", key.0))
         }
         fn transition(&self, _: &TicketKey, _: TicketStatus) -> Result<()> {
             Ok(())
@@ -266,7 +280,7 @@ mod tests {
         let tracker = FakeTracker(vec![
             tt("PROJ-1", TicketStatus::InProgress),
             tt("PROJ-2", TicketStatus::Todo),
-        ]);
+        ], vec![]);
         let n = sync_board(&db, &tracker, "now").unwrap();
         assert_eq!(n, 2);
         assert_eq!(TicketRepo::board(&db).unwrap().len(), 2);
@@ -277,10 +291,39 @@ mod tests {
     }
 
     #[test]
+    fn a_worked_ticket_off_the_board_is_refreshed_with_its_blocker() {
+        // PROJ-3 fell out of every sprint, but the fleet still works it (an order); since its last
+        // sync it moved on and gained a blocker, PROJ-4 — also off the board.
+        let db = Ledger::in_memory().unwrap();
+        let stale = tt("PROJ-3", TicketStatus::Todo);
+        sync_board(&db, &FakeTracker(vec![stale], vec![]), "then").unwrap();
+        db.dispatch(&Order {
+            ticket: TicketKey("PROJ-3".into()),
+            auto_impl: true,
+            auto_merge: true,
+            fork_from: "origin/main".into(),
+            ac_summary: "do it".into(),
+            park_at: None,
+            worktree_path: None,
+            created_at: "then".into(),
+        })
+        .unwrap();
+        let mut moved = tt("PROJ-3", TicketStatus::InQa);
+        moved.blocked_by = vec![TicketKey("PROJ-4".into())];
+        let tracker = FakeTracker(vec![tt("PROJ-1", TicketStatus::Todo)], vec![moved, tt("PROJ-4", TicketStatus::InQa)]);
+
+        sync_board(&db, &tracker, "now").unwrap();
+        let t = TicketRepo::get(&db, &TicketKey("PROJ-3".into())).unwrap().unwrap();
+        assert_eq!(t.status, Some(TicketStatus::InQa), "refreshed off the board");
+        assert_eq!(t.blocked_by, vec![TicketKey("PROJ-4".into())], "its blocker synced first, so the edge holds");
+        assert_eq!(TicketRepo::get(&db, &TicketKey("PROJ-4".into())).unwrap().unwrap().status, Some(TicketStatus::InQa));
+    }
+
+    #[test]
     fn board_then_armada_links_ship_tickets() {
         let db = Ledger::in_memory().unwrap();
         // board first → PROJ-1 exists
-        sync_board(&db, &FakeTracker(vec![tt("PROJ-1", TicketStatus::InProgress)]), "now").unwrap();
+        sync_board(&db, &FakeTracker(vec![tt("PROJ-1", TicketStatus::InProgress)], vec![]), "now").unwrap();
         // then armada → the ship for PROJ-1 links its FK
         sync_armada(&db, &FakeForge(vec![fs(1, Some("PROJ-1"))]), "now").unwrap();
         assert_eq!(
