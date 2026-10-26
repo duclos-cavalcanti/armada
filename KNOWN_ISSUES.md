@@ -22,3 +22,16 @@ Accepted edge cases: understood, not fixed, each with its workaround.
   *Workaround:* after the first block on a Jira project, check the edge in Jira's UI ("KEY is
   blocked by BY") before relying on it.
   *Fix:* verify against a live Jira; if reversed, swap the two keys in `JiraTracker::block`.
+
+- **Auto mode's classifier can block a cog's `fleetc` call.**
+  *Scenario:* the committed base settings (`.claude/settings.json`) allow `tmux` but not
+  `fleetc`, so in auto mode the classifier judges each `fleetc` call on its own. It blocked a
+  sailor's `fleetc arm` as an "Unrequested Commit in a Connected App": the sweep escalated and
+  waited for the operator, though arming only merges once the forge's gates pass.
+  *Workaround:* add `"Bash(fleetc *)"` to your harness profile's `permissions.allow`
+  (`harness/profiles/<name>.json`), then `harness/apply.sh harness/profiles/<name>.json`. A
+  narrow allow rule resolves before the classifier. For a cog already stuck, answer it in its
+  pane ("go, arm it"): your message is the explicit intent the classifier accepts.
+  *Fix:* add `"Bash(fleetc *)"` to the committed base allowlist, beside `Bash(tmux *)`, so every
+  deployment's cogs get it. The operator commits it: the classifier blocks the shipwright
+  widening its own harness's permissions (Self-Modification).
