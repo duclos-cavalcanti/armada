@@ -178,6 +178,50 @@
       "y": 538,
       "w": 592,
       "h": 113
+    },
+    {
+      "id": "fleet_toml",
+      "kind": "config",
+      "label": "fleet.toml",
+      "sub": "startup config · defaults < toml < env",
+      "x": 372,
+      "y": 400,
+      "w": 170,
+      "h": 50,
+      "detail": {
+        "type": "startup config · crates/fleetd/src/config.rs",
+        "summary": "Read once at launch. [forge] + [tracker] are required; everything else defaults.",
+        "fields": [
+          { "section": "cadences & mode", "rows": [
+            { "key": "poll_secs", "meta": "5", "informs": "Liveness-poll cadence (s): how often the in-memory cog snapshot refreshes." },
+            { "key": "sync_secs", "meta": "300", "informs": "Sync cadence (s): hydrate the ledger from the tracker + forge." },
+            { "key": "reconcile_secs", "meta": "60", "informs": "Reconcile cadence (s): converge intent against reality." },
+            { "key": "dry_run", "meta": "false", "informs": "true = plan + log only, execute nothing (the parity look)." }
+          ]},
+          { "section": "liveness thresholds", "rows": [
+            { "key": "active_secs", "meta": "120", "informs": "Activity age under which a cog counts as Active." },
+            { "key": "quiet_secs", "meta": "1800", "informs": "Age under which a cog is Quiet; beyond it → Idle / Dead." }
+          ]},
+          { "section": "telemetry", "rows": [
+            { "key": "otel_addr", "meta": "127.0.0.1:4318", "informs": "Bind addr of the OTLP/HTTP receiver that fills telemetry.db." }
+          ]},
+          { "section": "[project]", "rows": [
+            { "key": "path", "meta": "\"main\"", "informs": "Product's main checkout (relative to fleet.toml) — captains + lookout launch here." }
+          ]},
+          { "section": "[forge] · required", "rows": [
+            { "key": "kind", "meta": "gitlab | github", "informs": "Which forge adapter drives the MRs." },
+            { "key": "project", "meta": "required", "informs": "GitLab numeric project id, or GitHub owner/repo." },
+            { "key": "auto_merge", "meta": "true", "informs": "Dispatch default: true = sailor arms auto-merge; false = land-to-clean, then await operator." }
+          ]},
+          { "section": "[tracker] · required", "rows": [
+            { "key": "kind", "meta": "jira | filesystem", "informs": "Which tracker adapter holds tickets." },
+            { "key": "project", "meta": "required", "informs": "Tracker project; for Jira also the ticket-key prefix (PROJ → PROJ-12)." },
+            { "key": "claim_label", "meta": "jira · opt", "informs": "Label a worker's claim adds to the ticket." },
+            { "key": "path", "meta": "fs · \"tickets\"", "informs": "Filesystem tracker: folder of ticket files." },
+            { "key": "user", "meta": "fs · git user.name", "informs": "Filesystem tracker: who \"me\" is for a claim." }
+          ]}
+        ]
+      }
     }
   ],
   "base": [
@@ -185,6 +229,7 @@
     { "source": "operator", "target": "fleetc", "dashed": true },
     { "source": "grp-skills", "target": "fleetc" },
     { "source": "fleetc", "target": "fleetd", "label": "drives" },
+    { "source": "fleet_toml", "target": "fleetd", "label": "reads at launch" },
     { "source": "fleetd", "target": "tracker", "label": "tickets" },
     { "source": "fleetd", "target": "forge", "label": "MRs · CI" },
     { "source": "fleetd", "target": "grp-crew", "label": "spawns" },

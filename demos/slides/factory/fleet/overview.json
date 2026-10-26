@@ -1,0 +1,242 @@
+{
+  "title": "The Fleet — overview",
+  "sha": "1cdee16",
+  "note": "A simplified, opaque view of the fleet. The operator makes the judgment calls and wraps them in a toolkit of /fleet-* skills — the intelligent layer over the mechanical fleetc CLI — which (with the operator's own raw verbs) actuate fleetc; fleetc drives fleetd (the daemon, shown as one box — no internal state machines); fleetd actuates its external systems (a Tracker, a Forge), persists to the Ledger, works inside a Project (the worktrees), and spawns the Crew of cogs. For the real machinery (fleetd's server/scheduler/reconcile, the adapters, telemetry, flows) switch to the Full architecture.",
+  "groups": [
+    {
+      "id": "operators",
+      "label": "Operator",
+      "x": 42,
+      "y": 272,
+      "w": 190,
+      "h": 86,
+      "color": "#58A6FF"
+    },
+    {
+      "id": "skills",
+      "label": "SKILLS",
+      "x": 30,
+      "y": 380,
+      "w": 200,
+      "h": 256,
+      "color": "#D2A8FF"
+    },
+    {
+      "id": "external",
+      "label": "External systems",
+      "x": 370,
+      "y": 40,
+      "w": 560,
+      "h": 180,
+      "color": "#D29922"
+    },
+    {
+      "id": "crew",
+      "label": "CREW",
+      "x": 850,
+      "y": 230,
+      "w": 190,
+      "h": 182,
+      "color": "#3FB950"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "operator",
+      "kind": "human",
+      "label": "Operator",
+      "sub": "you · drives the fleet",
+      "x": 57,
+      "y": 292,
+      "w": 160,
+      "h": 56
+    },
+    { "id": "sk_berth", "kind": "skill", "label": "/fleet-berth", "x": 40, "y": 392, "w": 180, "h": 28,
+      "detail": { "type": "skill · worktree producer", "summary": "Creates a git worktree + branch for a ticket (forked off the project's default branch), beside the project checkout. Pure worktree creation — no Jira lifecycle. Run when producing a dispatch, then pass the path to `fleetc dispatch --worktree`; reconcile spawns the cog there (reconcile never creates worktrees)." } },
+    { "id": "sk_launch", "kind": "skill", "label": "/fleet-launch", "x": 40, "y": 424, "w": 180, "h": 28,
+      "detail": { "type": "skill · open the MR", "summary": "Launches the current branch's ship: pushes it, drafts the MR title + description from the ticket and the branch's divergence from its base, then opens the MR via `fleetc launch` (fleetd's forge adapter opens it — GitLab or GitHub alike). Run from the worktree." } },
+    { "id": "sk_parley", "kind": "skill", "label": "/fleet-parley", "x": 40, "y": 456, "w": 180, "h": 28,
+      "detail": { "type": "skill · answer review threads", "summary": "Addresses the open review threads on the current branch's MR (via /mr-reply), with count-gating and outcome propagation so the sailor knows what was resolved." } },
+    { "id": "sk_rechart", "kind": "skill", "label": "/fleet-rechart", "x": 40, "y": 488, "w": 180, "h": 28,
+      "detail": { "type": "skill · rebase the MR", "summary": "Rebases the current branch's MR against its target. Clean divergence → triggers GitLab's server-side rebase via `fleetc rebase` and exits (the sailor re-fires on the result). Conflict → resolves locally with project/code understanding and force-pushes. Escalates only when the conflict needs a product/design decision." } },
+    { "id": "sk_repair", "kind": "skill", "label": "/fleet-repair", "x": 40, "y": 520, "w": 180, "h": 28,
+      "detail": { "type": "skill · fix a broken pipeline", "summary": "Classifies a broken GitLab pipeline on the current branch and attempts a good-faith fix (retry / lint / build / test / infra); escalates if it's unclassifiable or out of scope." } },
+    { "id": "sk_yield", "kind": "skill", "label": "/fleet-yield", "x": 40, "y": 552, "w": 180, "h": 28,
+      "detail": { "type": "skill · hand → sailor handoff", "summary": "The operator's \"pawn it off\" handoff: yields a hand's work to a sailor. Reports `concluded` via fleetc, so fleetd promotes the order to auto, moves Jira → In QA, requests review, and reaps the hand. A ticketless hand has no sailor to yield to. Run from the hand's worktree." } },
+    { "id": "sk_publish", "kind": "skill", "label": "/fleet-publish", "x": 40, "y": 584, "w": 180, "h": 28,
+      "detail": { "type": "skill · ship the viewer to Splash", "summary": "Builds the demos/architecture viewer into a single self-contained HTML file and publishes it to a Splash page at a stable, SSO-gated URL (Okta handled via a vendored Chrome extension — no token or persisted cookie). First run creates the page and returns its URL; later runs replace the same page." } },
+    {
+      "id": "fleetc",
+      "kind": "cli",
+      "label": "fleetc",
+      "sub": "control surface (CLI)",
+      "x": 329,
+      "y": 279,
+      "w": 150,
+      "h": 86
+    },
+    {
+      "id": "fleetd",
+      "kind": "daemon",
+      "label": "fleetd",
+      "sub": "the daemon · opaque",
+      "x": 560,
+      "y": 283,
+      "w": 180,
+      "h": 74,
+      "detail": {
+        "type": "the single-writer daemon (opaque here)",
+        "summary": "On the Overview fleetd is one opaque box. Inside, its heart is a single scheduling loop (scheduler.rs::run) — the state machine below — that the full view hides.",
+        "stateMachine": {
+          "w": 344,
+          "h": 296,
+          "states": [
+            { "id": "wait", "label": "wait", "sub": "recv ≤ 500ms", "x": 123, "y": 130, "w": 98, "h": 40 },
+            { "id": "poll", "label": "poll", "sub": "~5s · read-only", "x": 128, "y": 16, "w": 88, "h": 36, "accent": "#79C0FF" },
+            { "id": "sync", "label": "sync", "sub": "~300s · write", "x": 252, "y": 132, "w": 88, "h": 36, "accent": "#D29922" },
+            { "id": "reconcile", "label": "reconcile", "sub": "~60s · write", "x": 128, "y": 248, "w": 88, "h": 36, "accent": "#56D364" },
+            { "id": "apply", "label": "apply", "sub": "command · write", "x": 4, "y": 132, "w": 88, "h": 36, "accent": "#9DA7B3" },
+            { "id": "exit", "label": "exit", "sub": "channel closed", "x": 4, "y": 250, "w": 92, "h": 30, "accent": "#DB6D28" }
+          ],
+          "transitions": [
+            { "from": "wait", "to": "poll", "label": "deadline ~5s", "bidir": true },
+            { "from": "wait", "to": "sync", "label": "deadline ~300s", "bidir": true },
+            { "from": "wait", "to": "reconcile", "label": "deadline ~60s", "bidir": true },
+            { "from": "wait", "to": "apply", "label": "Ok(cmd)", "bidir": true },
+            { "from": "wait", "to": "exit", "label": "Disconnected" }
+          ],
+          "note": "Verified against scheduler.rs::run. Each pass fires any ticker whose Instant deadline has passed, then blocks on the mpsc command channel for ≤500ms (Timeout → re-loop). poll is READ-ONLY (overwrites the in-memory liveness snapshot — no ledger write, no event); sync, live reconcile, and each client command are the single writer's writes — one transaction appending a CDC event. A Disconnected channel (UDS server gone) breaks the loop. Cadences shown are the config defaults (5/300/60s), re-read live each pass."
+        }
+      }
+    },
+    {
+      "id": "tracker",
+      "kind": "adapter",
+      "label": "Tracker",
+      "sub": "e.g. Jira",
+      "x": 430,
+      "y": 100,
+      "w": 180,
+      "h": 56
+    },
+    {
+      "id": "forge",
+      "kind": "adapter",
+      "label": "Forge",
+      "sub": "e.g. GitLab",
+      "x": 690,
+      "y": 100,
+      "w": 180,
+      "h": 56
+    },
+    {
+      "id": "master",
+      "kind": "config",
+      "label": "Project: Master",
+      "sub": "single origin · chosen project",
+      "x": 1097,
+      "y": 380,
+      "w": 190,
+      "h": 56
+    },
+    {
+      "id": "project",
+      "kind": "config",
+      "label": "Project Worktrees",
+      "sub": "per-ticket branches off master",
+      "x": 1092,
+      "y": 288,
+      "w": 200,
+      "h": 56
+    },
+    { "id": "cog_captain", "kind": "cog", "label": "captain", "x": 860, "y": 244, "w": 170, "h": 28,
+      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "Orchestrates one convoy: dispatches its clean frontier." } },
+    { "id": "cog_worker", "kind": "cog", "label": "worker", "x": 860, "y": 276, "w": 170, "h": 28,
+      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "Implements one ticket in one worktree." } },
+    { "id": "cog_hand", "kind": "cog", "label": "hand", "x": 860, "y": 308, "w": 170, "h": 28,
+      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "Operator-driven implementer — you write the code." } },
+    { "id": "cog_sailor", "kind": "cog", "label": "sailor", "x": 860, "y": 340, "w": 170, "h": 28,
+      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "Lands one open MR toward merged." } },
+    { "id": "cog_lookout", "kind": "cog", "label": "lookout", "x": 860, "y": 372, "w": 170, "h": 28,
+      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "Reviews one allied MR." } },
+    {
+      "id": "ledger",
+      "kind": "sqlite",
+      "label": "Ledger",
+      "sub": "durable state · opaque",
+      "x": 560,
+      "y": 420,
+      "w": 180,
+      "h": 66
+    },
+    {
+      "id": "dashboard",
+      "kind": "tui",
+      "label": "Dashboard",
+      "sub": "read-only view of fleet state",
+      "x": 402,
+      "y": 538,
+      "w": 592,
+      "h": 113
+    },
+    {
+      "id": "fleet_toml",
+      "kind": "config",
+      "label": "fleet.toml",
+      "sub": "startup config · defaults < toml < env",
+      "x": 372,
+      "y": 400,
+      "w": 170,
+      "h": 50,
+      "detail": {
+        "type": "startup config · crates/fleetd/src/config.rs",
+        "summary": "Read once at launch. [forge] + [tracker] are required; everything else defaults.",
+        "fields": [
+          { "section": "cadences & mode", "rows": [
+            { "key": "poll_secs", "meta": "5", "informs": "Liveness-poll cadence (s): how often the in-memory cog snapshot refreshes." },
+            { "key": "sync_secs", "meta": "300", "informs": "Sync cadence (s): hydrate the ledger from the tracker + forge." },
+            { "key": "reconcile_secs", "meta": "60", "informs": "Reconcile cadence (s): converge intent against reality." },
+            { "key": "dry_run", "meta": "false", "informs": "true = plan + log only, execute nothing (the parity look)." }
+          ]},
+          { "section": "liveness thresholds", "rows": [
+            { "key": "active_secs", "meta": "120", "informs": "Activity age under which a cog counts as Active." },
+            { "key": "quiet_secs", "meta": "1800", "informs": "Age under which a cog is Quiet; beyond it → Idle / Dead." }
+          ]},
+          { "section": "telemetry", "rows": [
+            { "key": "otel_addr", "meta": "127.0.0.1:4318", "informs": "Bind addr of the OTLP/HTTP receiver that fills telemetry.db." }
+          ]},
+          { "section": "[project]", "rows": [
+            { "key": "path", "meta": "\"main\"", "informs": "Product's main checkout (relative to fleet.toml) — captains + lookout launch here." }
+          ]},
+          { "section": "[forge] · required", "rows": [
+            { "key": "kind", "meta": "gitlab | github", "informs": "Which forge adapter drives the MRs." },
+            { "key": "project", "meta": "required", "informs": "GitLab numeric project id, or GitHub owner/repo." },
+            { "key": "auto_merge", "meta": "true", "informs": "Dispatch default: true = sailor arms auto-merge; false = land-to-clean, then await operator." }
+          ]},
+          { "section": "[tracker] · required", "rows": [
+            { "key": "kind", "meta": "jira | filesystem", "informs": "Which tracker adapter holds tickets." },
+            { "key": "project", "meta": "required", "informs": "Tracker project; for Jira also the ticket-key prefix (PROJ → PROJ-12)." },
+            { "key": "claim_label", "meta": "jira · opt", "informs": "Label a worker's claim adds to the ticket." },
+            { "key": "path", "meta": "fs · \"tickets\"", "informs": "Filesystem tracker: folder of ticket files." },
+            { "key": "user", "meta": "fs · git user.name", "informs": "Filesystem tracker: who \"me\" is for a claim." }
+          ]}
+        ]
+      }
+    }
+  ],
+  "base": [
+    { "source": "operator", "target": "grp-skills", "label": "via skills" },
+    { "source": "operator", "target": "fleetc", "dashed": true },
+    { "source": "grp-skills", "target": "fleetc" },
+    { "source": "fleetc", "target": "fleetd", "label": "drives" },
+    { "source": "fleet_toml", "target": "fleetd", "label": "reads at launch" },
+    { "source": "fleetd", "target": "tracker", "label": "tickets" },
+    { "source": "fleetd", "target": "forge", "label": "MRs · CI" },
+    { "source": "fleetd", "target": "grp-crew", "label": "spawns" },
+    { "source": "grp-crew", "target": "project", "label": "works in" },
+    { "source": "master", "target": "project", "label": "branches off" },
+    { "source": "fleetd", "target": "ledger", "label": "persists" },
+    { "source": "ledger", "target": "dashboard", "label": "shows state" }
+  ],
+  "flows": []
+}

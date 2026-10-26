@@ -9,6 +9,8 @@ import roster from './assets/roster.svg';
 import foreman from './assets/foreman.svg';
 import worker from './assets/worker.svg';
 import finisher from './assets/finisher.svg';
+import FleetGraph from './fleet/FleetGraph';
+import overviewGraph from './fleet/overview.json';
 
 export const design: DesignSystem = {
   palette: { bg: '#0b0b0d', text: '#e8eaed', accent: '#4aa3ff' },
@@ -51,8 +53,20 @@ const Cover: Page = () => (
   </div>
 );
 
+// PoC: the live Overview graph embedded as a React component (no SVG, no iframe)
+// — the same renderer as demos/fleet, so it always matches the code.
+const LiveOverview: Page = () => (
+  <div style={stage}>
+    <div style={{ position: 'absolute', left: 80, top: 46, fontSize: 48, fontWeight: 600 }}>The sightline — live</div>
+    <div style={{ position: 'absolute', left: 80, top: 140, width: 1760, height: 880 }}>
+      <FleetGraph graph={overviewGraph} />
+    </div>
+  </div>
+);
+
 const pages: Page[] = [
   Cover,
+  LiveOverview,
   diagram('Factory 0 – 100', evolution),
   diagram('Anatomy of an Agent', agentAnatomy),
   diagram('Factory SDLC', lifecycle),
@@ -66,6 +80,7 @@ const pages: Page[] = [
 
 export const notes: (string | undefined)[] = [
   `Managed Custody — the software factory. Daniel Duclos-Cavalcanti, SWE II.`,
+  `PoC — the live Overview, rendered by the same React-Flow renderer as the demos/fleet viewer (vendored read-only). The whole system in one sightline: operator → fleetc → fleetd → crew → project. No static SVG, no iframe — it always matches the code.`,
   `Bottom-up, not top-down. The factory grew from the smallest useful unit outward.
 ① A skill — one SKILL.md, a prompted repeatable procedure, written the first time a job was worth encoding once (/tdd, /mr-review). Captured judgment.
 ② Skills + scripts — a workflow needs several skills plus deterministic glue; scripts (converge.sh, queue.sh, classify.py) actuate the mechanical parts. The thesis: scripts stay dumb, skills stay smart.

@@ -278,6 +278,32 @@ function StateMachine({ spec, accent }) {
   )
 }
 
+// a grouped key list for config-style nodes: section → rows of
+// { key, meta?, informs }. Scannable: accent key + a dim type/default pill +
+// a muted one-liner, each row ruled by a left accent bar.
+function FieldList({ sections, accent }) {
+  return (
+    <div style={{ marginTop: 6 }}>
+      {sections.map((sec, si) => (
+        <div key={si} style={{ marginTop: si ? 16 : 8 }}>
+          <div style={{ font: `700 10px ${MONO}`, letterSpacing: '0.08em', color: 'var(--dim)', textTransform: 'uppercase' }}>{sec.section}</div>
+          <div style={{ marginTop: 7, display: 'flex', flexDirection: 'column', gap: 9 }}>
+            {sec.rows.map((r, ri) => (
+              <div key={ri} style={{ borderLeft: `2px solid ${accent}66`, paddingLeft: 9 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, flexWrap: 'wrap' }}>
+                  <span style={{ font: `700 11px ${MONO}`, color: accent }}>{r.key}</span>
+                  {r.meta && <span style={{ font: `9px ${MONO}`, color: 'var(--dim)', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, padding: '0 5px' }}>{r.meta}</span>}
+                </div>
+                <div style={{ font: '11px/1.5 sans-serif', color: 'var(--muted)', marginTop: 2 }}>{r.informs}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // right-hand inspector: a clicked component's modes + what happens inside
 function DetailPane({ node, mode, setMode, onClose }) {
   const k = KIND[node.kind] ?? KIND.config
@@ -302,6 +328,13 @@ function DetailPane({ node, mode, setMode, onClose }) {
         <div style={{ marginTop: 16 }}>
           <div style={PANE_H}>INTERNAL STATE MACHINE</div>
           <StateMachine spec={d.stateMachine} accent={k.c} />
+        </div>
+      )}
+
+      {d?.fields && (
+        <div style={{ marginTop: 16 }}>
+          <div style={PANE_H}>ALLOWED KEYS</div>
+          <FieldList sections={d.fields} accent={k.c} />
         </div>
       )}
 
