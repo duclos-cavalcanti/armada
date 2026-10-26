@@ -1,2 +1,5 @@
-*
-!.gitignore
+# Every project folder is local (projects/<name>/: config, .fleet/ state, checkout, worktrees),
+# except the armada-test showcase, which ships with the repo as the worked example.
+/*
+!/.gitignore
+!/armada-test/

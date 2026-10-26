@@ -29,7 +29,8 @@ canonical list. The installer gates on it.
 brew bundle --file=./Brewfile
 
 # 3. Set up a project: a folder projects/<name>/ holding its fleet.toml (forge, tracker,
-#    cadences) and its checkout — `[project] path`, relative to that fleet.toml.
+#    cadences) and its checkout — `[project] path`, relative to that fleet.toml. The tracked
+#    showcase projects/armada-test/ (GitHub + ticket files) is the worked example to copy.
 mkdir -p projects/<name>   # then write projects/<name>/fleet.toml
 git clone <remote> projects/<name>/<default-branch>
 
@@ -109,5 +110,6 @@ armada/
 ├── Makefile     one-word wrappers (run `make` for the cheat sheet)
 ├── TODO.md      the forward backlog
 ├── KNOWN_ISSUES.md  accepted edge cases + workarounds
-└── projects/    one folder per project: fleet.toml + .fleet/ state + checkout + ticket worktrees (gitignored)
+└── projects/    one folder per project: fleet.toml + .fleet/ state + checkout + ticket worktrees
+                 (gitignored, except the armada-test showcase's config + tickets)
 ```

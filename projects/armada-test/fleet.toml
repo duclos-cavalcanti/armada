@@ -1,0 +1,37 @@
+# armada-test — the showcase project: a sandbox Rust crate on GitHub, its tickets as markdown
+# files beside this config. This folder IS the project: fleetd, fleetc, the dashboard and every
+# cog find it as the nearest folder holding this fleet.toml (from the cwd, or `-C <dir>`).
+#
+#   projects/armada-test/
+#   ├── fleet.toml   this file (tracked)
+#   ├── tickets/     the filesystem tracker: one <KEY>.md per ticket (tracked)
+#   ├── main/        the checkout — git clone git@github.com:duclos-cavalcanti/armada-test.git main
+#   ├── <worktrees>/ ticket worktrees, beside the checkout (fleet-berth)
+#   └── .fleet/      runtime state: ledger, socket, telemetry (fleetd creates it)
+#
+# Run it: make preflight P=armada-test, then make run P=armada-test.
+
+# --- cadences (seconds) — live levers: `fleetc settings set <key> <value>` ---
+poll_secs      = 5
+sync_secs      = 300
+reconcile_secs = 60
+
+# --- reconcile mode: true = plan only, execute nothing ---
+dry_run = false
+
+# --- the product's checkout, relative to this folder ---
+[project]
+path = "main"
+
+# --- forge: GitHub (`gh auth login`; the repo allows auto-merge and protects main with CI) ---
+[forge]
+kind       = "github"
+project    = "duclos-cavalcanti/armada-test"
+auto_merge = false   # the sailor lands each PR to clean, then waits for the operator to merge
+
+# --- tracker: ticket files in tickets/ ---
+[tracker]
+kind    = "filesystem"
+project = "ARMT"     # the ticket key prefix: ARMT-4, ARMT-5, …
+# path  = "tickets"  # default
+# user  = "…"        # who claims tickets; default: git config user.name

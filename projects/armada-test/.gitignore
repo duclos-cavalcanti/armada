@@ -1,0 +1,4 @@
+# The showcase tracks its config + tickets. Its checkout, ticket worktrees (nested git repos)
+# and .fleet/ (live SQLite state + a socket) never are.
+/*/
+!/tickets/
