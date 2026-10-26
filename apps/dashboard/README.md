@@ -13,7 +13,9 @@ Cycle with `Tab` / `S-Tab`:
 
 - **Fleet** — the line, top-down: what's waiting to enter it, every order, then the builders and
   the ships being landed:
-  - **Proposals** — the open proposals (as on Board), waiting on you to accept or drop;
+  - **Needs you** — what waits on you before it can enter the line: open proposals (`a` accept,
+    `d` drop) and convoy tickets a captain held as not Ready (`✋ <reason>`; fix the ticket, then
+    `u` unhold). `enter` reads a proposal or opens a held ticket;
   - **Dispatch** — every order the fleet is working, with its phase (waiting / implementation /
     merge) and what it waits on (held ✋ / blocked ⛔);
   - **Implementation** — builders at work (workers + hands): state, liveness, MR + pipeline, last action;

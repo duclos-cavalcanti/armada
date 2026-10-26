@@ -404,6 +404,11 @@ fn arm(ledger: &Ledger, forge: &dyn Forge, key: &TicketKey) -> Result<()> {
 /// reported with what already happened, so the caller can react (e.g. a forge without drafts).
 fn set_held(ledger: &Ledger, forge: &dyn Forge, ticket: &TicketKey, held: bool, reason: Option<&str>) -> Result<()> {
     TicketRepo::set_held(ledger, ticket, held, reason, &now_rfc3339())?;
+    if held {
+        tracing::warn!("hold {}: {}", ticket.0, reason.unwrap_or("(no reason given)"));
+    } else {
+        tracing::info!("unhold {}", ticket.0);
+    }
     let open = ledger.armada()?.into_iter().find(|s| s.ticket.as_ref() == Some(ticket) && s.ended_at.is_none());
     let Some(ship) = open else { return Ok(()) };
     let iid = ship.iid;

@@ -12,6 +12,7 @@
 #
 # Row-field contract per coordinate (coord + key are stripped, so $1 is the first
 # field — these positions match the dashboard's `focused_action()`):
+#   fleet/needs        $1=kind(proposal|held)  $2=ref(proposal id | ticket key)
 #   fleet/dispatched   $1=ticket  $2=crew(worker|hand)
 #   fleet/impl         $1=ticket  $2=kind  $3=tmux_session  $4=state  $5=mr_iid
 #   fleet/merge        $1=ticket  $2=mr_iid  $3=url  $4=sailor_tmux(only when up)  $5=sailor_state
@@ -45,8 +46,10 @@ launch_mr()      { local url; url="$(fleet ship --iid "$1" | jq -r '.ship.url')"
 fleet_cmd()      { printf '%q ' fleetc -C "${FLEET_PROJECT:?}" "$@"; }
 # Read a proposal in full, in a tmux popup over the dashboard.
 read_proposal()  { tmux display-popup -E -w 90% -h 80% "$(fleet_cmd proposal "$1") | less"; }
-# Accept (a new ticket is filed into the tracker) or drop a proposal — each asks first.
-settle_proposal() { tmux confirm-before -p "$1 proposal $2? (y/n)" "run-shell -b '$(fleet_cmd proposal "$1" "$2")'"; }
+# Run `fleet "$@"` once the operator answers y in the tmux status line: `confirm_fleet <prompt> <args>…`.
+confirm_fleet()  { local prompt="$1"; shift; tmux confirm-before -p "$prompt (y/n)" "run-shell -b '$(fleet_cmd "$@")'"; }
+# Accept (a new ticket is filed into the tracker) or drop a proposal.
+settle_proposal() { confirm_fleet "$1 proposal $2?" proposal "$1" "$2"; }
 
 # main — map a (coordinate, key) + the focused row's fields to an action.
 main() {
@@ -55,6 +58,16 @@ main() {
     shift 2   # remaining positionals ($1..) are the focused row's fields
 
     case "$coord/$key" in
+        # ---- Fleet · needs you (proposals + held convoy tickets) ------------
+        # enter reads a proposal / opens a held ticket; a/d settle a proposal; u unholds a ticket.
+        fleet/needs/enter)
+            if [ "${1:-}" = proposal ]; then read_proposal "${2:-}"; else launch_ticket "${2:-}"; fi
+            ;;
+        fleet/needs/t) [ "${1:-}" = held ] && launch_ticket "${2:-}" ;;
+        fleet/needs/a) [ "${1:-}" = proposal ] && settle_proposal accept "${2:-}" ;;
+        fleet/needs/d) [ "${1:-}" = proposal ] && settle_proposal drop "${2:-}" ;;
+        fleet/needs/u) [ "${1:-}" = held ] && confirm_fleet "unhold ${2:-}?" unhold "${2:-}" ;;
+
         # ---- Fleet · dispatched / impl / merge (the line, by phase) --------
         # t opens the ticket everywhere; enter attaches the cog at work; m opens the MR.
         fleet/dispatched/enter | fleet/dispatched/t) launch_ticket "${1:-}" ;;

@@ -114,8 +114,11 @@ pub struct Fleet {
     pub held_reasons: HashMap<String, String>,
     pub armada: Vec<ShipRow>,
     pub convoys: Vec<Convoy>,
-    /// Tickets cogs drafted mid-work, waiting on the operator to file or drop them.
+    /// Work cogs found mid-ticket, waiting on the operator to accept or drop it.
     pub proposals: Vec<Proposal>,
+    /// Tickets held in an open convoy and never dispatched — a captain judged them not Ready, and
+    /// they wait on the operator to fix and unhold them.
+    pub held: Vec<Ticket>,
     /// The latest reconcile `TickRan` event — fleetd's last plan (applied/failed/planned).
     pub tick: Option<Event>,
     /// The tmux sessions up right now — whether `enter` on a cog has a pane to switch to.
@@ -237,6 +240,14 @@ impl Fleet {
             });
         }
 
+        let convoys = ConvoyRepo::active(&db)?;
+        let held = board
+            .iter()
+            .filter(|t| t.held && !ordered.contains(&t.key))
+            .filter(|t| t.convoy.as_ref().is_some_and(|c| convoys.iter().any(|open| &open.key == c)))
+            .cloned()
+            .collect();
+
         Ok(Fleet {
             ledger_path: ledger_path.to_path_buf(),
             load_error: None,
@@ -247,7 +258,8 @@ impl Fleet {
             board,
             held_reasons,
             armada,
-            convoys: ConvoyRepo::active(&db)?,
+            convoys,
+            held,
             // A ledger older than the proposals table has none — fleetd adds it on its next start.
             proposals: db.pending().unwrap_or_default(),
             tick: db.latest_tick()?,

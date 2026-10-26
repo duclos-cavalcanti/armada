@@ -58,6 +58,15 @@ fn render_body(f: &mut Frame, area: Rect, app: &App) {
 fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<'static>>) {
     let f = &app.fleet;
     match pane {
+        Pane::NeedsYou => (
+            format!(
+                " Needs you · {} proposals · {} held · enter read · a accept · d drop · u unhold ",
+                f.proposals.len(),
+                f.held.len()
+            ),
+            Some(header(&[("What", 9), ("Ref", 12), ("From", 12), ("Convoy", 12), ("Age", 6), ("Detail", 0)])),
+            f.proposals.iter().map(needs_proposal_row).chain(f.held.iter().map(|t| held_row(t, &f.held_reasons))).collect(),
+        ),
         Pane::Dispatched => (
             format!(" Dispatch · {} orders ", f.dispatched.len()),
             Some(header(&[
@@ -334,6 +343,36 @@ fn convoy_row(c: &Convoy, captain: Option<&CogRow>) -> Line<'static> {
         None => String::new(),
     };
     Line::from(format!("{:<12} {}{}{}", c.key.0, short(c.title.as_deref().unwrap_or(""), 50), anchor, captain))
+}
+
+/// Needs you · a proposal: accept or drop it.
+fn needs_proposal_row(p: &Proposal) -> Line<'static> {
+    let key = |k: Option<&String>| k.cloned().unwrap_or_else(|| "—".into());
+    let (detail, style) = match &p.proposed {
+        Proposed::New(d) => (format!("new {}: {}", d.kind, d.title), Style::default()),
+        Proposed::Existing { ticket, why, .. } => (format!("{} · {why}", ticket.0), Style::default().fg(Color::Cyan)),
+    };
+    cells(vec![
+        ("proposal".into(), 9, Style::default().fg(Color::Cyan)),
+        (format!("#{}", p.id.0), 12, Style::default()),
+        (key(p.from_ticket.as_ref().map(|k| &k.0)), 12, Style::default()),
+        (key(p.proposed.convoy().map(|c| &c.0)), 12, Style::default()),
+        (fmt_age(age_of(&p.created_at)), 6, dim()),
+        (detail, 0, style),
+    ])
+}
+
+/// Needs you · a convoy ticket a captain held (not Ready): fix it, then unhold it.
+fn held_row(t: &Ticket, reasons: &HashMap<String, String>) -> Line<'static> {
+    let reason = reasons.get(&t.key.0).map(String::as_str).filter(|r| !r.is_empty()).unwrap_or("(no reason given)");
+    cells(vec![
+        ("held".into(), 9, Style::default().fg(Color::Magenta)),
+        (t.key.0.clone(), 12, Style::default()),
+        ("—".into(), 12, dim()),
+        (t.convoy.as_ref().map(|c| c.0.clone()).unwrap_or_default(), 12, Style::default()),
+        ("—".into(), 6, dim()),
+        (format!("✋ {reason}"), 0, yellow()),
+    ])
 }
 
 /// A new ticket shows its draft's title; an existing one, its key and why (in cyan: nothing to file).

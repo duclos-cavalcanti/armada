@@ -53,11 +53,11 @@ impl TabId {
         let all = Self::all();
         all[(self as isize + delta).rem_euclid(all.len() as isize) as usize]
     }
-    /// The tab's panes, top to bottom — `1`..`4` focus them, `↑`/`↓` cycle them. Proposals head
-    /// the Fleet tab too: work waiting on the operator before it can enter the line.
+    /// The tab's panes, top to bottom — `1`..`4` focus them, `↑`/`↓` cycle them. The Fleet tab
+    /// opens on what needs the operator before it can enter the line.
     pub fn panes(self) -> &'static [Pane] {
         match self {
-            TabId::Fleet => &[Pane::Proposals, Pane::Dispatched, Pane::Impl, Pane::Merge],
+            TabId::Fleet => &[Pane::NeedsYou, Pane::Dispatched, Pane::Impl, Pane::Merge],
             TabId::Ships => &[Pane::Ships],
             TabId::Board => &[Pane::Tickets, Pane::Convoys, Pane::Proposals],
             TabId::Log => &[Pane::Log],
@@ -65,10 +65,12 @@ impl TabId {
     }
 }
 
-/// Every pane on every tab. Fleet reads the line top-down: dispatched orders → builders at
-/// work (impl phase) → ships being landed (merge phase).
+/// Every pane on every tab. Fleet reads the line top-down: what needs the operator (proposals,
+/// held convoy tickets) → dispatched orders → builders at work (impl phase) → ships being landed
+/// (merge phase).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Pane {
+    NeedsYou,
     Dispatched,
     Impl,
     Merge,
@@ -80,10 +82,11 @@ pub enum Pane {
 }
 
 impl Pane {
-    const COUNT: usize = 8;
+    const COUNT: usize = 9;
     /// The `tab/pane` coordinate the action handler keys on.
     fn coordinate(self) -> &'static str {
         match self {
+            Pane::NeedsYou => "fleet/needs",
             Pane::Dispatched => "fleet/dispatched",
             Pane::Impl => "fleet/impl",
             Pane::Merge => "fleet/merge",
@@ -152,6 +155,7 @@ impl App {
     fn len(&self, pane: Pane) -> usize {
         let f = &self.fleet;
         match pane {
+            Pane::NeedsYou => f.proposals.len() + f.held.len(),
             Pane::Dispatched => f.dispatched.len(),
             Pane::Impl => f.builders.len(),
             Pane::Merge => f.landing.len(),
@@ -168,6 +172,7 @@ impl App {
     /// focused list is empty.
     ///
     /// Field schema per coordinate (the handler reads these positionally; empty = n/a):
+    ///   fleet/needs        kind(proposal|held)  ref(proposal id | ticket key)
     ///   fleet/dispatched   ticket  crew(worker|hand)
     ///   fleet/impl         ticket  kind  tmux_session  state  mr_iid
     ///   fleet/merge        ticket  mr_iid  url  sailor_tmux(only when up)  sailor_state
@@ -181,6 +186,10 @@ impl App {
         let f = &self.fleet;
         let key = |k: Option<&domain::TicketKey>| k.map(|k| k.0.clone()).unwrap_or_default();
         let fields = match pane {
+            Pane::NeedsYou => match f.proposals.get(i) {
+                Some(p) => Some(vec!["proposal".into(), p.id.0.to_string()]),
+                None => f.held.get(i - f.proposals.len()).map(|t| vec!["held".into(), t.key.0.clone()]),
+            },
             Pane::Dispatched => f.dispatched.get(i).map(|o| {
                 let crew = if o.order.auto_impl { "worker" } else { "hand" };
                 vec![o.order.ticket.0.clone(), crew.into()]
