@@ -12,9 +12,9 @@ single static binary, no runtime dependencies.
 Cycle with `Tab` / `S-Tab`:
 
 - **Fleet** — the line, top-down by how far each ticket has got; each ticket sits in one pane:
-  - **dispatched** — orders waiting for their builder (held ✋ / blocked ⛔ / not yet spawned);
-  - **impl** — builders at work (workers + hands): state, liveness, MR + pipeline, last action;
-  - **merge** — our ships being landed: the sailor's state (dimmed once it's stood down),
+  - **Dispatch** — orders waiting for their builder (held ✋ / blocked ⛔ / not yet spawned);
+  - **Implementation** — builders at work (workers + hands): state, liveness, MR + pipeline, last action;
+  - **Merge** — our ships being landed: the sailor's state (dimmed once it's stood down),
     pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status;
 - **Ships** — every open MR fleetd tracks, ours + allies; the title shows the lookout.
 - **Board** — the sprint tickets + convoys (a convoy shows its captain while one is live).

@@ -59,12 +59,12 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
     let f = &app.fleet;
     match pane {
         Pane::Dispatched => (
-            format!(" dispatched · {} waiting ", f.dispatched.len()),
+            format!(" Dispatch · {} waiting ", f.dispatched.len()),
             Some(header(&[("Ticket", 12), ("Crew", 7), ("Merge", 7), ("Status", 12), ("Age", 6), ("Waiting on", 0)])),
             f.dispatched.iter().map(order_row).collect(),
         ),
         Pane::Impl => (
-            format!(" impl · {} building ", f.builders.len()),
+            format!(" Implementation · {} building ", f.builders.len()),
             Some(header(&[
                 ("Ticket", 12),
                 ("Crew", 7),
@@ -79,7 +79,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             f.builders.iter().map(|c| builder_row(c, f.is_up(c), f.ship_of(c.session.ticket.as_ref()))).collect(),
         ),
         Pane::Merge => (
-            format!(" merge · {} landing ", f.landing.len()),
+            format!(" Merge · {} landing ", f.landing.len()),
             Some(header(&[
                 ("Ticket", 12),
                 ("Sailor", 15),
