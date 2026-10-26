@@ -11,7 +11,7 @@ tools: >-
   Read, Glob, Grep, Bash, Skill, WebFetch, WebSearch,
   mcp__claude_ai_Atlassian_Rovo__*
 skills: >-
-  fleet-berth
+  fleet-berth, fleet-ready-done
 mcpServers:
   - "claude.ai Atlassian Rovo"
 initialPrompt: >-

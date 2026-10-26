@@ -11,7 +11,7 @@ tools: >-
   Read, Glob, Grep, Bash, Edit, Write, Skill, WebFetch, WebSearch,
   mcp__claude_ai_Atlassian_Rovo__*
 skills: >-
-  fleet-launch
+  fleet-launch, fleet-ready-done
 mcpServers:
   - "claude.ai Atlassian Rovo"
 initialPrompt: /goal Deliver your ticket (the FLEET_TICKET env var): implemented to its acceptance criteria, tests passing, MR open.
