@@ -246,8 +246,11 @@ impl Forge for GlabForge {
         let me: serde_json::Value = serde_json::from_str(&self.api("user")?)?;
         let me = me.get("username").and_then(|u| u.as_str()).context("glab api user: no username")?;
         let repo = self.repo()?;
+        // `--head` too: glab otherwise takes the SOURCE project from the git remote of fleetd's own
+        // cwd (the kit repo), and GitLab refuses an MR from a project that isn't a fork of the
+        // target. A fleet MR is always same-project.
         let mut args = vec![
-            "mr", "create", "-R", &repo,
+            "mr", "create", "-R", &repo, "--head", &repo,
             "--source-branch", &d.source, "--target-branch", &d.target,
             "--title", &d.title, "--description", &d.description,
             "--assignee", me, "--squash-before-merge", "--yes",
