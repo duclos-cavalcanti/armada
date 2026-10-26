@@ -5,7 +5,7 @@
 -- The work order + the board (all sprint tickets, upsert-filled by the tracker).
 CREATE TABLE IF NOT EXISTS tickets (
     key         TEXT PRIMARY KEY,                     -- '<PREFIX>-<n>', e.g. 'PROJ-1234'
-    convoy      TEXT,                                 -- nullable; grouping key, ticket-key shaped (NOT a ticket)
+    convoy      TEXT,                                 -- nullable; the TRACKER's grouping (its epic), ticket-key shaped (NOT a ticket) — `convoy_members` can override it
     held        INTEGER NOT NULL DEFAULT 0,           -- held off the dispatch frontier (0/1)
     created_at  TEXT NOT NULL,
     -- cached tracker mirror (re-synced; the tracker is the source of truth):
@@ -61,6 +61,16 @@ CREATE TABLE IF NOT EXISTS convoys (
     created_at  TEXT NOT NULL,
     ended_at    TEXT,                                 -- NULL = active
     anchored_at TEXT                                  -- operator anchor (hold the captain); NULL = under way
+);
+
+-- Convoy membership the fleet sets beyond the tracker's grouping. A ticket's convoy is the one it was
+-- added to here, else its epic's (`tickets.convoy`) — and only one (the PK): a convoy can take on a
+-- ticket from another epic it depends on, which can't be re-parented, and that ticket leaves its
+-- epic's convoy for the fleet. Not FK'd to convoys: membership can precede `convoy open`.
+CREATE TABLE IF NOT EXISTS convoy_members (
+    ticket   TEXT PRIMARY KEY REFERENCES tickets(key),
+    convoy   TEXT NOT NULL,
+    added_at TEXT NOT NULL
 );
 
 -- The singleton lookout's own control row. The allied-ship review cog is ticketless + convoyless, so

@@ -49,6 +49,14 @@ pub struct ConvoyCmd {
     pub title: Option<String>,
 }
 
+/// Add a ticket to a convoy, or take an added one out (`POST /convoy-add`, `/convoy-remove`;
+/// `fleetc convoy add|remove <CONVOY> <TICKET>`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConvoyMemberCmd {
+    pub convoy: String,
+    pub ticket: String,
+}
+
 /// A cog-targeted control command (anchor / weigh / sink). `cog` is the required kind; the key is
 /// per-cog — worker/sailor/hand carry a `ticket`, a captain a `convoy`, the lookout neither. `/anchor`
 /// drops a graceful stop + hold on the live cog; `/weigh` lifts it; `/sink` scuttles it (hard kill +

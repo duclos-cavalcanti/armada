@@ -189,6 +189,11 @@ fn row_to_ticket(r: &rusqlite::Row) -> rusqlite::Result<Ticket> {
     })
 }
 
+/// A ticket read: every `tickets` column, its convoy resolved — the one it was added to
+/// (`convoy_members`), else its epic's. Every reader sees the one convoy the fleet drives it in.
+const TICKET_READ: &str = "SELECT t.key, coalesce(m.convoy, t.convoy) AS convoy, t.held, t.created_at, t.title, \
+     t.assignee, t.status, t.synced_at FROM tickets t LEFT JOIN convoy_members m ON m.ticket = t.key";
+
 impl Ledger {
     fn blockers_of(&self, key: &TicketKey) -> Result<Vec<TicketKey>> {
         let mut stmt = self
@@ -228,11 +233,7 @@ impl TicketRepo for Ledger {
     fn get(&self, key: &TicketKey) -> Result<Option<Ticket>> {
         let mut t = self
             .conn
-            .query_row(
-                "SELECT * FROM tickets WHERE key = ?1",
-                params![key.0],
-                row_to_ticket,
-            )
+            .query_row(&format!("{TICKET_READ} WHERE t.key = ?1"), params![key.0], row_to_ticket)
             .optional()?;
         if let Some(ref mut ticket) = t {
             ticket.blocked_by = self.blockers_of(key)?;
@@ -241,7 +242,7 @@ impl TicketRepo for Ledger {
     }
 
     fn board(&self) -> Result<Vec<Ticket>> {
-        let mut stmt = self.conn.prepare("SELECT * FROM tickets ORDER BY key")?;
+        let mut stmt = self.conn.prepare(&format!("{TICKET_READ} ORDER BY t.key"))?;
         let rows = stmt.query_map([], row_to_ticket)?;
         let mut tickets: Vec<Ticket> = rows.collect::<rusqlite::Result<_>>()?;
         for t in &mut tickets {
@@ -704,6 +705,39 @@ mod tests {
     }
 
     #[test]
+    fn a_ticket_is_in_one_convoy_the_one_it_was_added_to_else_its_epics() {
+        let db = Ledger::in_memory().unwrap();
+        let epic_child = |key: &str, epic: &str| TrackerTicket {
+            key: TicketKey(key.into()),
+            title: "T".into(),
+            status: TicketStatus::Todo,
+            assignee: None,
+            convoy: Some(ConvoyKey(epic.into())),
+            blocked_by: vec![],
+        };
+        db.sync(&epic_child("PROJ-1", "PROJ-50"), "t").unwrap();
+        let (ours, other) = (ConvoyKey("PROJ-90".into()), ConvoyKey("PROJ-91".into()));
+        let k = TicketKey("PROJ-1".into());
+        let convoy_of = |db: &Ledger| TicketRepo::get(db, &k).unwrap().unwrap().convoy;
+
+        assert_eq!(db.add_member(&ConvoyKey("PROJ-50".into()), &k, "t").unwrap(), None, "its epic's: already a member");
+        assert_eq!(db.add_member(&ours, &k, "t").unwrap(), Some(ConvoyKey("PROJ-50".into())), "left its epic's");
+        assert_eq!(convoy_of(&db), Some(ours.clone()));
+        assert_eq!(db.board().unwrap()[0].convoy, Some(ours.clone()), "the board reads it the same way");
+        assert_eq!(db.add_member(&ours, &k, "t").unwrap(), None, "idempotent");
+        assert!(db.add_member(&other, &k, "t").is_err(), "never in two convoys");
+
+        db.sync(&epic_child("PROJ-1", "PROJ-51"), "t2").unwrap(); // re-parented in the tracker
+        assert_eq!(convoy_of(&db), Some(ours.clone()), "the fleet's membership survives a sync");
+        assert_eq!(db.added_members().unwrap(), vec![k.clone()]);
+
+        assert!(db.remove_member(&other, &k).is_err(), "wasn't added there");
+        db.remove_member(&ours, &k).unwrap();
+        assert_eq!(convoy_of(&db), Some(ConvoyKey("PROJ-51".into())), "back to its epic's");
+        assert!(db.add_member(&ours, &TicketKey("PROJ-404".into()), "t").is_err(), "not on the board");
+    }
+
+    #[test]
     fn convoy_reopen_clears_ended_at() {
         let db = Ledger::in_memory().unwrap();
         let k = ConvoyKey("PROJ-100".into());
@@ -1028,6 +1062,45 @@ fn row_to_convoy(r: &rusqlite::Row) -> rusqlite::Result<Convoy> {
 }
 
 impl ConvoyRepo for Ledger {
+    fn add_member(&self, convoy: &ConvoyKey, ticket: &TicketKey, at: &str) -> Result<Option<ConvoyKey>> {
+        let added: Option<String> = self
+            .conn
+            .query_row("SELECT convoy FROM convoy_members WHERE ticket = ?1", params![ticket.0], |r| r.get(0))
+            .optional()?;
+        match added {
+            Some(c) if c == convoy.0 => return Ok(None),
+            Some(c) => anyhow::bail!("{} is already in convoy {c} — `fleetc convoy remove {c} {}` first", ticket.0, ticket.0),
+            None => {}
+        }
+        let epic: Option<String> = self
+            .conn
+            .query_row("SELECT convoy FROM tickets WHERE key = ?1", params![ticket.0], |r| r.get(0))
+            .optional()?
+            .ok_or_else(|| anyhow::anyhow!("{} isn't on the board", ticket.0))?;
+        if epic.as_deref() == Some(convoy.0.as_str()) {
+            return Ok(None); // already a member: its epic is this convoy
+        }
+        self.conn.execute(
+            "INSERT INTO convoy_members(ticket, convoy, added_at) VALUES (?1, ?2, ?3)",
+            params![ticket.0, convoy.0, at],
+        )?;
+        Ok(epic.map(convoy_key).transpose()?)
+    }
+
+    fn remove_member(&self, convoy: &ConvoyKey, ticket: &TicketKey) -> Result<()> {
+        let n = self
+            .conn
+            .execute("DELETE FROM convoy_members WHERE ticket = ?1 AND convoy = ?2", params![ticket.0, convoy.0])?;
+        anyhow::ensure!(n == 1, "{} wasn't added to convoy {} (an epic's own tickets leave it in the tracker)", ticket.0, convoy.0);
+        Ok(())
+    }
+
+    fn added_members(&self) -> Result<Vec<TicketKey>> {
+        let mut stmt = self.conn.prepare("SELECT ticket FROM convoy_members ORDER BY ticket")?;
+        let rows = stmt.query_map([], |r| ticket_key(r.get(0)?))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     fn open(&self, key: &ConvoyKey, title: Option<&str>, now: &str) -> Result<()> {
         // Idempotent create; re-opening a closed convoy clears ended_at. +ConvoyOpened (CDC).
         let tx = self.conn.unchecked_transaction()?;

@@ -82,6 +82,8 @@ fn handle(
         (Some("POST"), Some("/hand")) => handle_hand(&request, cmds),
         (Some("POST"), Some("/convoy-open")) => handle_convoy(&request, cmds, true),
         (Some("POST"), Some("/convoy-close")) => handle_convoy(&request, cmds, false),
+        (Some("POST"), Some("/convoy-add")) => handle_convoy_member(&request, cmds, true),
+        (Some("POST"), Some("/convoy-remove")) => handle_convoy_member(&request, cmds, false),
         (Some("POST"), Some("/anchor")) => handle_hold(&request, cmds, Hold::Anchor),
         (Some("POST"), Some("/weigh")) => handle_hold(&request, cmds, Hold::Weigh),
         (Some("POST"), Some("/sink")) => handle_hold(&request, cmds, Hold::Sink),
@@ -270,6 +272,19 @@ fn handle_convoy(request: &str, cmds: &Sender<Command>, open: bool) -> String {
         Ok(Ok(())) => http_response("200 OK", "text/plain", "ok"),
         Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
         Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
+/// `POST /convoy-add` (`add`; reply says what it left) or `/convoy-remove` — a convoy's membership.
+fn handle_convoy_member(request: &str, cmds: &Sender<Command>, add: bool) -> String {
+    let parsed = parse_body::<wire::ConvoyMemberCmd>(request).and_then(|dto| {
+        let convoy = ConvoyKey::parse(&dto.convoy).map_err(|e| http_response("400 Bad Request", "text/plain", &e.to_string()))?;
+        Ok((convoy, parse_ticket(&dto.ticket)?))
+    });
+    match parsed {
+        Ok((convoy, ticket)) if add => relay(cmds, |reply| Command::AddToConvoy { convoy, ticket, reply }),
+        Ok((convoy, ticket)) => relay(cmds, |reply| Command::RemoveFromConvoy { convoy, ticket, reply }),
+        Err(r) => r,
     }
 }
 
@@ -902,6 +917,8 @@ mod tests {
                     Command::NewTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Propose { reply, .. }
                     | Command::AcceptProposal { reply, .. }
+                    | Command::AddToConvoy { reply, .. }
+                    | Command::RemoveFromConvoy { reply, .. }
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
@@ -960,6 +977,8 @@ mod tests {
                     Command::NewTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Propose { reply, .. }
                     | Command::AcceptProposal { reply, .. }
+                    | Command::AddToConvoy { reply, .. }
+                    | Command::RemoveFromConvoy { reply, .. }
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }

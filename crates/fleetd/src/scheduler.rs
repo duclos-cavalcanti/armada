@@ -86,6 +86,8 @@ pub enum Command {
     Propose { from: Option<TicketKey>, proposed: Proposed, reply: UrlReply }, // hold a cog's proposal → its id
     AcceptProposal { id: ProposalId, convoy: Option<ConvoyKey>, reply: UrlReply }, // an action: accept it → its key (a new one is filed)
     DropProposal { id: ProposalId, reply: UrlReply },
+    AddToConvoy { convoy: ConvoyKey, ticket: TicketKey, reply: UrlReply }, // → what it says (and what it left)
+    RemoveFromConvoy { convoy: ConvoyKey, ticket: TicketKey, reply: UrlReply },
     SetSetting { key: String, value: String, reply: Reply }, // live-config overwrite (validated here)
     GetSettings { reply: SettingsReply },                    // a read: every live lever + source
 }
@@ -269,6 +271,13 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         Command::AcceptProposal { id, convoy, reply } => {
             let _ = reply.send(accept_proposal(ledger, tracker, &id, convoy).map(|k| k.0).map_err(|e| format!("{e:#}")));
         }
+        Command::AddToConvoy { convoy, ticket, reply } => {
+            let _ = reply.send(add_to_convoy(ledger, tracker, &convoy, &ticket).map_err(|e| format!("{e:#}")));
+        }
+        Command::RemoveFromConvoy { convoy, ticket, reply } => {
+            let res = ConvoyRepo::remove_member(ledger, &convoy, &ticket);
+            let _ = reply.send(res.map(|()| format!("{} left {} (back to its epic's convoy)", ticket.0, convoy.0)).map_err(|e| format!("{e:#}")));
+        }
         Command::DropProposal { id, reply } => {
             let res = ProposalRepo::settle(ledger, &id, &now_rfc3339(), None).map(|()| "dropped".to_string());
             let _ = reply.send(res.map_err(|e| format!("{e:#}")));
@@ -304,8 +313,19 @@ fn propose(ledger: &Ledger, tracker: &dyn Tracker, from: Option<TicketKey>, mut 
     ledger.propose(&p)
 }
 
+/// Put a ticket in a convoy — its only one (an off-sprint ticket is pulled onto the board first).
+/// Says what happened, naming the epic's convoy it left, if any.
+fn add_to_convoy(ledger: &Ledger, tracker: &dyn Tracker, convoy: &ConvoyKey, ticket: &TicketKey) -> Result<String> {
+    ensure_ticket(ledger, tracker, ticket)?;
+    Ok(match ledger.add_member(convoy, ticket, &now_rfc3339())? {
+        Some(epic) => format!("{} is in convoy {} (moved from {}, its epic's)", ticket.0, convoy.0, epic.0),
+        None => format!("{} is in convoy {}", ticket.0, convoy.0),
+    })
+}
+
 /// Accept an open proposal and settle it as its ticket: a new one is filed into the tracker (into
-/// `convoy` when given, else the one it proposed); an existing one already is, and keeps its convoy.
+/// `convoy` when given, else the one it proposed); an existing one already is, and joins `convoy`
+/// when given.
 fn accept_proposal(ledger: &Ledger, tracker: &dyn Tracker, id: &ProposalId, convoy: Option<ConvoyKey>) -> Result<TicketKey> {
     let p = ProposalRepo::get(ledger, id)?.filter(|p| p.ended_at.is_none()).ok_or_else(|| anyhow!("proposal {} isn't open", id.0))?;
     let key = match p.proposed {
@@ -316,7 +336,9 @@ fn accept_proposal(ledger: &Ledger, tracker: &dyn Tracker, id: &ProposalId, conv
             tracker.create(&draft)?
         }
         Proposed::Existing { ticket, .. } => {
-            anyhow::ensure!(convoy.is_none(), "{} is an existing ticket: it keeps its own convoy", ticket.0);
+            if let Some(c) = &convoy {
+                add_to_convoy(ledger, tracker, c, &ticket)?;
+            }
             ticket
         }
     };
@@ -812,6 +834,22 @@ mod tests {
     }
 
     #[test]
+    fn a_ticket_added_from_another_epic_is_in_our_convoys_view_not_its_epics() {
+        let db = Ledger::in_memory().unwrap();
+        let mut other = tt("PROJ-7", TicketStatus::Todo);
+        other.convoy = Some(ConvoyKey("PROJ-50".into()));
+        let tracker = FakeTracker(vec![other]);
+        let (ours, epic) = (ConvoyKey("PROJ-90".into()), ConvoyKey("PROJ-50".into()));
+        let key = TicketKey("PROJ-7".into());
+
+        let said = add_to_convoy(&db, &tracker, &ours, &key).unwrap(); // off the board: pulled first
+        assert!(said.contains("moved from PROJ-50"), "said: {said}");
+        let in_view = |c: &ConvoyKey| build_convoy_view(&db, c, true).unwrap().tickets.iter().any(|t| t.key == key);
+        assert!(in_view(&ours) && !in_view(&epic), "one convoy: ours");
+        assert!(add_to_convoy(&db, &tracker, &ConvoyKey("PROJ-91".into()), &key).is_err(), "never two");
+    }
+
+    #[test]
     fn an_existing_ticket_is_pulled_onto_the_board_and_accepted_as_itself() {
         let db = Ledger::in_memory().unwrap();
         let tracker = FakeTracker(vec![tt("PROJ-1", TicketStatus::InQa), tt("PROJ-7", TicketStatus::Todo)]);
@@ -823,8 +861,9 @@ mod tests {
         let id = propose(&db, &tracker, from, existing("PROJ-7")).unwrap();
         assert!(TicketRepo::get(&db, &TicketKey("PROJ-7".into())).unwrap().is_some(), "pulled onto the board");
 
-        assert!(accept_proposal(&db, &tracker, &id, Some(ConvoyKey("PROJ-9".into()))).is_err(), "keeps its own convoy");
-        assert_eq!(accept_proposal(&db, &tracker, &id, None).unwrap(), TicketKey("PROJ-7".into()), "nothing filed");
+        assert_eq!(accept_proposal(&db, &tracker, &id, Some(ConvoyKey("PROJ-9".into()))).unwrap(), TicketKey("PROJ-7".into()), "nothing filed");
+        let t = TicketRepo::get(&db, &TicketKey("PROJ-7".into())).unwrap().unwrap();
+        assert_eq!(t.convoy, Some(ConvoyKey("PROJ-9".into())), "it joined the convoy");
     }
 
     fn tt(key: &str, status: TicketStatus) -> TrackerTicket {

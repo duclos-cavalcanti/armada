@@ -214,6 +214,7 @@ pub struct Report {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Ticket {
     pub key: TicketKey,
+    /// The one convoy the fleet drives it in: the one it was added to, else its epic's.
     pub convoy: Option<ConvoyKey>,
     pub held: bool,
     pub created_at: Timestamp,

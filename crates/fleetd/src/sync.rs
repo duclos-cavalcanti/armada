@@ -3,7 +3,7 @@
 //! liveness poll. For now `fleetd sync` runs the armada sync on demand.
 
 use anyhow::Result;
-use domain::ports::{Forge, ShipRepo, TicketRepo, Tracker};
+use domain::ports::{ConvoyRepo, Forge, ShipRepo, TicketRepo, Tracker};
 use domain::{Ship, ShipId, ShipSnapshot};
 use ledger::Ledger;
 
@@ -15,6 +15,16 @@ pub fn sync_board(ledger: &Ledger, tracker: &dyn Tracker, now: &str) -> Result<u
     let count = tickets.len();
     for t in &tickets {
         TicketRepo::sync(ledger, t, now)?;
+    }
+    // A ticket added to a convoy from another epic may be off the board (another team's sprint):
+    // refresh it too, or its captain would never see it land. Best-effort, one ticket at a time.
+    for key in ledger.added_members()? {
+        if tickets.iter().any(|t| t.key == key) {
+            continue;
+        }
+        if let Err(e) = tracker.get(&key).and_then(|t| TicketRepo::sync(ledger, &t, now)) {
+            tracing::warn!("sync: convoy member {} not refreshed: {e:#}", key.0);
+        }
     }
     Ok(count)
 }

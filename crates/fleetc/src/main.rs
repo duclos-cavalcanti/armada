@@ -70,6 +70,7 @@ fn run() -> Result<()> {
                  fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--hold] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
                  fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
                  fleetc convoy   <open|close> <KEY> [--title <text>]\n  \
+                 fleetc convoy   <add|remove> <KEY> <KEY-N>   (a ticket joins the convoy — its only one — or an added one leaves)\n  \
                  fleetc anchor   --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (graceful stop & hold)\n  \
                  fleetc weigh    --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (resume)\n  \
                  fleetc sink     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (scuttle — hard teardown)\n  \
@@ -93,7 +94,7 @@ fn run() -> Result<()> {
                  fleetc ticket   block <KEY-N> --by <KEY-N>   (record an 'is blocked by' edge)\n  \
                  fleetc propose  --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (a cog: propose a new ticket; prints its id)\n  \
                  fleetc propose  --existing <KEY-N> --why <text>   (a cog: propose taking on an existing ticket)\n  \
-                 fleetc proposal [<id> | accept <id> [--convoy <KEY>] | drop <id>]   (the open proposals; one in full; accept — a new ticket is filed; drop)\n  \
+                 fleetc proposal [<id> | accept <id> [--convoy <KEY>] | drop <id>]   (the open proposals; one in full; accept — a new ticket is filed, into --convoy; drop)\n  \
                  fleetc launch   --title <t> --body <text> [--ticket <KEY-N>] [--target <branch>] [--draft] [--worktree <path>]   (open the MR for the worktree's branch; prints its URL)\n  \
                  fleetc settings [list | set <key> <value>]   (live config levers; no restart)\n  \
                  fleetc project                   (the project checkout's path, from fleet.toml)\n  \
@@ -198,7 +199,8 @@ fn hand(args: &[String]) -> Result<()> {
 
 /// `fleetc convoy open <KEY> [--title <t>]` — the operator opens a convoy (→ a captain gets
 /// staffed). `fleetc convoy close <KEY>` — the captain's "all delivered" sign-off (→ reconcile
-/// reaps the captain next tick).
+/// reaps the captain next tick). `fleetc convoy add|remove <KEY> <KEY-N>` — a ticket joins the
+/// convoy beyond its epic's children (one convoy per ticket), or an added one leaves.
 fn convoy(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("open") => {
@@ -217,7 +219,13 @@ fn convoy(args: &[String]) -> Result<()> {
             let key = convoy_key(args.get(1).ok_or_else(|| anyhow!("convoy close needs <KEY>"))?, "convoy close")?;
             submit("/convoy-close", &wire::ConvoyCmd { key, title: None })
         }
-        _ => bail!("usage: fleetc convoy <open|close> <KEY> [--title <text>]"),
+        Some(verb @ ("add" | "remove")) => {
+            let [convoy, ticket] = &args[1..] else { bail!("usage: fleetc convoy {verb} <KEY> <KEY-N>") };
+            let what = format!("convoy {verb}");
+            let cmd = wire::ConvoyMemberCmd { convoy: convoy_key(convoy, &what)?, ticket: ticket_key(ticket, &what)? };
+            post_and_print(&format!("/convoy-{verb}"), &cmd)
+        }
+        _ => bail!("usage: fleetc convoy <open|close> <KEY> [--title <text>] | <add|remove> <KEY> <KEY-N>"),
     }
 }
 

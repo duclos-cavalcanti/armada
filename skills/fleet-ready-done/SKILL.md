@@ -38,7 +38,8 @@ wins. This covers *what* a good ticket and a finished MR are, not the process ar
 ```
 
 - **Links** — every dependency is an "is blocked by" edge, never prose ("after X lands").
-  An epic is its convoy.
+  An epic is its convoy; a ticket from another epic it depends on (one it can't re-parent) joins
+  with `fleetc convoy add <EPIC> <KEY>` — a ticket is in one convoy.
 
 ## Drafting a ticket
 

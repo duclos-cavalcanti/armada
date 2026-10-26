@@ -127,7 +127,9 @@ convoy; you decide *which* convoys exist and *what* they carry.
    `fleetc proposal accept <id> [--convoy <KEY>]` (a new one is filed) or `fleetc proposal drop <id>`.
    Accepting is not dispatching: an accepted ticket joins the board like any other.
 3. **Form convoys + hand them to the fleet.** Group related tickets (an epic, a stacked set) and
-   `fleetc convoy open <KEY>` so `fleetd` staffs a captain. Express true sequencing as `is blocked
+   `fleetc convoy open <KEY>` so `fleetd` staffs a captain. A convoy is its epic's tickets plus any
+   you add from elsewhere (`fleetc convoy add <KEY> <KEY-N>` — a dependency in another team's epic
+   that can't be re-parented; `remove` returns it). A ticket is in one convoy at a time. Express true sequencing as `is blocked
    by` edges so the captain's frontier reflects the order. You open the convoy; you never launch
    the captain — reconcile does, from the open convoy. Sign a delivered convoy off with
    `fleetc convoy close <KEY>` when its scope is done (or let its captain close it).

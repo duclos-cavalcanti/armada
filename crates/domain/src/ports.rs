@@ -83,6 +83,14 @@ pub trait ConvoyRepo {
     fn weigh(&self, key: &ConvoyKey, at: &str) -> Result<()>;
     /// The active convoys (`ended_at IS NULL`) — what captain staffing keys off.
     fn active(&self) -> Result<Vec<Convoy>>;
+    /// Put a ticket in `convoy` — its only convoy: one from another epic leaves its epic's convoy (for
+    /// the fleet; returned, so the caller can say so). A no-op if it's already a member. Errs if it was
+    /// added to another convoy (remove it there first) or isn't on the board.
+    fn add_member(&self, convoy: &ConvoyKey, ticket: &TicketKey, at: &str) -> Result<Option<ConvoyKey>>;
+    /// Take an added ticket out of `convoy` (it returns to its epic's). Errs if it wasn't added there.
+    fn remove_member(&self, convoy: &ConvoyKey, ticket: &TicketKey) -> Result<()>;
+    /// Every ticket added to a convoy — sync keeps the off-board ones fresh.
+    fn added_members(&self) -> Result<Vec<TicketKey>>;
 }
 
 /// The singleton lookout's control row — the allied-ship review cog is ticketless + convoyless, so its
