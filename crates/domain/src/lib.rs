@@ -75,6 +75,7 @@ pub fn is_key_prefix(p: &str) -> bool {
 id_newtype!(SessionId, i64);
 id_newtype!(ShipId, i64);
 id_newtype!(EscalationId, i64);
+id_newtype!(ProposalId, i64);
 id_newtype!(/// Monotonic event cursor (`GET /events?since=`).
             Seq, i64);
 
@@ -465,6 +466,28 @@ pub struct TicketDraft {
     pub description: String,
     pub convoy: Option<ConvoyKey>,
     pub blocked_by: Vec<TicketKey>,
+}
+
+/// Work a cog found mid-ticket that isn't its own, held for the operator (or the admiral) to accept
+/// or drop. Open while `ended_at` is `None`; `accepted_as` names the ticket it became (a new one,
+/// filed on accept) or already was (an existing one).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Proposal {
+    pub id: ProposalId,
+    /// The ticket the proposing cog was working (a new ticket's default convoy).
+    pub from_ticket: Option<TicketKey>,
+    pub proposed: Proposed,
+    pub created_at: Timestamp,
+    pub ended_at: Option<Timestamp>,
+    pub accepted_as: Option<TicketKey>,
+}
+
+/// What a proposal asks for: a new ticket, drafted to file; or an existing one to take on, and why.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Proposed {
+    New(TicketDraft),
+    Existing { ticket: TicketKey, why: String },
 }
 
 /// A wall needing operator/SME judgment. No `kind` (categorized live at drain),

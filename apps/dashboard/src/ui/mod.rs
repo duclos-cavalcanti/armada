@@ -5,7 +5,7 @@
 
 use crate::source::{open_blockers, CogRow, LandingRow, OrderRow, Phase, ShipRow};
 use crate::{App, Pane, TabId};
-use domain::{Convoy, Event, PipelineStatus, ShipSnapshot, Ticket};
+use domain::{Convoy, Event, PipelineStatus, Proposal, Proposed, ShipSnapshot, Ticket};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -114,6 +114,11 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             format!(" convoys · {} active ", f.convoys.len()),
             None,
             f.convoys.iter().map(|c| convoy_row(c, f.captain_of(&c.key))).collect(),
+        ),
+        Pane::Proposals => (
+            format!(" proposals · {} open · enter read · a accept · d drop ", f.proposals.len()),
+            Some(header(&[("Id", 4), ("From", 12), ("Convoy", 12), ("Type", 6), ("Age", 6), ("Proposed", 0)])),
+            f.proposals.iter().map(proposal_row).collect(),
         ),
         Pane::Log => (
             format!(
@@ -329,6 +334,25 @@ fn convoy_row(c: &Convoy, captain: Option<&CogRow>) -> Line<'static> {
         None => String::new(),
     };
     Line::from(format!("{:<12} {}{}{}", c.key.0, short(c.title.as_deref().unwrap_or(""), 50), anchor, captain))
+}
+
+/// A new ticket shows its draft's title; an existing one, its key and why (in cyan: nothing to file).
+fn proposal_row(p: &Proposal) -> Line<'static> {
+    let key = |k: Option<&String>| k.cloned().unwrap_or_else(|| "—".into());
+    let (convoy, kind, what, style) = match &p.proposed {
+        Proposed::New(d) => (key(d.convoy.as_ref().map(|c| &c.0)), d.kind.clone(), d.title.clone(), Style::default()),
+        Proposed::Existing { ticket, why } => {
+            ("—".into(), "exists".into(), format!("{} · {why}", ticket.0), Style::default().fg(Color::Cyan))
+        }
+    };
+    cells(vec![
+        (p.id.0.to_string(), 4, Style::default()),
+        (key(p.from_ticket.as_ref().map(|k| &k.0)), 12, Style::default()),
+        (convoy, 12, Style::default()),
+        (kind, 6, style),
+        (fmt_age(age_of(&p.created_at)), 6, dim()),
+        (what, 0, style),
+    ])
 }
 
 /// A fleetd log line (`<date> <time> <LEVEL> <module>: <message>`): the time, the level coloured,

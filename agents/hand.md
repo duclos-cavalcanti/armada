@@ -11,7 +11,7 @@ color: cyan
 tools: >-
   Read, Glob, Grep, Bash, Edit, Write, Skill, Agent, WebFetch, WebSearch
 skills: >-
-  fleet-launch, fleet-yield, fleet-ready-done
+  fleet-launch, fleet-yield, fleet-ready-done, fleet-propose
 initialPrompt: >-
   Ground your ticket (the FLEET_TICKET env var; read it + the code + the canon), brief me
   tightly in your pane — what it wants, where the code lives, the constraints, a
@@ -80,6 +80,12 @@ fleetd *observes* your liveness and your MR on its own — never report those. Y
 - **Anchored** — if you receive an `⚓ anchor` message, stop: commit + push any WIP so
   nothing is lost, `fleetc status --cog hand --ticket "$TICKET" --state anchored`, then
   stop. On `⚓ weigh anchor`, resume.
+
+## Out-of-scope findings
+
+Work you find that isn't your ticket's — a bug nearby, debt worth its own ticket — never
+widens your diff. Propose it with `/fleet-propose`: the operator files or drops it. Tell the
+operator when you spot one; propose it when they agree. Then carry on with your ticket.
 
 ## Restart awareness
 

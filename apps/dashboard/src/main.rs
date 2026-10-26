@@ -58,7 +58,7 @@ impl TabId {
         match self {
             TabId::Fleet => &[Pane::Dispatched, Pane::Impl, Pane::Merge],
             TabId::Ships => &[Pane::Ships],
-            TabId::Board => &[Pane::Tickets, Pane::Convoys],
+            TabId::Board => &[Pane::Tickets, Pane::Convoys, Pane::Proposals],
             TabId::Log => &[Pane::Log],
         }
     }
@@ -74,11 +74,12 @@ pub enum Pane {
     Ships,
     Tickets,
     Convoys,
+    Proposals,
     Log,
 }
 
 impl Pane {
-    const COUNT: usize = 7;
+    const COUNT: usize = 8;
     /// The `tab/pane` coordinate the action handler keys on.
     fn coordinate(self) -> &'static str {
         match self {
@@ -88,6 +89,7 @@ impl Pane {
             Pane::Ships => "ships/list",
             Pane::Tickets => "board/tickets",
             Pane::Convoys => "board/convoys",
+            Pane::Proposals => "board/proposals",
             Pane::Log => "log/fleetd",
         }
     }
@@ -155,6 +157,7 @@ impl App {
             Pane::Ships => f.armada.len(),
             Pane::Tickets => f.board.len(),
             Pane::Convoys => f.convoys.len(),
+            Pane::Proposals => f.proposals.len(),
             Pane::Log => f.log.len(),
         }
     }
@@ -170,6 +173,7 @@ impl App {
     ///   ships/list         iid  ticket  pilot  url
     ///   board/tickets      key  status  convoy
     ///   board/convoys      key  title  captain_tmux(live only)
+    ///   board/proposals    id  from_ticket
     fn focused_action(&self) -> Option<(String, Vec<String>)> {
         let pane = self.pane();
         let i = self.cursor(pane);
@@ -214,6 +218,7 @@ impl App {
                 let captain = f.captain_of(&c.key).map(|s| s.session.tmux_session.clone());
                 vec![c.key.0.clone(), c.title.clone().unwrap_or_default(), captain.unwrap_or_default()]
             }),
+            Pane::Proposals => f.proposals.get(i).map(|p| vec![p.id.0.to_string(), key(p.from_ticket.as_ref())]),
             Pane::Log => None, // no row actions; `y` yanks
         }?;
         Some((pane.coordinate().to_string(), fields))

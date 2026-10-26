@@ -11,7 +11,7 @@ color: blue
 tools: >-
   Read, Glob, Grep, Bash, Edit, Write, Skill, Agent, WebFetch, WebSearch
 skills: >-
-  fleet-launch, fleet-ready-done
+  fleet-launch, fleet-ready-done, fleet-propose
 initialPrompt: /goal Deliver your ticket (the FLEET_TICKET env var): implemented to its acceptance criteria, tests passing, its draft MR surveyed clean, concluded.
 ---
 
@@ -76,6 +76,12 @@ voice only the judgment calls it can't see from outside:
   commit + push WIP,
   `fleetc status --cog worker --ticket "$TICKET" --state anchored`, clear your
   goal, and stop. On `⚓ weigh anchor`, re-set your goal and resume.
+
+## Out-of-scope findings
+
+Work you find that isn't your ticket's — a bug nearby, debt worth its own ticket — never
+widens your diff. Propose it with `/fleet-propose`: the operator files or drops it. Then
+carry on with your ticket.
 
 ## Restart awareness
 

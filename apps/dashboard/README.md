@@ -18,7 +18,10 @@ Cycle with `Tab` / `S-Tab`:
   - **Merge** — our ships being landed: the sailor's state (dimmed once it's stood down),
     pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status;
 - **Ships** — every open MR fleetd tracks, ours + allies; the title shows the lookout.
-- **Board** — the sprint tickets + convoys (a convoy shows its captain while one is live).
+- **Board** — the sprint tickets, the convoys (a convoy shows its captain while one is live), and
+  the proposals: work cogs found mid-ticket — a new ticket drafted, or an existing one to take
+  on — waiting on you: `enter` reads one, `a` accepts it (a new one is filed into the tracker),
+  `d` drops it (both ask first).
 - **Log** — fleetd's log (`.fleet/fleetd.log`), newest first, warnings yellow and errors red;
   the title says whether fleetd is up. The footer flags a down fleetd from every tab.
 

@@ -7,8 +7,8 @@
 
 use anyhow::Result;
 use domain::ports::{
-    ConvoyRepo, EscalationRepo, EventLog, LookoutRepo, OrderRepo, ReportRepo, SessionRepo, ShipRepo,
-    TicketRepo,
+    ConvoyRepo, EscalationRepo, EventLog, LookoutRepo, OrderRepo, ProposalRepo, ReportRepo, SessionRepo,
+    ShipRepo, TicketRepo,
 };
 use domain::*;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -116,8 +116,9 @@ fn init(conn: &Connection) -> Result<()> {
 }
 
 /// The ledger's schema version (SQLite `user_version`). There are no migrations: bump this when
-/// `schema.sql` changes shape, so a ledger or an export from another version is refused by name
-/// instead of failing later on a missing column.
+/// an existing table in `schema.sql` changes shape, so a ledger or an export from another version
+/// is refused by name instead of failing later on a missing column. A new table needs no bump:
+/// `CREATE TABLE IF NOT EXISTS` adds it to an older ledger the next time fleetd opens it.
 pub const SCHEMA_VERSION: i64 = 1;
 
 /// Stamp a fresh database with `version`; refuse one stamped with another. (`0` = never stamped.)
@@ -1209,6 +1210,76 @@ impl EscalationRepo for Ledger {
     }
 }
 
+// ── proposals ───────────────────────────────────────────────────────────────────
+
+fn row_to_proposal(r: &rusqlite::Row) -> rusqlite::Result<Proposal> {
+    let proposed = match r.get::<_, Option<String>>("existing")? {
+        Some(ticket) => Proposed::Existing { ticket: ticket_key(ticket)?, why: r.get("why")? },
+        None => {
+            let blocked_by: Vec<String> = serde_json::from_str(&r.get::<_, String>("blocked_by_json")?)
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, e.into()))?;
+            Proposed::New(TicketDraft {
+                title: r.get("title")?,
+                kind: r.get("kind")?,
+                description: r.get("description")?,
+                convoy: r.get::<_, Option<String>>("convoy")?.map(convoy_key).transpose()?,
+                blocked_by: blocked_by.into_iter().map(ticket_key).collect::<rusqlite::Result<_>>()?,
+            })
+        }
+    };
+    Ok(Proposal {
+        id: ProposalId(r.get("id")?),
+        from_ticket: r.get::<_, Option<String>>("from_ticket")?.map(ticket_key).transpose()?,
+        proposed,
+        created_at: r.get("created_at")?,
+        ended_at: r.get("ended_at")?,
+        accepted_as: r.get::<_, Option<String>>("accepted_as")?.map(ticket_key).transpose()?,
+    })
+}
+
+impl ProposalRepo for Ledger {
+    fn propose(&self, p: &Proposal) -> Result<ProposalId> {
+        let from = p.from_ticket.as_ref().map(|k| &k.0);
+        match &p.proposed {
+            Proposed::New(d) => {
+                let blocked_by = serde_json::to_string(&d.blocked_by.iter().map(|k| &k.0).collect::<Vec<_>>())?;
+                self.conn.execute(
+                    "INSERT INTO proposals(from_ticket, title, kind, description, convoy, blocked_by_json, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![from, d.title, d.kind, d.description, d.convoy.as_ref().map(|c| &c.0), blocked_by, p.created_at],
+                )?
+            }
+            Proposed::Existing { ticket, why } => self.conn.execute(
+                "INSERT INTO proposals(from_ticket, existing, why, created_at) VALUES (?1, ?2, ?3, ?4)",
+                params![from, ticket.0, why, p.created_at],
+            )?,
+        };
+        Ok(ProposalId(self.conn.last_insert_rowid()))
+    }
+
+    fn get(&self, id: &ProposalId) -> Result<Option<Proposal>> {
+        Ok(self
+            .conn
+            .query_row("SELECT * FROM proposals WHERE id = ?1", params![id.0], row_to_proposal)
+            .optional()?)
+    }
+
+    fn settle(&self, id: &ProposalId, at: &str, accepted_as: Option<&TicketKey>) -> Result<()> {
+        let n = self.conn.execute(
+            "UPDATE proposals SET ended_at = ?2, accepted_as = ?3 WHERE id = ?1 AND ended_at IS NULL",
+            params![id.0, at, accepted_as.map(|k| &k.0)],
+        )?;
+        anyhow::ensure!(n == 1, "proposal {} isn't open", id.0);
+        Ok(())
+    }
+
+    fn pending(&self) -> Result<Vec<Proposal>> {
+        let mut stmt = self.conn.prepare("SELECT * FROM proposals WHERE ended_at IS NULL ORDER BY id")?;
+        let rows = stmt.query_map([], row_to_proposal)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+}
+
 // ── events (the CDC change-log) ─────────────────────────────────────────────────
 
 fn row_to_event(r: &rusqlite::Row) -> rusqlite::Result<Event> {
@@ -1376,6 +1447,47 @@ mod repo_tests {
         assert_eq!(open[0].evidence, vec!["auth.rs:407".to_string(), "E0050".to_string()]);
         db.resolve(&id, "t2", "wired the edge").unwrap();
         assert!(db.list_open().unwrap().is_empty());
+    }
+
+    #[test]
+    fn proposal_round_trips_then_closes_once() {
+        let db = db_with("PROJ-1");
+        let draft = TicketDraft {
+            title: "Retry the flaky upload".into(),
+            kind: "bug".into(),
+            description: "## Context\n…".into(),
+            convoy: Some(ConvoyKey("PROJ-9".into())),
+            blocked_by: vec![TicketKey("PROJ-1".into())],
+        };
+        let proposal = |proposed| Proposal {
+            id: ProposalId(0),
+            from_ticket: Some(TicketKey("PROJ-1".into())),
+            proposed,
+            created_at: "t".into(),
+            ended_at: None,
+            accepted_as: None,
+        };
+        let existing = Proposed::Existing { ticket: TicketKey("PROJ-1".into()), why: "blocks the merge".into() };
+        let id = db.propose(&proposal(Proposed::New(draft.clone()))).unwrap();
+        db.propose(&proposal(existing.clone())).unwrap();
+        let open = db.pending().unwrap();
+        assert_eq!(open.iter().map(|p| p.proposed.clone()).collect::<Vec<_>>(), vec![Proposed::New(draft), existing]);
+        assert_eq!(open[0].from_ticket, Some(TicketKey("PROJ-1".into())));
+
+        db.settle(&id, "t2", Some(&TicketKey("PROJ-10".into()))).unwrap();
+        assert_eq!(db.pending().unwrap().len(), 1);
+        let filed = ProposalRepo::get(&db, &id).unwrap().unwrap();
+        assert_eq!(filed.accepted_as, Some(TicketKey("PROJ-10".into())));
+        assert!(db.settle(&id, "t3", None).is_err(), "a settled proposal can't be settled again");
+
+        // The schema allows exactly one shape: a draft with a title, or an existing ticket with a why.
+        for bad in [
+            "INSERT INTO proposals(created_at) VALUES ('t')",
+            "INSERT INTO proposals(existing, created_at) VALUES ('PROJ-1', 't')",
+            "INSERT INTO proposals(existing, why, title, created_at) VALUES ('PROJ-1', 'w', 'x', 't')",
+        ] {
+            assert!(db.conn.execute(bad, []).is_err(), "accepted: {bad}");
+        }
     }
 
     #[test]

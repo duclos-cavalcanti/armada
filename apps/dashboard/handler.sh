@@ -18,6 +18,7 @@
 #   ships/list         $1=iid  $2=ticket  $3=pilot  $4=url
 #   board/tickets      $1=key  $2=status  $3=convoy
 #   board/convoys      $1=key  $2=title  $3=captain_tmux(live only)
+#   board/proposals    $1=id  $2=from_ticket
 #
 # Forge- and tracker-neutral: links come from the fleet itself (`fleetc -C "$FLEET_PROJECT"`,
 # the project folder the dashboard passes in), never from hardcoded hosts.
@@ -40,6 +41,12 @@ fleet()          { fleetc -C "${FLEET_PROJECT:?the dashboard sets FLEET_PROJECT}
 launch_ticket()  { local where; where="$(fleet ticket "$1" --where)" && open "$where"; }
 # An MR opens at the URL the forge reported for it.
 launch_mr()      { local url; url="$(fleet ship --iid "$1" | jq -r '.ship.url')" && launch_browser "$url"; }
+# The fleetc command line for `fleet "$@"`, shell-quoted — for tmux to run.
+fleet_cmd()      { printf '%q ' fleetc -C "${FLEET_PROJECT:?}" "$@"; }
+# Read a proposal in full, in a tmux popup over the dashboard.
+read_proposal()  { tmux display-popup -E -w 90% -h 80% "$(fleet_cmd proposal "$1") | less"; }
+# Accept (a new ticket is filed into the tracker) or drop a proposal — each asks first.
+settle_proposal() { tmux confirm-before -p "$1 proposal $2? (y/n)" "run-shell -b '$(fleet_cmd proposal "$1" "$2")'"; }
 
 # main — map a (coordinate, key) + the focused row's fields to an action.
 main() {
@@ -73,6 +80,11 @@ main() {
         board/tickets/enter | board/tickets/t) launch_ticket "${1:-}" ;;
         board/convoys/enter) launch_ticket "${1:-}" ;;
         board/convoys/a) [ -n "${3:-}" ] && launch_tmux "${3}" || echo "no live captain on ${1:-}" >&2 ;;
+        # enter reads a proposal in full; a accepts it (a new ticket is filed into its convoy —
+        # another: `fleetc proposal accept <id> --convoy <KEY>`); d drops it.
+        board/proposals/enter) read_proposal "${1:-}" ;;
+        board/proposals/a) settle_proposal accept "${1:-}" ;;
+        board/proposals/d) settle_proposal drop "${1:-}" ;;
 
         *) : ;; # unhandled (coordinate, key) — no-op
     esac

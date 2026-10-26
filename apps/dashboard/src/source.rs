@@ -14,10 +14,10 @@
 //! AGE — `now − reported_at` — which catches a stalled cog without re-probing tmux.
 
 use domain::ports::{
-    ConvoyRepo, OrderRepo, ReportRepo, SessionRepo, ShipRepo, TicketRepo,
+    ConvoyRepo, OrderRepo, ProposalRepo, ReportRepo, SessionRepo, ShipRepo, TicketRepo,
 };
 use domain::{
-    Convoy, CrewKind, Event, Order, Session, Ship, ShipSnapshot, Ticket, TicketKey, TicketStatus,
+    Convoy, CrewKind, Event, Order, Proposal, Session, Ship, ShipSnapshot, Ticket, TicketKey, TicketStatus,
 };
 use ledger::Ledger;
 use std::collections::{HashMap, HashSet};
@@ -114,6 +114,8 @@ pub struct Fleet {
     pub held_reasons: HashMap<String, String>,
     pub armada: Vec<ShipRow>,
     pub convoys: Vec<Convoy>,
+    /// Tickets cogs drafted mid-work, waiting on the operator to file or drop them.
+    pub proposals: Vec<Proposal>,
     /// The latest reconcile `TickRan` event — fleetd's last plan (applied/failed/planned).
     pub tick: Option<Event>,
     /// The tmux sessions up right now — whether `enter` on a cog has a pane to switch to.
@@ -246,6 +248,8 @@ impl Fleet {
             held_reasons,
             armada,
             convoys: ConvoyRepo::active(&db)?,
+            // A ledger older than the proposals table has none — fleetd adds it on its next start.
+            proposals: db.pending().unwrap_or_default(),
             tick: db.latest_tick()?,
             tmux_up: tmux_sessions(),
             ..Default::default()

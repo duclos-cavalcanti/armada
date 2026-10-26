@@ -57,6 +57,8 @@ fn run() -> Result<()> {
         Some("retry-ci") => retry_ci(&args[1..]),
         Some("launch") => launch(&args[1..]),
         Some("ticket") => ticket(&args[1..]),
+        Some("propose") => propose(&args[1..]),
+        Some("proposal") => proposal(&args[1..]),
         Some("arm") => arm(&args[1..]),
         Some("settings") => settings(&args[1..]),
         Some("project") => project(),
@@ -89,6 +91,9 @@ fn run() -> Result<()> {
                  fleetc ticket   <KEY-N> [--where]      (a ticket's full text; --where: its URL or file path)\n  \
                  fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (prints the new key)\n  \
                  fleetc ticket   block <KEY-N> --by <KEY-N>   (record an 'is blocked by' edge)\n  \
+                 fleetc propose  --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (a cog: propose a new ticket; prints its id)\n  \
+                 fleetc propose  --existing <KEY-N> --why <text>   (a cog: propose taking on an existing ticket)\n  \
+                 fleetc proposal [<id> | accept <id> [--convoy <KEY>] | drop <id>]   (the open proposals; one in full; accept — a new ticket is filed; drop)\n  \
                  fleetc launch   --title <t> --body <text> [--ticket <KEY-N>] [--target <branch>] [--draft] [--worktree <path>]   (open the MR for the worktree's branch; prints its URL)\n  \
                  fleetc settings [list | set <key> <value>]   (live config levers; no restart)\n  \
                  fleetc project                   (the project checkout's path, from fleet.toml)\n  \
@@ -838,6 +843,16 @@ fn render_ticket(d: &serde_json::Value) -> String {
 /// `fleetc ticket new --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]`
 /// — create a ticket in To Do; `--body -` reads the description from stdin. Prints the new key.
 fn ticket_new(args: &[String]) -> Result<()> {
+    // A cog (fleetd sets its FLEET_TICKET) never files: the operator decides what reaches the tracker.
+    if std::env::var("FLEET_TICKET").is_ok_and(|t| !t.is_empty()) {
+        bail!("a cog doesn't file tickets — propose it for the operator: fleetc propose … (/fleet-propose)");
+    }
+    post_and_print("/ticket-new", &draft_flags(args, "ticket new")?)
+}
+
+/// The ticket-draft flags `ticket new` and `propose` share: `--title`, `--type`, `--convoy`,
+/// `--blocked-by`…, `--body <text>|-` (`-` reads stdin).
+fn draft_flags(args: &[String], verb: &str) -> Result<wire::TicketNewCmd> {
     let (mut title, mut kind, mut convoy, mut body) = (None, None, None, String::new());
     let mut blocked_by = Vec::new();
     let mut it = args.iter();
@@ -846,8 +861,8 @@ fn ticket_new(args: &[String]) -> Result<()> {
         match flag.as_str() {
             "--title" => title = Some(take()?),
             "--type" => kind = Some(take()?),
-            "--convoy" => convoy = Some(convoy_key(&take()?, "ticket new")?),
-            "--blocked-by" => blocked_by.push(ticket_key(&take()?, "ticket new")?),
+            "--convoy" => convoy = Some(convoy_key(&take()?, verb)?),
+            "--blocked-by" => blocked_by.push(ticket_key(&take()?, verb)?),
             "--body" => body = take()?,
             other => bail!("unknown flag: {other}"),
         }
@@ -856,13 +871,119 @@ fn ticket_new(args: &[String]) -> Result<()> {
         body.clear();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
     }
-    post_and_print("/ticket-new", &wire::TicketNewCmd {
+    Ok(wire::TicketNewCmd {
         title: title.ok_or_else(|| anyhow!("--title required"))?,
         kind: kind.ok_or_else(|| anyhow!("--type required (story, bug, task, epic, …)"))?,
         description: body,
         convoy,
         blocked_by,
     })
+}
+
+/// `fleetc propose …` — a cog holds work it found for the operator instead of filing it: a new
+/// ticket (the `ticket new` flags), or `--existing <KEY> --why <text>` to take on one that exists.
+/// The proposing ticket is the cog's own (`FLEET_TICKET`, which fleetd injects at spawn); a new
+/// ticket inherits its convoy unless `--convoy` names another.
+fn propose(args: &[String]) -> Result<()> {
+    let proposed = if args.iter().any(|a| a == "--existing") {
+        let (mut ticket, mut why) = (None, None);
+        let mut it = args.iter();
+        while let Some(flag) = it.next() {
+            let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
+            match flag.as_str() {
+                "--existing" => ticket = Some(ticket_key(&take()?, "propose")?),
+                "--why" => why = Some(take()?),
+                other => bail!("propose --existing takes only --why, not {other}"),
+            }
+        }
+        let why = why.ok_or_else(|| anyhow!("propose --existing needs --why <text>: why take it on"))?;
+        let ticket = ticket.ok_or_else(|| anyhow!("propose --existing needs a <KEY-N>"))?;
+        wire::ProposedCmd::Existing { ticket, why }
+    } else {
+        wire::ProposedCmd::New(draft_flags(args, "propose")?)
+    };
+    let from_ticket = match std::env::var("FLEET_TICKET") {
+        Ok(t) if !t.is_empty() => Some(ticket_key(&t, "propose (FLEET_TICKET)")?),
+        _ => None,
+    };
+    let (code, resp) = wire::post_json(&socket(), "/propose", &wire::ProposeCmd { from_ticket, proposed })?;
+    if code != 200 {
+        bail!("fleetd ({code}): {resp}");
+    }
+    println!("proposal {resp} — held for the operator (fleetc proposal {resp})");
+    Ok(())
+}
+
+/// `fleetc proposal` — the open proposals; `<id>`: one in full; `accept <id> [--convoy <KEY>]`:
+/// accept it (a new ticket is filed — prints the ticket either way); `drop <id>`: discard it.
+/// Reads are off the ledger.
+fn proposal(args: &[String]) -> Result<()> {
+    let id = |s: Option<&String>| -> Result<i64> {
+        let s = s.ok_or_else(|| anyhow!("needs a proposal <id>"))?;
+        s.parse().map_err(|_| anyhow!("a proposal id is a number, got {s:?}"))
+    };
+    match args.first().map(String::as_str) {
+        None => print!("{}", render_proposals(&pending_proposals()?)),
+        Some("accept") => {
+            let convoy = match args.get(2..).unwrap_or_default() {
+                [] => None,
+                [flag, c] if flag == "--convoy" => Some(convoy_key(c, "proposal accept")?),
+                _ => bail!("usage: fleetc proposal accept <id> [--convoy <KEY>]"),
+            };
+            post_and_print("/proposal-accept", &wire::ProposalCmd { id: id(args.get(1))?, convoy })?;
+        }
+        Some("drop") => post_and_print("/proposal-drop", &wire::ProposalCmd { id: id(args.get(1))?, convoy: None })?,
+        Some(_) => {
+            let want = id(args.first())?;
+            let p = pending_proposals()?.into_iter().find(|p| p.id.0 == want).ok_or_else(|| anyhow!("no open proposal {want}"))?;
+            print!("{}", render_proposal(&p));
+        }
+    }
+    Ok(())
+}
+
+fn pending_proposals() -> Result<Vec<domain::Proposal>> {
+    let db = project_dir().ledger();
+    let ledger = ledger::Ledger::open_readonly(&db).map_err(|_| anyhow!("no ledger yet ({db})"))?;
+    domain::ports::ProposalRepo::pending(&ledger)
+}
+
+fn render_proposals(ps: &[domain::Proposal]) -> String {
+    if ps.is_empty() {
+        return "no open proposals\n".into();
+    }
+    let key = |k: Option<&String>| k.cloned().unwrap_or_else(|| "—".into());
+    ps.iter()
+        .map(|p| {
+            let from = key(p.from_ticket.as_ref().map(|k| &k.0));
+            let (convoy, kind, what) = match &p.proposed {
+                domain::Proposed::New(d) => (key(d.convoy.as_ref().map(|c| &c.0)), d.kind.as_str(), d.title.clone()),
+                domain::Proposed::Existing { ticket, why } => ("—".into(), "exists", format!("{} · {why}", ticket.0)),
+            };
+            format!("{:<4} {from:<12} {convoy:<12} {kind:<6} {what}\n", p.id.0)
+        })
+        .collect()
+}
+
+fn render_proposal(p: &domain::Proposal) -> String {
+    let mut facts = vec![format!("proposal {}", p.id.0)];
+    let body = match &p.proposed {
+        domain::Proposed::New(d) => {
+            facts.extend([d.kind.clone(), p.created_at.clone()]);
+            p.from_ticket.iter().for_each(|t| facts.push(format!("from {}", t.0)));
+            d.convoy.iter().for_each(|c| facts.push(format!("convoy {}", c.0)));
+            if !d.blocked_by.is_empty() {
+                facts.push(format!("blocked by {}", d.blocked_by.iter().map(|k| k.0.as_str()).collect::<Vec<_>>().join(", ")));
+            }
+            format!("{}\n\n{}", d.title, d.description.trim_end())
+        }
+        domain::Proposed::Existing { ticket, why } => {
+            facts.extend([format!("existing {}", ticket.0), p.created_at.clone()]);
+            p.from_ticket.iter().for_each(|t| facts.push(format!("from {}", t.0)));
+            format!("{why}\n\n(the ticket itself: fleetc ticket {})", ticket.0)
+        }
+    };
+    format!("{}\n{body}\n", facts.join(" · "))
 }
 
 /// `fleetc ticket block <KEY-N> --by <KEY-N>` — record that the first ticket is blocked by the second.
@@ -991,6 +1112,33 @@ fn cost(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_proposal_renders_its_provenance_then_its_body() {
+        let proposal = |id, proposed| domain::Proposal {
+            id: domain::ProposalId(id),
+            from_ticket: Some(domain::TicketKey("PROJ-1".into())),
+            proposed,
+            created_at: "t".into(),
+            ended_at: None,
+            accepted_as: None,
+        };
+        let new = proposal(3, domain::Proposed::New(domain::TicketDraft {
+            title: "Retry the flaky upload".into(),
+            kind: "bug".into(),
+            description: "## Context\nIt flakes.\n".into(),
+            convoy: Some(domain::ConvoyKey("PROJ-9".into())),
+            blocked_by: vec![],
+        }));
+        let existing = proposal(4, domain::Proposed::Existing { ticket: domain::TicketKey("PROJ-7".into()), why: "blocks the merge".into() });
+        assert_eq!(render_proposal(&new), "proposal 3 · bug · t · from PROJ-1 · convoy PROJ-9\nRetry the flaky upload\n\n## Context\nIt flakes.\n");
+        assert_eq!(render_proposal(&existing), "proposal 4 · existing PROJ-7 · t · from PROJ-1\nblocks the merge\n\n(the ticket itself: fleetc ticket PROJ-7)\n");
+        assert_eq!(
+            render_proposals(&[new, existing]),
+            "3    PROJ-1       PROJ-9       bug    Retry the flaky upload\n4    PROJ-1       —            exists PROJ-7 · blocks the merge\n"
+        );
+        assert_eq!(render_proposals(&[]), "no open proposals\n");
+    }
 
     /// A throwaway project folder with a populated `.fleet/ledger.db`.
     fn project(tag: &str) -> (wire::Project, std::path::PathBuf) {

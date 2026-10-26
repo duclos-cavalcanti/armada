@@ -121,6 +121,11 @@ convoy; you decide *which* convoys exist and *what* they carry.
    edge** with `fleetc ticket block <KEY> --by <KEY>` (the sweep above). A groomed ticket meets
    the DoR or is held. Other edits (ACs, labels, sprints) go through the tracker itself, per the
    project's conventions (Jira: the Atlassian MCP — never hand-rolled field IDs).
+   **Review the proposals** too (`fleetc proposal`, one in full with `fleetc proposal <id>`): work
+   the cogs found mid-ticket — a new ticket drafted, or an existing one to take on. Judge each
+   against the canon and the DoR, recommend accept or drop, and on the operator's word
+   `fleetc proposal accept <id> [--convoy <KEY>]` (a new one is filed) or `fleetc proposal drop <id>`.
+   Accepting is not dispatching: an accepted ticket joins the board like any other.
 3. **Form convoys + hand them to the fleet.** Group related tickets (an epic, a stacked set) and
    `fleetc convoy open <KEY>` so `fleetd` staffs a captain. Express true sequencing as `is blocked
    by` edges so the captain's frontier reflects the order. You open the convoy; you never launch

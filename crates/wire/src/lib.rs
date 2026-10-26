@@ -124,6 +124,33 @@ pub struct TicketNewCmd {
     pub blocked_by: Vec<String>,
 }
 
+/// Propose work (`POST /propose`, `fleetc propose`): held in the ledger for the operator to accept
+/// or drop, never filed straight into the tracker. `from_ticket` is the proposing cog's ticket
+/// (its `FLEET_TICKET`); a new ticket inherits that ticket's convoy unless the draft names one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProposeCmd {
+    #[serde(default)]
+    pub from_ticket: Option<String>,
+    pub proposed: ProposedCmd,
+}
+
+/// A new ticket to file on accept, or an existing one to take on and why.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposedCmd {
+    New(TicketNewCmd),
+    Existing { ticket: String, why: String },
+}
+
+/// Settle a proposal: accept it (`POST /proposal-accept` — a new ticket is filed, optionally into
+/// another convoy than it proposed) or drop it (`POST /proposal-drop`, `convoy` ignored).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProposalCmd {
+    pub id: i64,
+    #[serde(default)]
+    pub convoy: Option<String>,
+}
+
 /// Record that `ticket` is blocked by `by` (`POST /ticket-block`, `fleetc ticket block`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TicketBlockCmd {

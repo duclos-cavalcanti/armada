@@ -114,6 +114,16 @@ pub trait EscalationRepo {
     fn list_open(&self) -> Result<Vec<Escalation>>;
 }
 
+pub trait ProposalRepo {
+    fn propose(&self, p: &Proposal) -> Result<ProposalId>;
+    fn get(&self, id: &ProposalId) -> Result<Option<Proposal>>;
+    /// Settle an open proposal: `accepted_as` = the ticket it became or was, `None` = dropped. Errs
+    /// if it isn't open (already settled, or no such id).
+    fn settle(&self, id: &ProposalId, at: &str, accepted_as: Option<&TicketKey>) -> Result<()>;
+    /// The open proposals, oldest first.
+    fn pending(&self) -> Result<Vec<Proposal>>;
+}
+
 pub trait EventLog {
     /// Append one change-log entry; returns the assigned `seq`.
     fn append(

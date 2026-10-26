@@ -2,7 +2,7 @@
 description: >-
   The fleet's Definition of Ready and Done — how a ticket is structured, when it is
   ready to dispatch (Ready), and how an MR meets it (Done). Reference, not an action:
-  /fleet-commission drafts tickets to it, the captain judges Ready against it before
+  /fleet-commission and /fleet-propose draft tickets to it, the captain judges Ready against it before
   dispatch, the worker and the reviewer judge Done against it before a ticket is
   concluded. The kit's floor: a project's own stricter doctrine (in its repo) extends it.
 ---
@@ -40,6 +40,22 @@ wins. This covers *what* a good ticket and a finished MR are, not the process ar
 - **Links** — every dependency is an "is blocked by" edge, never prose ("after X lands").
   An epic is its convoy.
 
+## Drafting a ticket
+
+How `/fleet-commission` (files it) and `/fleet-propose` (a cog holds it for the operator)
+both write one:
+
+1. **Draft** the title and the four-section body above, from what you know (ask only for
+   what's missing).
+2. **Check it's new** — search the board for the title's key terms (filesystem tracker:
+   `grep -ril "<term>" <tickets folder>`; Jira: its search). If an existing ticket already
+   covers it, stop and name that ticket instead (a cog proposes taking it on: `/fleet-propose`).
+3. **Wire it** — each existing ticket it needs first is a `--blocked-by <KEY>`; the epic it
+   belongs to, if any, is `--convoy <KEY>`.
+4. **Check Ready** (below) — a gap (an untestable criterion, two goals, too big for one MR) is
+   fixed now: reshape it, or split it into several tickets with their order as blockers.
+   Never write a ticket you'd have to hold, or one built on guesswork.
+
 ## Ready — before a ticket is dispatched
 
 1. **Goal clear** — one action on a named thing; not two outcomes joined by "and also";
@@ -63,4 +79,4 @@ reason (`fleetc hold <KEY> --reason "<what's missing>"`).
    worker, that's the `surveyor`'s verdict: an independent review in a fresh context.
 4. **CI green** on the MR's head.
 5. **Scope held** — the MR does what the ticket says. Anything found along the way that
-   isn't in it is filed as its own ticket (`/fleet-commission`), not left as a note.
+   isn't in it becomes its own ticket (a cog proposes it with `/fleet-propose`), not a note.

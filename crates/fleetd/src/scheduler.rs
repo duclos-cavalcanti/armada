@@ -13,12 +13,12 @@ use crate::tmux::TmuxHost;
 use crate::{context, now_rfc3339, reconcile, sync, Snapshot};
 use anyhow::{anyhow, Context, Result};
 use domain::ports::{
-    ConvoyRepo, EventLog, Forge, LookoutRepo, OrderRepo, ReportRepo, SessionHost, SessionRepo,
+    ConvoyRepo, EventLog, Forge, LookoutRepo, OrderRepo, ProposalRepo, ReportRepo, SessionHost, SessionRepo,
     ShipRepo, TicketRepo, Tracker,
 };
 use domain::{
     CogState, ConvoyKey, ConvoyTicketView, ConvoyView, CrewKind, EntityKind, EventKind,
-    LivenessThresholds, MrDraft, Order, Packet, Report, Session, TicketKey,
+    LivenessThresholds, MrDraft, Order, Packet, Proposal, ProposalId, Proposed, Report, Session, TicketKey,
 };
 use ledger::Ledger;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -83,6 +83,9 @@ pub enum Command {
     GetTicket { ticket: TicketKey, reply: TicketReply }, // a read: a ticket's full text (tracker)
     NewTicket { draft: domain::TicketDraft, reply: UrlReply }, // an action: create a ticket → its key (tracker)
     BlockTicket { ticket: TicketKey, by: TicketKey, reply: Reply }, // an action: add an "is blocked by" edge (tracker)
+    Propose { from: Option<TicketKey>, proposed: Proposed, reply: UrlReply }, // hold a cog's proposal → its id
+    AcceptProposal { id: ProposalId, convoy: Option<ConvoyKey>, reply: UrlReply }, // an action: accept it → its key (a new one is filed)
+    DropProposal { id: ProposalId, reply: UrlReply },
     SetSetting { key: String, value: String, reply: Reply }, // live-config overwrite (validated here)
     GetSettings { reply: SettingsReply },                    // a read: every live lever + source
 }
@@ -259,6 +262,17 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         Command::BlockTicket { ticket, by, reply } => {
             let _ = reply.send(tracker.block(&ticket, &by).map_err(|e| format!("{e:#}")));
         }
+        Command::Propose { from, proposed, reply } => {
+            let res = propose(ledger, tracker, from, proposed).map(|id| id.0.to_string());
+            let _ = reply.send(res.map_err(|e| format!("{e:#}")));
+        }
+        Command::AcceptProposal { id, convoy, reply } => {
+            let _ = reply.send(accept_proposal(ledger, tracker, &id, convoy).map(|k| k.0).map_err(|e| format!("{e:#}")));
+        }
+        Command::DropProposal { id, reply } => {
+            let res = ProposalRepo::settle(ledger, &id, &now_rfc3339(), None).map(|()| "dropped".to_string());
+            let _ = reply.send(res.map_err(|e| format!("{e:#}")));
+        }
         Command::SetSetting { key, value, reply } => {
             // Shape check (known lever + parseable type) here, authoritative, before the write.
             let res = settings::validate(&key, &value)
@@ -269,6 +283,45 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let _ = reply.send(Ok(settings::report(cfg, ledger)));
         }
     }
+}
+
+/// Hold a cog's proposal. A new ticket inherits the proposing ticket's convoy unless its draft names
+/// one; an existing ticket is pulled onto the board if it's off-sprint (the ledger's FK holds both).
+fn propose(ledger: &Ledger, tracker: &dyn Tracker, from: Option<TicketKey>, mut proposed: Proposed) -> Result<ProposalId> {
+    match &mut proposed {
+        Proposed::New(draft) if draft.convoy.is_none() => {
+            if let Some(t) = &from {
+                draft.convoy = TicketRepo::get(ledger, t)?.and_then(|t| t.convoy);
+            }
+        }
+        Proposed::New(_) => {}
+        Proposed::Existing { ticket, .. } => {
+            anyhow::ensure!(from.as_ref() != Some(ticket), "{} can't propose itself", ticket.0);
+            ensure_ticket(ledger, tracker, ticket)?;
+        }
+    }
+    let p = Proposal { id: ProposalId(0), from_ticket: from, proposed, created_at: now_rfc3339(), ended_at: None, accepted_as: None };
+    ledger.propose(&p)
+}
+
+/// Accept an open proposal and settle it as its ticket: a new one is filed into the tracker (into
+/// `convoy` when given, else the one it proposed); an existing one already is, and keeps its convoy.
+fn accept_proposal(ledger: &Ledger, tracker: &dyn Tracker, id: &ProposalId, convoy: Option<ConvoyKey>) -> Result<TicketKey> {
+    let p = ProposalRepo::get(ledger, id)?.filter(|p| p.ended_at.is_none()).ok_or_else(|| anyhow!("proposal {} isn't open", id.0))?;
+    let key = match p.proposed {
+        Proposed::New(mut draft) => {
+            if convoy.is_some() {
+                draft.convoy = convoy;
+            }
+            tracker.create(&draft)?
+        }
+        Proposed::Existing { ticket, .. } => {
+            anyhow::ensure!(convoy.is_none(), "{} is an existing ticket: it keeps its own convoy", ticket.0);
+            ticket
+        }
+    };
+    ledger.settle(id, &now_rfc3339(), Some(&key))?;
+    Ok(key)
 }
 
 /// Launch a ship: open the MR for the worktree's branch. The target is the explicit one, else the
@@ -475,12 +528,12 @@ fn live_sessions_for(ledger: &Ledger, target: &ControlTarget) -> Result<Vec<Sess
     })
 }
 
-/// Push an operator message into the target cog's tmux pane(s): `send-keys` + Enter, so it submits as
-/// a prompt to the cog's claude session. No DB gate (it's a nudge, not a hold); a no-live-cog match
-/// is a benign no-op. Shares `live_sessions_for` with the control verbs.
+/// Push an operator message into the target cog's tmux pane(s), submitted as a prompt to its claude
+/// session. No DB gate (it's a nudge, not a hold); a no-live-cog match is a benign no-op, but a pane
+/// that won't take it is an error the operator sees. Shares `live_sessions_for` with the control verbs.
 fn send<H: SessionHost>(ledger: &Ledger, host: &H, target: &ControlTarget, message: &str) -> Result<()> {
     for s in live_sessions_for(ledger, target)? {
-        let _ = host.send(&s.tmux_session, message);
+        host.send(&s.tmux_session, message)?;
     }
     Ok(())
 }
@@ -546,11 +599,16 @@ fn control_lookout<H: SessionHost>(ledger: &Ledger, host: &H, verb: Verb) -> Res
 /// payload keyed off whichever of ticket/convoy the session carries). The DB gate is the caller's.
 fn signal<H: SessionHost>(ledger: &Ledger, host: &H, verb: Verb, s: &Session) -> Result<()> {
     match verb {
+        // The hold is the ledger's; the nudge is best-effort (a dead pane can't take it).
         Verb::Anchor => {
-            let _ = host.send(&s.tmux_session, ANCHOR_MSG);
+            if let Err(e) = host.send(&s.tmux_session, ANCHOR_MSG) {
+                tracing::warn!("anchor: nudge not delivered: {e:#}");
+            }
         }
         Verb::Weigh => {
-            let _ = host.send(&s.tmux_session, WEIGH_MSG);
+            if let Err(e) = host.send(&s.tmux_session, WEIGH_MSG) {
+                tracing::warn!("weigh: nudge not delivered: {e:#}");
+            }
         }
         Verb::Sink => {
             SessionRepo::end(ledger, &s.id, &now_rfc3339())?;
@@ -724,11 +782,49 @@ mod tests {
             unimplemented!()
         }
         fn create(&self, _: &domain::TicketDraft) -> Result<TicketKey> {
-            unimplemented!()
+            Ok(TicketKey("PROJ-100".into()))
         }
         fn block(&self, _: &TicketKey, _: &TicketKey) -> Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn a_new_proposal_inherits_its_tickets_convoy_and_is_filed_once_on_accept() {
+        let db = Ledger::in_memory().unwrap();
+        let mut t = tt("PROJ-1", TicketStatus::InProgress);
+        t.convoy = Some(ConvoyKey("PROJ-9".into()));
+        let tracker = FakeTracker(vec![t]);
+        sync::sync_board(&db, &tracker, "now").unwrap();
+        let draft = TicketDraft { title: "Fix X".into(), kind: "bug".into(), description: "…".into(), convoy: None, blocked_by: vec![] };
+        let from = Some(TicketKey("PROJ-1".into()));
+
+        let id = propose(&db, &tracker, from.clone(), Proposed::New(draft.clone())).unwrap();
+        let Proposed::New(held) = ProposalRepo::get(&db, &id).unwrap().unwrap().proposed else { panic!("not a draft") };
+        assert_eq!(held.convoy, Some(ConvoyKey("PROJ-9".into())));
+        assert!(propose(&db, &tracker, Some(TicketKey("PROJ-404".into())), Proposed::New(draft)).is_err(), "the proposing ticket must be on the board");
+
+        let key = accept_proposal(&db, &tracker, &id, None).unwrap();
+        assert_eq!(key, TicketKey("PROJ-100".into()), "filed into the tracker");
+        assert!(db.pending().unwrap().is_empty());
+        assert_eq!(ProposalRepo::get(&db, &id).unwrap().unwrap().accepted_as, Some(key));
+        assert!(accept_proposal(&db, &tracker, &id, None).is_err(), "an accepted proposal can't be accepted again");
+    }
+
+    #[test]
+    fn an_existing_ticket_is_pulled_onto_the_board_and_accepted_as_itself() {
+        let db = Ledger::in_memory().unwrap();
+        let tracker = FakeTracker(vec![tt("PROJ-1", TicketStatus::InQa), tt("PROJ-7", TicketStatus::Todo)]);
+        sync::sync_board(&db, &FakeTracker(vec![tt("PROJ-1", TicketStatus::InQa)]), "now").unwrap(); // PROJ-7 is off-sprint
+        let from = Some(TicketKey("PROJ-1".into()));
+        let existing = |k: &str| Proposed::Existing { ticket: TicketKey(k.into()), why: "blocks the merge".into() };
+
+        assert!(propose(&db, &tracker, from.clone(), existing("PROJ-1")).is_err(), "a ticket can't propose itself");
+        let id = propose(&db, &tracker, from, existing("PROJ-7")).unwrap();
+        assert!(TicketRepo::get(&db, &TicketKey("PROJ-7".into())).unwrap().is_some(), "pulled onto the board");
+
+        assert!(accept_proposal(&db, &tracker, &id, Some(ConvoyKey("PROJ-9".into()))).is_err(), "keeps its own convoy");
+        assert_eq!(accept_proposal(&db, &tracker, &id, None).unwrap(), TicketKey("PROJ-7".into()), "nothing filed");
     }
 
     fn tt(key: &str, status: TicketStatus) -> TrackerTicket {

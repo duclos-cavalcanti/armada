@@ -101,6 +101,9 @@ fn handle(
         (Some("GET"), Some(p)) if p.starts_with("/ticket?") => handle_ticket_view(cmds, p),
         (Some("POST"), Some("/ticket-new")) => handle_ticket_new(&request, cmds),
         (Some("POST"), Some("/ticket-block")) => handle_ticket_block(&request, cmds),
+        (Some("POST"), Some("/propose")) => handle_propose(&request, cmds),
+        (Some("POST"), Some("/proposal-accept")) => handle_proposal(&request, cmds, true),
+        (Some("POST"), Some("/proposal-drop")) => handle_proposal(&request, cmds, false),
         (Some("GET"), Some("/settings")) => handle_settings_list(cmds),
         (Some("POST"), Some("/settings")) => handle_setting(&request, cmds),
         _ => http_response("404 Not Found", "text/plain", "not found"),
@@ -496,29 +499,76 @@ fn handle_ticket_view(cmds: &Sender<Command>, path: &str) -> String {
 
 /// `POST /ticket-new` — create a ticket; reply with its key.
 fn handle_ticket_new(request: &str, cmds: &Sender<Command>) -> String {
-    let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
-    let dto: wire::TicketNewCmd = match serde_json::from_str(body) {
+    let draft = match parse_body(request).and_then(parse_draft) {
         Ok(d) => d,
-        Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
-    };
-    let convoy = match dto.convoy.as_deref().map(ConvoyKey::parse).transpose() {
-        Ok(c) => c,
-        Err(e) => return http_response("400 Bad Request", "text/plain", &e.to_string()),
-    };
-    let blocked_by = match dto.blocked_by.iter().map(|b| parse_ticket(b)).collect::<Result<Vec<_>, _>>() {
-        Ok(b) => b,
         Err(r) => return r,
     };
-    if dto.title.trim().is_empty() {
-        return http_response("400 Bad Request", "text/plain", "a ticket needs a title");
+    relay(cmds, |reply| Command::NewTicket { draft, reply })
+}
+
+/// `POST /propose` — hold a cog's proposal for the operator; reply with its id.
+fn handle_propose(request: &str, cmds: &Sender<Command>) -> String {
+    let parsed = parse_body::<wire::ProposeCmd>(request).and_then(|dto| {
+        let from = dto.from_ticket.as_deref().map(parse_ticket).transpose()?;
+        let proposed = match dto.proposed {
+            wire::ProposedCmd::New(draft) => domain::Proposed::New(parse_draft(draft)?),
+            wire::ProposedCmd::Existing { ticket, why } if !why.trim().is_empty() => {
+                domain::Proposed::Existing { ticket: parse_ticket(&ticket)?, why }
+            }
+            wire::ProposedCmd::Existing { .. } => {
+                return Err(http_response("400 Bad Request", "text/plain", "an existing ticket needs a why"))
+            }
+        };
+        Ok((from, proposed))
+    });
+    match parsed {
+        Ok((from, proposed)) => relay(cmds, |reply| Command::Propose { from, proposed, reply }),
+        Err(r) => r,
     }
-    let draft = domain::TicketDraft { title: dto.title, kind: dto.kind, description: dto.description, convoy, blocked_by };
+}
+
+/// `POST /proposal-accept` (`accept`: reply with the ticket it became or was) or `/proposal-drop`.
+fn handle_proposal(request: &str, cmds: &Sender<Command>, accept: bool) -> String {
+    let dto: wire::ProposalCmd = match parse_body(request) {
+        Ok(d) => d,
+        Err(r) => return r,
+    };
+    let id = domain::ProposalId(dto.id);
+    if !accept {
+        return relay(cmds, |reply| Command::DropProposal { id, reply });
+    }
+    match dto.convoy.as_deref().map(ConvoyKey::parse).transpose() {
+        Ok(convoy) => relay(cmds, |reply| Command::AcceptProposal { id, convoy, reply }),
+        Err(e) => http_response("400 Bad Request", "text/plain", &e.to_string()),
+    }
+}
+
+/// A request's JSON body as `T`; `Err` is the 400 response.
+fn parse_body<T: serde::de::DeserializeOwned>(request: &str) -> Result<T, String> {
+    let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+    serde_json::from_str(body).map_err(|e| http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")))
+}
+
+/// A ticket draft off the wire, validated into `domain`; `Err` is the 400 response.
+fn parse_draft(dto: wire::TicketNewCmd) -> Result<domain::TicketDraft, String> {
+    let bad = |e: String| http_response("400 Bad Request", "text/plain", &e);
+    let convoy = dto.convoy.as_deref().map(ConvoyKey::parse).transpose().map_err(|e| bad(e.to_string()))?;
+    let blocked_by = dto.blocked_by.iter().map(|b| parse_ticket(b)).collect::<Result<Vec<_>, _>>()?;
+    if dto.title.trim().is_empty() {
+        return Err(bad("a ticket needs a title".into()));
+    }
+    Ok(domain::TicketDraft { title: dto.title, kind: dto.kind, description: dto.description, convoy, blocked_by })
+}
+
+/// Relay a command to the writer and await its reply: 200 with the reply's text, 409 with the
+/// writer's refusal.
+fn relay(cmds: &Sender<Command>, cmd: impl FnOnce(Sender<Result<String, String>>) -> Command) -> String {
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    if cmds.send(Command::NewTicket { draft, reply: reply_tx }).is_err() {
+    if cmds.send(cmd(reply_tx)).is_err() {
         return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
     }
     match reply_rx.recv() {
-        Ok(Ok(key)) => http_response("200 OK", "text/plain", &key),
+        Ok(Ok(text)) => http_response("200 OK", "text/plain", &text),
         Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
         Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
     }
@@ -787,7 +837,9 @@ mod tests {
         let sock = spawn_server(Arc::new(Mutex::new(vec![])), tx, "guard");
         assert!(refuse_if_running(&sock).unwrap_err().to_string().contains("already running"));
         let stale = format!("/tmp/fleetd-test-{}-stale.sock", std::process::id());
-        drop(UnixListener::bind(&stale).unwrap()); // the file stays; nobody answers
+        // A leftover file nobody answers on. (Not a bound-then-dropped listener: on macOS a process
+        // another test spawns mid-bind can inherit the socket and keep it answering.)
+        std::fs::write(&stale, b"").unwrap();
         assert!(refuse_if_running(&stale).is_ok());
         let _ = std::fs::remove_file(&stale);
     }
@@ -848,6 +900,9 @@ mod tests {
                     Command::Launch { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::NewTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::Propose { reply, .. }
+                    | Command::AcceptProposal { reply, .. }
+                    | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
@@ -903,6 +958,9 @@ mod tests {
                     Command::Launch { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::NewTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::Propose { reply, .. }
+                    | Command::AcceptProposal { reply, .. }
+                    | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
@@ -930,6 +988,35 @@ mod tests {
         let req = "POST /dispatch HTTP/1.1\r\nContent-Length: 3\r\n\r\n{ x";
         assert!(roundtrip(&sock, req.as_bytes()).contains("400 Bad Request"));
 
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[test]
+    fn post_propose_relays_the_draft_and_rejects_a_bad_key_at_the_edge() {
+        let (tx, rx) = std::sync::mpsc::channel::<Command>();
+        std::thread::spawn(move || {
+            for cmd in rx {
+                if let Command::Propose { from, proposed, reply } = cmd {
+                    let what = match proposed {
+                        domain::Proposed::New(d) => d.title,
+                        domain::Proposed::Existing { ticket, .. } => ticket.0,
+                    };
+                    let _ = reply.send(Ok(format!("{}:{what}", from.map(|k| k.0).unwrap_or_default())));
+                }
+            }
+        });
+        let sock = spawn_server(Arc::new(Mutex::new(Vec::new())), tx, "propose");
+        let post = |body: &str| {
+            let req = format!("POST /propose HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+            roundtrip(&sock, req.as_bytes())
+        };
+        let ok = post(r#"{"from_ticket":"PROJ-1","proposed":{"new":{"title":"Fix X","kind":"bug","description":"…"}}}"#);
+        assert!(ok.contains("200 OK") && ok.ends_with("PROJ-1:Fix X"), "resp: {ok}");
+        let ok = post(r#"{"from_ticket":"PROJ-1","proposed":{"existing":{"ticket":"PROJ-7","why":"blocks the merge"}}}"#);
+        assert!(ok.contains("200 OK") && ok.ends_with("PROJ-1:PROJ-7"), "resp: {ok}");
+        assert!(post(r#"{"from_ticket":"nope","proposed":{"new":{"title":"Fix X","kind":"bug","description":"…"}}}"#).contains("400"));
+        assert!(post(r#"{"proposed":{"new":{"title":" ","kind":"bug","description":"…"}}}"#).contains("400"));
+        assert!(post(r#"{"proposed":{"existing":{"ticket":"PROJ-7","why":" "}}}"#).contains("400"));
         let _ = std::fs::remove_file(&sock);
     }
 

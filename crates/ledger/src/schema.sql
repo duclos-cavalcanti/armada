@@ -142,6 +142,31 @@ CREATE TABLE IF NOT EXISTS escalations (
     resolution   TEXT
 );
 
+-- Proposals — work a cog found mid-ticket that isn't its own, held for the operator (or the
+-- admiral) to accept or drop. Either a NEW ticket (the draft columns; filed on accept) or an
+-- EXISTING one to take on (`existing` + `why`). `accepted_as` = the ticket it became or was;
+-- ended without it = dropped. ended_at NULL = open. `from_ticket` is the ticket the cog was
+-- working, whose convoy a new ticket inherits unless its draft names one.
+CREATE TABLE IF NOT EXISTS proposals (
+    id              INTEGER PRIMARY KEY,
+    from_ticket     TEXT REFERENCES tickets(key),     -- nullable; the proposing cog's ticket
+    existing        TEXT REFERENCES tickets(key),     -- an existing ticket; NULL = a new one (the draft)
+    why             TEXT,                             -- an existing ticket's case for taking it on
+    title           TEXT,                             -- the draft: title / kind / description / convoy / blockers
+    kind            TEXT,                             -- story | bug | task | epic | … (the tracker's type)
+    description     TEXT,
+    convoy          TEXT,
+    blocked_by_json TEXT NOT NULL DEFAULT '[]',       -- ticket keys; JSON, not a child table
+    created_at      TEXT NOT NULL,
+    ended_at        TEXT,
+    accepted_as     TEXT,
+    CHECK (coalesce(CASE WHEN existing IS NULL
+                THEN length(trim(title)) > 0 AND kind IS NOT NULL AND description IS NOT NULL AND why IS NULL
+                ELSE length(trim(why)) > 0 AND title IS NULL AND kind IS NULL AND description IS NULL
+           END, 0)),                                  -- exactly one shape (coalesce: a NULL check would pass)
+    CHECK (accepted_as IS NULL OR ended_at IS NOT NULL)  -- accepted ⇒ ended
+);
+
 -- Live config: a KV mirror of fleet.toml's overridable levers (the cadences, dry_run,
 -- the liveness thresholds). An ABSENT key falls through to fleet.toml/default — the
 -- absence IS the precedence (defaults < toml < settings < env). fleetd reads these live

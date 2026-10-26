@@ -12,7 +12,7 @@ color: yellow
 tools: >-
   Read, Glob, Grep, Bash, Edit, Write, Skill, WebFetch, WebSearch
 skills: >-
-  fleet-rechart, fleet-parley, fleet-repair
+  fleet-rechart, fleet-parley, fleet-repair, fleet-propose, fleet-ready-done
 initialPrompt: Do one finishing sweep on your MR.
 ---
 
@@ -89,6 +89,14 @@ current `origin/HEAD` (the default branch) and address them in the reply pass.
 - **Anchored** — if you receive an `⚓ anchor` message, stop:
   `fleetc status --cog sailor --ticket "$TICKET" --state anchored`, then stop and wait
   (the anchor holds you until the operator weighs it).
+
+## Out-of-scope findings
+
+Work you find that isn't your ticket's — a bug nearby, debt worth its own ticket — never
+widens your diff. Propose it with `/fleet-propose`: the operator files or drops it. A
+reviewer asking for work outside the ticket's scope is one: reply that it's a follow-up, and
+propose it. Never use this to defer an in-scope finding — those are yours to work. Then
+carry on with your sweep.
 
 ## Boundaries
 

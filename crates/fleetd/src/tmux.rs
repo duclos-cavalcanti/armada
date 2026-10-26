@@ -95,9 +95,20 @@ impl SessionHost for TmuxHost {
         Ok(())
     }
 
+    /// Type `text` into the session's pane, then press Enter. `send-keys` takes a pane, so the
+    /// target is `=name:` (bare `=name` is "can't find pane"); the text goes literally (`-l`); and
+    /// the Enter comes a beat later — Claude Code reads a long burst as a paste and drops an Enter
+    /// that arrives inside it.
     fn send(&self, name: &str, text: &str) -> Result<()> {
-        tmux(&["send-keys", "-t", &target(name), text, "Enter"])?;
-        Ok(())
+        let pane = format!("{}:", target(name));
+        let keys = |args: &[&str]| -> Result<()> {
+            let out = tmux(&[&["send-keys", "-t", &pane], args].concat())?;
+            ensure!(out.status.success(), "tmux send-keys to {name}: {}", crate::preflight::one_line(&out.stderr));
+            Ok(())
+        };
+        keys(&["-l", text])?;
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        keys(&["Enter"])
     }
 
     fn list(&self) -> Result<Vec<String>> {
