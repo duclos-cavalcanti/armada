@@ -93,7 +93,7 @@ fn run() -> Result<()> {
                  fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (prints the new key)\n  \
                  fleetc ticket   block <KEY-N> --by <KEY-N>   (record an 'is blocked by' edge)\n  \
                  fleetc propose  --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (a cog: propose a new ticket; prints its id)\n  \
-                 fleetc propose  --existing <KEY-N> --why <text>   (a cog: propose taking on an existing ticket)\n  \
+                 fleetc propose  --existing <KEY-N> --why <text> [--convoy <KEY>]   (a cog: propose taking on an existing ticket)\n  \
                  fleetc proposal [<id> | accept <id> [--convoy <KEY>] | drop <id>]   (the open proposals; one in full; accept — a new ticket is filed, into --convoy; drop)\n  \
                  fleetc launch   --title <t> --body <text> [--ticket <KEY-N>] [--target <branch>] [--draft] [--worktree <path>]   (open the MR for the worktree's branch; prints its URL)\n  \
                  fleetc settings [list | set <key> <value>]   (live config levers; no restart)\n  \
@@ -890,23 +890,24 @@ fn draft_flags(args: &[String], verb: &str) -> Result<wire::TicketNewCmd> {
 
 /// `fleetc propose …` — a cog holds work it found for the operator instead of filing it: a new
 /// ticket (the `ticket new` flags), or `--existing <KEY> --why <text>` to take on one that exists.
-/// The proposing ticket is the cog's own (`FLEET_TICKET`, which fleetd injects at spawn); a new
-/// ticket inherits its convoy unless `--convoy` names another.
+/// The proposing ticket is the cog's own (`FLEET_TICKET`, which fleetd injects at spawn); either
+/// shape lands in its convoy on accept unless `--convoy` names another.
 fn propose(args: &[String]) -> Result<()> {
     let proposed = if args.iter().any(|a| a == "--existing") {
-        let (mut ticket, mut why) = (None, None);
+        let (mut ticket, mut why, mut convoy) = (None, None, None);
         let mut it = args.iter();
         while let Some(flag) = it.next() {
             let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
             match flag.as_str() {
                 "--existing" => ticket = Some(ticket_key(&take()?, "propose")?),
                 "--why" => why = Some(take()?),
-                other => bail!("propose --existing takes only --why, not {other}"),
+                "--convoy" => convoy = Some(convoy_key(&take()?, "propose")?),
+                other => bail!("propose --existing takes --why and --convoy, not {other}"),
             }
         }
         let why = why.ok_or_else(|| anyhow!("propose --existing needs --why <text>: why take it on"))?;
         let ticket = ticket.ok_or_else(|| anyhow!("propose --existing needs a <KEY-N>"))?;
-        wire::ProposedCmd::Existing { ticket, why }
+        wire::ProposedCmd::Existing { ticket, why, convoy }
     } else {
         wire::ProposedCmd::New(draft_flags(args, "propose")?)
     };
@@ -964,9 +965,10 @@ fn render_proposals(ps: &[domain::Proposal]) -> String {
     ps.iter()
         .map(|p| {
             let from = key(p.from_ticket.as_ref().map(|k| &k.0));
-            let (convoy, kind, what) = match &p.proposed {
-                domain::Proposed::New(d) => (key(d.convoy.as_ref().map(|c| &c.0)), d.kind.as_str(), d.title.clone()),
-                domain::Proposed::Existing { ticket, why } => ("—".into(), "exists", format!("{} · {why}", ticket.0)),
+            let convoy = key(p.proposed.convoy().map(|c| &c.0));
+            let (kind, what) = match &p.proposed {
+                domain::Proposed::New(d) => (d.kind.as_str(), d.title.clone()),
+                domain::Proposed::Existing { ticket, why, .. } => ("exists", format!("{} · {why}", ticket.0)),
             };
             format!("{:<4} {from:<12} {convoy:<12} {kind:<6} {what}\n", p.id.0)
         })
@@ -985,9 +987,10 @@ fn render_proposal(p: &domain::Proposal) -> String {
             }
             format!("{}\n\n{}", d.title, d.description.trim_end())
         }
-        domain::Proposed::Existing { ticket, why } => {
+        domain::Proposed::Existing { ticket, why, convoy } => {
             facts.extend([format!("existing {}", ticket.0), p.created_at.clone()]);
             p.from_ticket.iter().for_each(|t| facts.push(format!("from {}", t.0)));
+            convoy.iter().for_each(|c| facts.push(format!("convoy {}", c.0)));
             format!("{why}\n\n(the ticket itself: fleetc ticket {})", ticket.0)
         }
     };
@@ -1138,12 +1141,16 @@ mod tests {
             convoy: Some(domain::ConvoyKey("PROJ-9".into())),
             blocked_by: vec![],
         }));
-        let existing = proposal(4, domain::Proposed::Existing { ticket: domain::TicketKey("PROJ-7".into()), why: "blocks the merge".into() });
+        let existing = proposal(4, domain::Proposed::Existing {
+            ticket: domain::TicketKey("PROJ-7".into()),
+            why: "blocks the merge".into(),
+            convoy: Some(domain::ConvoyKey("PROJ-9".into())),
+        });
         assert_eq!(render_proposal(&new), "proposal 3 · bug · t · from PROJ-1 · convoy PROJ-9\nRetry the flaky upload\n\n## Context\nIt flakes.\n");
-        assert_eq!(render_proposal(&existing), "proposal 4 · existing PROJ-7 · t · from PROJ-1\nblocks the merge\n\n(the ticket itself: fleetc ticket PROJ-7)\n");
+        assert_eq!(render_proposal(&existing), "proposal 4 · existing PROJ-7 · t · from PROJ-1 · convoy PROJ-9\nblocks the merge\n\n(the ticket itself: fleetc ticket PROJ-7)\n");
         assert_eq!(
             render_proposals(&[new, existing]),
-            "3    PROJ-1       PROJ-9       bug    Retry the flaky upload\n4    PROJ-1       —            exists PROJ-7 · blocks the merge\n"
+            "3    PROJ-1       PROJ-9       bug    Retry the flaky upload\n4    PROJ-1       PROJ-9       exists PROJ-7 · blocks the merge\n"
         );
         assert_eq!(render_proposals(&[]), "no open proposals\n");
     }

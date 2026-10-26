@@ -527,8 +527,10 @@ fn handle_propose(request: &str, cmds: &Sender<Command>) -> String {
         let from = dto.from_ticket.as_deref().map(parse_ticket).transpose()?;
         let proposed = match dto.proposed {
             wire::ProposedCmd::New(draft) => domain::Proposed::New(parse_draft(draft)?),
-            wire::ProposedCmd::Existing { ticket, why } if !why.trim().is_empty() => {
-                domain::Proposed::Existing { ticket: parse_ticket(&ticket)?, why }
+            wire::ProposedCmd::Existing { ticket, why, convoy } if !why.trim().is_empty() => {
+                let convoy = convoy.as_deref().map(ConvoyKey::parse).transpose();
+                let convoy = convoy.map_err(|e| http_response("400 Bad Request", "text/plain", &e.to_string()))?;
+                domain::Proposed::Existing { ticket: parse_ticket(&ticket)?, why, convoy }
             }
             wire::ProposedCmd::Existing { .. } => {
                 return Err(http_response("400 Bad Request", "text/plain", "an existing ticket needs a why"))

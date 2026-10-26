@@ -339,11 +339,10 @@ fn convoy_row(c: &Convoy, captain: Option<&CogRow>) -> Line<'static> {
 /// A new ticket shows its draft's title; an existing one, its key and why (in cyan: nothing to file).
 fn proposal_row(p: &Proposal) -> Line<'static> {
     let key = |k: Option<&String>| k.cloned().unwrap_or_else(|| "—".into());
-    let (convoy, kind, what, style) = match &p.proposed {
-        Proposed::New(d) => (key(d.convoy.as_ref().map(|c| &c.0)), d.kind.clone(), d.title.clone(), Style::default()),
-        Proposed::Existing { ticket, why } => {
-            ("—".into(), "exists".into(), format!("{} · {why}", ticket.0), Style::default().fg(Color::Cyan))
-        }
+    let convoy = key(p.proposed.convoy().map(|c| &c.0));
+    let (kind, what, style) = match &p.proposed {
+        Proposed::New(d) => (d.kind.clone(), d.title.clone(), Style::default()),
+        Proposed::Existing { ticket, why, .. } => ("exists".into(), format!("{} · {why}", ticket.0), Style::default().fg(Color::Cyan)),
     };
     cells(vec![
         (p.id.0.to_string(), 4, Style::default()),

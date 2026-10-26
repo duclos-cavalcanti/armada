@@ -1287,7 +1287,11 @@ impl EscalationRepo for Ledger {
 
 fn row_to_proposal(r: &rusqlite::Row) -> rusqlite::Result<Proposal> {
     let proposed = match r.get::<_, Option<String>>("existing")? {
-        Some(ticket) => Proposed::Existing { ticket: ticket_key(ticket)?, why: r.get("why")? },
+        Some(ticket) => Proposed::Existing {
+            ticket: ticket_key(ticket)?,
+            why: r.get("why")?,
+            convoy: r.get::<_, Option<String>>("convoy")?.map(convoy_key).transpose()?,
+        },
         None => {
             let blocked_by: Vec<String> = serde_json::from_str(&r.get::<_, String>("blocked_by_json")?)
                 .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, e.into()))?;
@@ -1322,9 +1326,9 @@ impl ProposalRepo for Ledger {
                     params![from, d.title, d.kind, d.description, d.convoy.as_ref().map(|c| &c.0), blocked_by, p.created_at],
                 )?
             }
-            Proposed::Existing { ticket, why } => self.conn.execute(
-                "INSERT INTO proposals(from_ticket, existing, why, created_at) VALUES (?1, ?2, ?3, ?4)",
-                params![from, ticket.0, why, p.created_at],
+            Proposed::Existing { ticket, why, convoy } => self.conn.execute(
+                "INSERT INTO proposals(from_ticket, existing, why, convoy, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![from, ticket.0, why, convoy.as_ref().map(|c| &c.0), p.created_at],
             )?,
         };
         Ok(ProposalId(self.conn.last_insert_rowid()))
@@ -1540,7 +1544,11 @@ mod repo_tests {
             ended_at: None,
             accepted_as: None,
         };
-        let existing = Proposed::Existing { ticket: TicketKey("PROJ-1".into()), why: "blocks the merge".into() };
+        let existing = Proposed::Existing {
+            ticket: TicketKey("PROJ-1".into()),
+            why: "blocks the merge".into(),
+            convoy: Some(ConvoyKey("PROJ-9".into())),
+        };
         let id = db.propose(&proposal(Proposed::New(draft.clone()))).unwrap();
         db.propose(&proposal(existing.clone())).unwrap();
         let open = db.pending().unwrap();

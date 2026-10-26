@@ -154,9 +154,9 @@ CREATE TABLE IF NOT EXISTS escalations (
 
 -- Proposals — work a cog found mid-ticket that isn't its own, held for the operator (or the
 -- admiral) to accept or drop. Either a NEW ticket (the draft columns; filed on accept) or an
--- EXISTING one to take on (`existing` + `why`). `accepted_as` = the ticket it became or was;
--- ended without it = dropped. ended_at NULL = open. `from_ticket` is the ticket the cog was
--- working, whose convoy a new ticket inherits unless its draft names one.
+-- EXISTING one to take on (`existing` + `why`). Either shape lands in `convoy` on accept (filed
+-- into it, or joins it) — the proposing ticket's (`from_ticket`) unless it named its own.
+-- `accepted_as` = the ticket it became or was; ended without it = dropped. ended_at NULL = open.
 CREATE TABLE IF NOT EXISTS proposals (
     id              INTEGER PRIMARY KEY,
     from_ticket     TEXT REFERENCES tickets(key),     -- nullable; the proposing cog's ticket
@@ -165,7 +165,7 @@ CREATE TABLE IF NOT EXISTS proposals (
     title           TEXT,                             -- the draft: title / kind / description / convoy / blockers
     kind            TEXT,                             -- story | bug | task | epic | … (the tracker's type)
     description     TEXT,
-    convoy          TEXT,
+    convoy          TEXT,                             -- either shape: where it lands on accept
     blocked_by_json TEXT NOT NULL DEFAULT '[]',       -- ticket keys; JSON, not a child table
     created_at      TEXT NOT NULL,
     ended_at        TEXT,

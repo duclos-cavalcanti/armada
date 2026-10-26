@@ -34,7 +34,8 @@ fleetc propose --existing <KEY> --why "<one line: what it blocks or why it matte
 ```
 
 The why is the case for the operator: what it blocks (your merge, every merge train), and its
-state (To Do, unassigned) if that's why it's stalled.
+state (To Do, unassigned) if that's why it's stalled. On accept it joins your ticket's convoy;
+add `--convoy <KEY>` only if it belongs in another.
 
 ## Step 2b — Propose a new ticket
 

@@ -484,11 +484,41 @@ pub struct Proposal {
 }
 
 /// What a proposal asks for: a new ticket, drafted to file; or an existing one to take on, and why.
+/// Either way it carries the convoy it lands in on accept — the proposing ticket's, unless named.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Proposed {
     New(TicketDraft),
-    Existing { ticket: TicketKey, why: String },
+    Existing { ticket: TicketKey, why: String, convoy: Option<ConvoyKey> },
+}
+
+impl Proposed {
+    /// The convoy it lands in on accept: a new ticket is filed into it, an existing one joins it.
+    pub fn convoy(&self) -> Option<&ConvoyKey> {
+        match self {
+            Proposed::New(d) => d.convoy.as_ref(),
+            Proposed::Existing { convoy, .. } => convoy.as_ref(),
+        }
+    }
+    fn convoy_mut(&mut self) -> &mut Option<ConvoyKey> {
+        match self {
+            Proposed::New(d) => &mut d.convoy,
+            Proposed::Existing { convoy, .. } => convoy,
+        }
+    }
+    /// Land it in `convoy` unless it already names one.
+    pub fn default_convoy(&mut self, convoy: Option<ConvoyKey>) {
+        let slot = self.convoy_mut();
+        if slot.is_none() {
+            *slot = convoy;
+        }
+    }
+    /// Land it in `convoy` when given (the accepter's pick), else keep its own.
+    pub fn override_convoy(&mut self, convoy: Option<ConvoyKey>) {
+        if convoy.is_some() {
+            *self.convoy_mut() = convoy;
+        }
+    }
 }
 
 /// A wall needing operator/SME judgment. No `kind` (categorized live at drain),

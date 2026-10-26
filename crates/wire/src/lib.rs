@@ -142,12 +142,18 @@ pub struct ProposeCmd {
     pub proposed: ProposedCmd,
 }
 
-/// A new ticket to file on accept, or an existing one to take on and why.
+/// A new ticket to file on accept, or an existing one to take on and why. Either names the convoy
+/// it lands in (a new one in its draft), or inherits the proposing ticket's.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposedCmd {
     New(TicketNewCmd),
-    Existing { ticket: String, why: String },
+    Existing {
+        ticket: String,
+        why: String,
+        #[serde(default)]
+        convoy: Option<String>,
+    },
 }
 
 /// Settle a proposal: accept it (`POST /proposal-accept` — a new ticket is filed, optionally into

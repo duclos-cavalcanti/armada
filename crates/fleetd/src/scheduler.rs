@@ -294,20 +294,15 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
     }
 }
 
-/// Hold a cog's proposal. A new ticket inherits the proposing ticket's convoy unless its draft names
-/// one; an existing ticket is pulled onto the board if it's off-sprint (the ledger's FK holds both).
+/// Hold a cog's proposal. Either shape lands in the proposing ticket's convoy unless it names one;
+/// an existing ticket is pulled onto the board if it's off-sprint (the ledger's FK holds both).
 fn propose(ledger: &Ledger, tracker: &dyn Tracker, from: Option<TicketKey>, mut proposed: Proposed) -> Result<ProposalId> {
-    match &mut proposed {
-        Proposed::New(draft) if draft.convoy.is_none() => {
-            if let Some(t) = &from {
-                draft.convoy = TicketRepo::get(ledger, t)?.and_then(|t| t.convoy);
-            }
-        }
-        Proposed::New(_) => {}
-        Proposed::Existing { ticket, .. } => {
-            anyhow::ensure!(from.as_ref() != Some(ticket), "{} can't propose itself", ticket.0);
-            ensure_ticket(ledger, tracker, ticket)?;
-        }
+    if let Proposed::Existing { ticket, .. } = &proposed {
+        anyhow::ensure!(from.as_ref() != Some(ticket), "{} can't propose itself", ticket.0);
+        ensure_ticket(ledger, tracker, ticket)?;
+    }
+    if let Some(t) = &from {
+        proposed.default_convoy(TicketRepo::get(ledger, t)?.and_then(|t| t.convoy));
     }
     let p = Proposal { id: ProposalId(0), from_ticket: from, proposed, created_at: now_rfc3339(), ended_at: None, accepted_as: None };
     ledger.propose(&p)
@@ -323,19 +318,15 @@ fn add_to_convoy(ledger: &Ledger, tracker: &dyn Tracker, convoy: &ConvoyKey, tic
     })
 }
 
-/// Accept an open proposal and settle it as its ticket: a new one is filed into the tracker (into
-/// `convoy` when given, else the one it proposed); an existing one already is, and joins `convoy`
-/// when given.
+/// Accept an open proposal and settle it as its ticket, landing it in its convoy (`convoy` when
+/// given, else the one it carries): a new one is filed into the tracker there; an existing one
+/// joins it.
 fn accept_proposal(ledger: &Ledger, tracker: &dyn Tracker, id: &ProposalId, convoy: Option<ConvoyKey>) -> Result<TicketKey> {
-    let p = ProposalRepo::get(ledger, id)?.filter(|p| p.ended_at.is_none()).ok_or_else(|| anyhow!("proposal {} isn't open", id.0))?;
+    let mut p = ProposalRepo::get(ledger, id)?.filter(|p| p.ended_at.is_none()).ok_or_else(|| anyhow!("proposal {} isn't open", id.0))?;
+    p.proposed.override_convoy(convoy);
     let key = match p.proposed {
-        Proposed::New(mut draft) => {
-            if convoy.is_some() {
-                draft.convoy = convoy;
-            }
-            tracker.create(&draft)?
-        }
-        Proposed::Existing { ticket, .. } => {
+        Proposed::New(draft) => tracker.create(&draft)?,
+        Proposed::Existing { ticket, convoy, .. } => {
             if let Some(c) = &convoy {
                 add_to_convoy(ledger, tracker, c, &ticket)?;
             }
@@ -850,20 +841,29 @@ mod tests {
     }
 
     #[test]
-    fn an_existing_ticket_is_pulled_onto_the_board_and_accepted_as_itself() {
+    fn an_existing_ticket_lands_in_the_proposing_tickets_convoy_on_accept() {
         let db = Ledger::in_memory().unwrap();
-        let tracker = FakeTracker(vec![tt("PROJ-1", TicketStatus::InQa), tt("PROJ-7", TicketStatus::Todo)]);
-        sync::sync_board(&db, &FakeTracker(vec![tt("PROJ-1", TicketStatus::InQa)]), "now").unwrap(); // PROJ-7 is off-sprint
+        let mut from_ticket = tt("PROJ-1", TicketStatus::InQa);
+        from_ticket.convoy = Some(ConvoyKey("PROJ-9".into()));
+        let tracker = FakeTracker(vec![from_ticket.clone(), tt("PROJ-7", TicketStatus::Todo), tt("PROJ-8", TicketStatus::Todo)]);
+        sync::sync_board(&db, &FakeTracker(vec![from_ticket]), "now").unwrap(); // PROJ-7/8 are off-sprint
         let from = Some(TicketKey("PROJ-1".into()));
-        let existing = |k: &str| Proposed::Existing { ticket: TicketKey(k.into()), why: "blocks the merge".into() };
+        let existing = |k: &str, convoy: Option<&str>| Proposed::Existing {
+            ticket: TicketKey(k.into()),
+            why: "blocks the merge".into(),
+            convoy: convoy.map(|c| ConvoyKey(c.into())),
+        };
+        let convoy_of = |k: &str| TicketRepo::get(&db, &TicketKey(k.into())).unwrap().unwrap().convoy;
 
-        assert!(propose(&db, &tracker, from.clone(), existing("PROJ-1")).is_err(), "a ticket can't propose itself");
-        let id = propose(&db, &tracker, from, existing("PROJ-7")).unwrap();
-        assert!(TicketRepo::get(&db, &TicketKey("PROJ-7".into())).unwrap().is_some(), "pulled onto the board");
+        assert!(propose(&db, &tracker, from.clone(), existing("PROJ-1", None)).is_err(), "a ticket can't propose itself");
+        let id = propose(&db, &tracker, from.clone(), existing("PROJ-7", None)).unwrap();
+        assert_eq!(convoy_of("PROJ-7"), None, "pulled onto the board, in no convoy yet");
+        assert_eq!(accept_proposal(&db, &tracker, &id, None).unwrap(), TicketKey("PROJ-7".into()), "nothing filed");
+        assert_eq!(convoy_of("PROJ-7"), Some(ConvoyKey("PROJ-9".into())), "joined the proposing ticket's convoy");
 
-        assert_eq!(accept_proposal(&db, &tracker, &id, Some(ConvoyKey("PROJ-9".into()))).unwrap(), TicketKey("PROJ-7".into()), "nothing filed");
-        let t = TicketRepo::get(&db, &TicketKey("PROJ-7".into())).unwrap().unwrap();
-        assert_eq!(t.convoy, Some(ConvoyKey("PROJ-9".into())), "it joined the convoy");
+        let named = propose(&db, &tracker, from, existing("PROJ-8", Some("PROJ-60"))).unwrap();
+        accept_proposal(&db, &tracker, &named, Some(ConvoyKey("PROJ-61".into()))).unwrap();
+        assert_eq!(convoy_of("PROJ-8"), Some(ConvoyKey("PROJ-61".into())), "the accepter's pick wins");
     }
 
     fn tt(key: &str, status: TicketStatus) -> TrackerTicket {
