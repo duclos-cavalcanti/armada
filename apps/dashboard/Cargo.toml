@@ -2,7 +2,7 @@
 name = "dashboard"
 version = "0.1.0"
 edition = "2021"
-description = "TUI dashboard for the fleet — reads the fleet ledger read-only and displays the cog roster + escalations (Fleet), the open MRs (Armada), and the sprint board + convoys (Board) live."
+description = "TUI dashboard for the fleet — reads the fleet ledger read-only and shows the line by phase (Fleet), the open MRs (Ships), the sprint board + convoys (Board), and fleetd's log (Log), live."
 license = "Proprietary"
 
 [[bin]]

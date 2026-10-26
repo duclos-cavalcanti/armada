@@ -118,26 +118,36 @@ pub struct Fleet {
     pub tick: Option<Event>,
     /// The tmux sessions up right now — whether `enter` on a cog has a pane to switch to.
     pub tmux_up: HashSet<String>,
+    /// fleetd answers on its socket.
+    pub fleetd_up: bool,
+    /// The tail of fleetd's log, newest first.
+    pub log: Vec<String>,
 }
 
 impl Fleet {
     /// Read the ledger into a fresh snapshot. Never panics: an unreachable ledger
     /// yields an empty snapshot carrying the error for the UI to surface.
+    /// The daemon's side (is it up, its log) is read even when the ledger isn't — a fleetd
+    /// that failed to boot says why in its log.
     pub fn load(project: &wire::Project) -> Self {
         let ledger_path = PathBuf::from(project.ledger());
-        Self::try_load(&ledger_path, &project.socket()).unwrap_or_else(|e| Fleet {
+        // fleetd's live liveness (keyed by session id) — `None` when the daemon isn't up, in
+        // which case the panes show report-age alone.
+        let liveness = probe_liveness(&project.socket());
+        let fleetd_up = liveness.is_some();
+        let mut fleet = Self::try_load(&ledger_path, liveness.unwrap_or_default()).unwrap_or_else(|e| Fleet {
             ledger_path,
             load_error: Some(e.to_string()),
             ..Default::default()
-        })
+        });
+        fleet.fleetd_up = fleetd_up;
+        fleet.log = log_tail(&project.log());
+        fleet
     }
 
-    fn try_load(ledger_path: &Path, socket: &str) -> anyhow::Result<Self> {
+    fn try_load(ledger_path: &Path, liveness: HashMap<i64, String>) -> anyhow::Result<Self> {
         let db = Ledger::open_readonly(&ledger_path.to_string_lossy())?;
         let now = chrono::Utc::now();
-        // fleetd's live liveness (keyed by session id) — best-effort; empty if the daemon
-        // isn't up, in which case the panes show report-age alone.
-        let liveness = probe_liveness(socket);
         let cog = |session: Session| -> anyhow::Result<CogRow> {
             let report = ReportRepo::latest(&db, &session.id)?;
             let (state, last_action, stamp) = match report {
@@ -238,6 +248,7 @@ impl Fleet {
             convoys: ConvoyRepo::active(&db)?,
             tick: db.latest_tick()?,
             tmux_up: tmux_sessions(),
+            ..Default::default()
         })
     }
 
@@ -301,21 +312,39 @@ fn tmux_sessions() -> HashSet<String> {
         .unwrap_or_default()
 }
 
+/// The last lines of fleetd's log, newest first — read off the file's last 64 KiB, so a long run's
+/// log costs the same as a fresh one. Empty when there's no log yet.
+fn log_tail(path: &Path) -> Vec<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL: u64 = 64 * 1024;
+    let Ok(mut file) = std::fs::File::open(path) else { return vec![] };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut buf = Vec::new();
+    if file.seek(SeekFrom::Start(len.saturating_sub(TAIL))).and_then(|_| file.read_to_end(&mut buf)).is_err() {
+        return vec![];
+    }
+    let text = String::from_utf8_lossy(&buf);
+    let mut lines: Vec<&str> = text.lines().collect();
+    if len > TAIL && !lines.is_empty() {
+        lines.remove(0); // the seek landed mid-line
+    }
+    lines.into_iter().rev().map(str::to_string).collect()
+}
+
 /// Overlay fleetd's live, tmux-probe-derived liveness (`Active/Quiet/Idle/Dead`) by
-/// session id, read best-effort from the `/context` UDS endpoint. Empty when fleetd
+/// session id, read best-effort from the `/context` UDS endpoint. `None` when fleetd
 /// isn't reachable — the whole dashboard still works off the ledger, just without the
 /// real-time freshness. Liveness is deliberately NOT in the ledger (it'd be stale the
 /// instant it's written); this is the one read that goes to the daemon, not the DB.
-fn probe_liveness(socket: &str) -> HashMap<i64, String> {
+fn probe_liveness(socket: &str) -> Option<HashMap<i64, String>> {
+    let Ok((200, body)) = wire::get_json(socket, "/context") else { return None };
     let mut out = HashMap::new();
-    if let Ok((200, body)) = wire::get_json(socket, "/context") {
-        if let Ok(serde_json::Value::Array(cogs)) = serde_json::from_str::<serde_json::Value>(&body) {
-            for c in cogs {
-                if let (Some(id), Some(live)) = (c["session"]["id"].as_i64(), c["liveness"].as_str()) {
-                    out.insert(id, live.to_string());
-                }
+    if let Ok(serde_json::Value::Array(cogs)) = serde_json::from_str::<serde_json::Value>(&body) {
+        for c in cogs {
+            if let (Some(id), Some(live)) = (c["session"]["id"].as_i64(), c["liveness"].as_str()) {
+                out.insert(id, live.to_string());
             }
         }
     }
-    out
+    Some(out)
 }

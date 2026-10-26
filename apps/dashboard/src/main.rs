@@ -28,23 +28,25 @@ struct Cli {
 }
 
 /// Top-level tabs, cycled by `Tab` / `S-Tab`. Fleet (the line, top-down by phase),
-/// Ships (every open MR, ours + allies), Board (tickets + convoys).
+/// Ships (every open MR, ours + allies), Board (tickets + convoys), Log (fleetd's log).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TabId {
     Fleet,
     Ships,
     Board,
+    Log,
 }
 
 impl TabId {
-    pub fn all() -> [TabId; 3] {
-        [TabId::Fleet, TabId::Ships, TabId::Board]
+    pub fn all() -> [TabId; 4] {
+        [TabId::Fleet, TabId::Ships, TabId::Board, TabId::Log]
     }
     pub fn label(self) -> &'static str {
         match self {
             TabId::Fleet => "Fleet",
             TabId::Ships => "Ships",
             TabId::Board => "Board",
+            TabId::Log => "Log",
         }
     }
     fn step(self, delta: isize) -> Self {
@@ -57,6 +59,7 @@ impl TabId {
             TabId::Fleet => &[Pane::Dispatched, Pane::Impl, Pane::Merge],
             TabId::Ships => &[Pane::Ships],
             TabId::Board => &[Pane::Tickets, Pane::Convoys],
+            TabId::Log => &[Pane::Log],
         }
     }
 }
@@ -71,10 +74,11 @@ pub enum Pane {
     Ships,
     Tickets,
     Convoys,
+    Log,
 }
 
 impl Pane {
-    const COUNT: usize = 6;
+    const COUNT: usize = 7;
     /// The `tab/pane` coordinate the action handler keys on.
     fn coordinate(self) -> &'static str {
         match self {
@@ -84,6 +88,7 @@ impl Pane {
             Pane::Ships => "ships/list",
             Pane::Tickets => "board/tickets",
             Pane::Convoys => "board/convoys",
+            Pane::Log => "log/fleetd",
         }
     }
 }
@@ -98,7 +103,7 @@ pub enum YankScope {
 pub struct App {
     pub tab: TabId,
     /// The focused pane on each tab (indexed by `TabId`).
-    focus: [Pane; 3],
+    focus: [Pane; 4],
     /// The row cursor of each pane (indexed by `Pane`).
     cursors: [usize; Pane::COUNT],
     /// The focused pane's rect, recorded on every draw so `y` can yank its region.
@@ -150,6 +155,7 @@ impl App {
             Pane::Ships => f.armada.len(),
             Pane::Tickets => f.board.len(),
             Pane::Convoys => f.convoys.len(),
+            Pane::Log => f.log.len(),
         }
     }
 
@@ -208,6 +214,7 @@ impl App {
                 let captain = f.captain_of(&c.key).map(|s| s.session.tmux_session.clone());
                 vec![c.key.0.clone(), c.title.clone().unwrap_or_default(), captain.unwrap_or_default()]
             }),
+            Pane::Log => None, // no row actions; `y` yanks
         }?;
         Some((pane.coordinate().to_string(), fields))
     }

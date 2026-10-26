@@ -19,6 +19,8 @@ Cycle with `Tab` / `S-Tab`:
     pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status;
 - **Ships** — every open MR fleetd tracks, ours + allies; the title shows the lookout.
 - **Board** — the sprint tickets + convoys (a convoy shows its captain while one is live).
+- **Log** — fleetd's log (`.fleet/fleetd.log`), newest first, warnings yellow and errors red;
+  the title says whether fleetd is up. The footer flags a down fleetd from every tab.
 
 ## Keys
 
@@ -43,7 +45,7 @@ apps/dashboard/
 └── src/
     ├── main.rs      # entry, event loop, key handling, tab + pane focus
     ├── action.rs    # non-navigation keys → handler.sh (the action handler)
-    ├── source.rs    # Fleet::load() — reads the ledger read-only into the view model
+    ├── source.rs    # Fleet::load() — reads the ledger read-only (+ fleetd's log) into the view model
     └── ui/mod.rs    # tab strip + per-tab panes + footer (pure render over App)
 ```
 
@@ -51,5 +53,4 @@ apps/dashboard/
 
 ```bash
 cargo run -p dashboard -- -C projects/<name>         # or run it from inside the project
-cargo run -p dashboard -- --ledger /path/to/ledger.db
 ```

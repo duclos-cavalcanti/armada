@@ -1,7 +1,7 @@
 //! The render layer — tab strip, per-tab panes, footer. Pure read over `App`
 //! (and its `Fleet` view model); every pane is a header + a list of rows with the
-//! focused row highlighted. Lists are short (the fleet runs few cogs/ships at once),
-//! so a plain `Paragraph` suffices — no scroll state.
+//! focused row highlighted. A plain `Paragraph` per pane, scrolled just enough to keep the
+//! cursor row in view (the Log pane is the long one).
 
 use crate::source::{open_blockers, CogRow, LandingRow, OrderRow, Phase, ShipRow};
 use crate::{App, Pane, TabId};
@@ -115,6 +115,15 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             None,
             f.convoys.iter().map(|c| convoy_row(c, f.captain_of(&c.key))).collect(),
         ),
+        Pane::Log => (
+            format!(
+                " fleetd · {} · {} · newest first ",
+                if f.fleetd_up { "up" } else { "down" },
+                app.project.log().strip_prefix(&app.project.root).unwrap_or(&app.project.log()).display()
+            ),
+            None,
+            f.log.iter().map(|l| log_row(l)).collect(),
+        ),
     }
 }
 
@@ -131,6 +140,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         Some(e) => format!("ledger unreachable: {}", short(e, 48)),
         None => tick_summary(&app.fleet.tick),
     };
+    let status = if app.fleet.fleetd_up { status } else { format!("fleetd down (see Log) · {status}") };
     let body = format!(
         " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-3 pane · j/k row · y/Y yank",
         flash, zoom, status,
@@ -321,6 +331,26 @@ fn convoy_row(c: &Convoy, captain: Option<&CogRow>) -> Line<'static> {
     Line::from(format!("{:<12} {}{}{}", c.key.0, short(c.title.as_deref().unwrap_or(""), 50), anchor, captain))
 }
 
+/// A fleetd log line (`<date> <time> <LEVEL> <module>: <message>`): the time, the level coloured,
+/// the rest as written. A line not in that shape (a panic's trailer) shows as is.
+fn log_row(line: &str) -> Line<'static> {
+    let plain = || Line::from(line.to_string());
+    let mut words = line.split_whitespace();
+    let (Some(_date), Some(time), Some(level)) = (words.next(), words.next(), words.next()) else { return plain() };
+    let (level_style, msg_style) = match level {
+        "ERROR" => (Style::default().fg(Color::Red).add_modifier(Modifier::BOLD), Style::default().fg(Color::Red)),
+        "WARN" => (yellow(), yellow()),
+        "INFO" => (Style::default(), Style::default()),
+        _ => return plain(),
+    };
+    let msg = line.split_once(level).map(|(_, m)| m.trim_start()).unwrap_or("");
+    Line::from(vec![
+        Span::styled(format!("{time} "), dim()),
+        Span::styled(format!("{level:<5} "), level_style),
+        Span::styled(msg.to_string(), msg_style),
+    ])
+}
+
 /// A one-line summary of fleetd's last reconcile tick, for the footer.
 fn tick_summary(tick: &Option<Event>) -> String {
     let Some(e) = tick else { return "no tick yet".into() };
@@ -351,9 +381,13 @@ fn draw_pane(
 ) {
     let block = Block::default().borders(Borders::ALL).title(title.to_string()).border_style(border_style(focused));
     let highlight = Style::default().fg(Color::Black).bg(Color::Cyan);
+    // Scroll just enough that the cursor row stays inside the border (and under the header).
+    let visible = (area.height.saturating_sub(2) as usize).saturating_sub(header.is_some() as usize).max(1);
+    let offset = (cursor + 1).saturating_sub(visible);
     let rows = rows
         .into_iter()
         .enumerate()
+        .skip(offset)
         .map(|(i, line)| if focused && i == cursor { line.patch_style(highlight) } else { line });
     let lines: Vec<Line> = header.into_iter().chain(rows).collect();
     f.render_widget(Paragraph::new(lines).block(block), area);
