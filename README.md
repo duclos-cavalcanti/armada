@@ -78,6 +78,7 @@ make preflight P=<name>   # check the setup (runtime state, checkout, CLI auth, 
 make run P=<name>         # start project <name>'s fleetd in the background (unless it's up), then open its dashboard
 make stop P=<name>        # stop that project's fleet daemon
 make dashboard P=<name>   # build + run the TUI dashboard
+make admiral P=<name>     # talk to the project's admiral (its product expert; reads the kit, never edits it)
 make export P=<name>      # snapshot the project's ledger → projects/<name>/exports/<name>-<UTC stamp>.db
 ```
 

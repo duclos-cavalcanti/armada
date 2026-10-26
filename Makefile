@@ -9,7 +9,7 @@
 # `make` with no target prints the help summary.
 
 .DEFAULT_GOAL := help
-.PHONY: help install uninstall .project preflight run stop dashboard export
+.PHONY: help install uninstall .project preflight run stop dashboard admiral export
 
 help:                            ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / { printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -46,3 +46,8 @@ stop: .project                   ## Stop project P's fleet daemon
 
 dashboard: .project              ## Build + run the TUI dashboard over project P (cargo run --release)
 	cargo run --release -p dashboard -- -C projects/$(P)
+
+# The admiral runs in the project (bare fleetc reaches its fleetd; its memory stays per-project)
+# and reads the kit two levels up — the repo root — so it knows the machinery it commands.
+admiral: .project                ## Talk to project P's admiral (its product expert; reads the kit, never edits it)
+	cd projects/$(P) && claude --agent admiral --add-dir ../..
