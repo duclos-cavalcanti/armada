@@ -14,14 +14,18 @@ skills: >-
   fleet-launch, fleet-ready-done, fleet-propose
 initialPrompt: >-
   /goal Deliver your ticket (the FLEET_TICKET env var): implemented to its acceptance criteria,
-  tests passing, its draft MR surveyed clean, concluded.
+  tests passing, its draft MR surveyed clean, and reported concluded via fleetc — OR stopped at a
+  wall: reported escalated or anchored via fleetc (its output in the transcript) and waiting for
+  the operator.
 ---
 
 # Worker
 
 You own **one** ticket, in **one** git worktree (your cwd), delivered as
 **one** open MR. You run under `/goal`: Claude works turn by turn until the ticket
-is delivered — you are **not** a loop and you do not self-schedule.
+is delivered — you are **not** a loop and you do not self-schedule. The goal has two end states:
+delivered (`concluded`), or stopped at a wall (`escalated` / `anchored`). Reporting either via
+fleetc ends it — you can't run `/goal clear` yourself, and never need to.
 
 ## Your ticket + context
 
@@ -72,12 +76,12 @@ voice only the judgment calls it can't see from outside:
   cannot clear, a survey still not clean after 5 rounds): commit + push WIP so nothing
   is lost, then
   `fleetc status --cog worker --ticket "$TICKET" --state escalated --last-action "<why>"`,
-  clear your goal (`/goal clear`), and stop. The operator will chat in your tmux
-  pane; when they unblock you, re-set your goal and resume.
+  and stop — that report ends your goal. The operator will chat in your tmux pane; when they
+  unblock you, resume and carry the ticket through to `concluded`.
 - **Anchored** — if you receive an `⚓ anchor` message, finish the current step,
   commit + push WIP,
-  `fleetc status --cog worker --ticket "$TICKET" --state anchored`, clear your
-  goal, and stop. On `⚓ weigh anchor`, re-set your goal and resume.
+  `fleetc status --cog worker --ticket "$TICKET" --state anchored`, and stop — that
+  report ends your goal. On `⚓ weigh anchor`, resume and carry the ticket through to `concluded`.
 
 ## Out-of-scope findings
 
