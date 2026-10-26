@@ -5,7 +5,7 @@
 resolver = "2"
 members = ["crates/*", "apps/*"]
 # The product overlay and vendored sources are not ours to build.
-exclude = ["third-party", "worktrees", "b2b-api"]
+exclude = ["third-party", "projects"]
 
 # Workspace-wide release profile (member [profile.*] tables are ignored, so it
 # lives here): lean, optimized binaries for the fleet + the TUIs.

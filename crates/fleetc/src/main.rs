@@ -84,7 +84,7 @@ fn run() -> Result<()> {
                  fleetc ci       --iid <N>         (the MR's CI: status + each failed job's log tail, as JSON)\n  \
                  fleetc retry-ci --iid <N>         (re-run the MR's failed CI jobs)\n  \
                  fleetc arm      <KEY-N>          (arm the ticket's MR to merge once green; refused while held or blocked)\n  \
-                 fleetc ticket   <KEY-N>                (a ticket's full text: type, status, links, description)\n  \
+                 fleetc ticket   <KEY-N> [--where]      (a ticket's full text; --where: its URL or file path)\n  \
                  fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (prints the new key)\n  \
                  fleetc ticket   block <KEY-N> --by <KEY-N>   (record an 'is blocked by' edge)\n  \
                  fleetc launch   --title <t> --body <text> [--ticket <KEY-N>] [--target <branch>] [--draft] [--worktree <path>]   (open the MR for the worktree's branch; prints its URL)\n  \
@@ -716,9 +716,28 @@ fn ticket(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("new") => ticket_new(&args[1..]),
         Some("block") => ticket_block(&args[1..]),
-        Some(key) if !key.starts_with('-') => ticket_show(&ticket_key(key, "ticket")?),
+        Some(key) if !key.starts_with('-') => match args.get(1).map(String::as_str) {
+            Some("--where") => ticket_where(&ticket_key(key, "ticket")?),
+            _ => ticket_show(&ticket_key(key, "ticket")?),
+        },
         _ => bail!("usage: fleetc ticket <KEY-N> | new --title <t> --type <type> … | block <KEY-N> --by <KEY-N>"),
     }
+}
+
+/// `fleetc ticket <KEY> --where` — print where a person opens the ticket: a URL (Jira) or a file
+/// path (the filesystem tracker), for `open "$(fleetc ticket KEY --where)"`.
+fn ticket_where(key: &str) -> Result<()> {
+    let (code, body) = wire::get_json(&socket(), &format!("/ticket?ticket={key}"))?;
+    if code != 200 {
+        bail!("fleetd ({code}): {body}");
+    }
+    let d: serde_json::Value = serde_json::from_str(&body)?;
+    let location = d["location"].as_str().unwrap_or("");
+    if location.is_empty() {
+        bail!("{key}: the tracker reports no location for it");
+    }
+    println!("{location}");
+    Ok(())
 }
 
 /// Print a ticket's full text: a facts line, the title, its links, then the description.

@@ -94,7 +94,7 @@ each**, so a re-reviewer knows exactly what to scrutinize.
 
 ## Escalate, don't guess
 
-A conflict that hinges on intent you don't have — which of two divergent custody
+A conflict that hinges on intent you don't have — which of two divergent domain
 behaviours is correct, a deliberate revert vs a re-add, an ambiguous policy
 change — is an **escalation, not a force-push**. `git rebase --abort`, leave the
 tree clean, exit 1. The sailor turns that into a `rebase_conflict` escalation

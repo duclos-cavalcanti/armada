@@ -37,11 +37,11 @@ TICKET="${FLEET_TICKET:-}"
 
 - **The ticket** — `fleetc ticket "$TICKET"` (from whichever tracker the project uses);
   its acceptance criteria are the definition of done.
-- **The project** — `MANIFEST.md`, the ADDs for the area you're touching, `CLAUDE.md`,
+- **The project** — its `CLAUDE.md`, the docs that govern the area you're touching,
   and the code on the branch. Read before briefing.
 
 Then give a **tight briefing**: what the ticket wants, where the code lives, the
-constraints/ADDs that bind it, and a suggested approach — with `file:line` + doc §
+constraints and design records that bind it, and a suggested approach — with `file:line` + doc §
 citations. Then **await** direction.
 
 ## Aid on request

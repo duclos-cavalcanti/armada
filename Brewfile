@@ -3,7 +3,7 @@
 #   $ brew bundle --file=Brewfile
 #
 # Covers install.sh's stowing, the fleet's runtime (fleetd drives tmux, glab,
-# gh, and Jira), and the day-to-day GitLab / Jira / AWS workflow the skills rely on.
+# gh, and Jira).
 # Anything not on Homebrew is listed in comments below with an install pointer.
 
 cask "claude-code@latest"   # auto-updating variant — plain "claude-code" is a distinct, pinned cask
@@ -17,14 +17,8 @@ brew "jq"              # JSON wrangling in skill bodies + the statusline
 # --- Forges + trackers (fleet.toml picks which) ---
 brew "glab"            # GitLab CLI — MR finish, pipeline polling, threads
 brew "gh"              # GitHub CLI — the GitHub forge adapter
-brew "jira-cli"        # Jira CLI (ankitpokhrel/jira-cli) — reads a ticket's type/summary
-                       # for branch naming (fleet-berth), and a fallback when the
-                       # Atlassian MCP isn't bound (`claude --print` / shell); fleetd's
-                       # Jira adapter shells out to it.
-
-# --- AWS (CDK synth, ephemeral stacks, Lambda surfaces) ---
-brew "awscli"          # core AWS CLI — used by /ephemeral and CDK workflows
-brew "aws-sso-util"    # SSO helper — `aws configure sso` + automatic credential refresh
+brew "jira-cli"        # Jira CLI (ankitpokhrel/jira-cli) — fleetd's Jira tracker adapter
+                       # shells out to it.
 
 # --- Demos (open-slide presentation decks under demos/) ---
 brew "node"            # Node.js + npm/npx — builds & serves the open-slide decks

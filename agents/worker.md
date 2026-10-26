@@ -33,8 +33,8 @@ TICKET="$FLEET_TICKET"
 - **The ticket** — `fleetc ticket "$TICKET"` (its type, status, links, and description,
   from whichever tracker the project uses). Its acceptance criteria are your definition
   of done; `/fleet-ready-done` is how an MR meets them.
-- **The project** — `MANIFEST.md` (conventions + coordinates), the ADDs for the
-  area you're touching, and `CLAUDE.md`. Read before implementing.
+- **The project** — its `CLAUDE.md` and the docs that govern the area you're touching
+  (conventions, design records). Read before implementing.
 
 ## Deliver
 

@@ -434,6 +434,9 @@ pub struct TicketDetail {
     /// given; `None` when it isn't held.
     #[serde(default)]
     pub held: Option<String>,
+    /// Where a person opens it: a URL (Jira) or a file path (the filesystem tracker).
+    #[serde(default)]
+    pub location: String,
 }
 
 /// A new ticket, as `fleetc ticket new` asks the tracker to create it. It starts in To Do.

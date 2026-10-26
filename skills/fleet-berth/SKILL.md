@@ -34,7 +34,7 @@ side effects, in order:
    the project folder (beside the project checkout). Its files are not
    touched, and no commit is made on any existing branch.
 3. **Shared-cache symlinks** — plants the target repo's declared
-   `worktree.symlinkDirectories` symlinks (`target/`, the CDK venv) **into the
+   `worktree.symlinkDirectories` symlinks (e.g. `target/`, a virtualenv) **into the
    NEW worktree only**, pointing at the **project checkout**, so every worktree shares
    one build cache instead of rebuilding its own (tens of GB). Touches only the
    freshly-created worktree, never the checkout.
@@ -85,7 +85,7 @@ calls):
    ```
 5. **Plant the shared-cache symlinks** (into the new worktree, pointing at the
    checkout). The factory cuts worktrees autonomously and in volume; without these,
-   every worktree rebuilds its own `target/` (tens of GB) and CDK venv. The checkout
+   every worktree rebuilds its own build caches (`target/` alone can be tens of GB). The checkout
    is a plain clone with no `post-checkout` hook, so the kit **owns** this step.
    The dir list is the target repo's own declaration in its `.claude/settings.json`
    (`worktree.symlinkDirectories` — single source of truth; don't hardcode it):
@@ -100,7 +100,7 @@ calls):
    ```
    A `target/` symlink that never appears (empty `symlinkDirectories`, or the checkout
    hasn't built yet) means the worker will cold-build — warm the checkout once
-   (`cargo build` / CDK bootstrap) so worktrees inherit the cache.
+   (e.g. `cargo build`) so worktrees inherit the cache.
 
 ---
 

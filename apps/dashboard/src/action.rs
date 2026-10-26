@@ -79,11 +79,11 @@ pub fn is_reserved(code: KeyCode, mods: KeyModifiers) -> bool {
 /// no shell quoting. Fire-and-forget: stdout/stderr go to /dev/null (they'd
 /// corrupt the TUI's alternate screen); an unhandled (coordinate, key) is the
 /// handler's no-op.
-pub fn spawn(coordinate: &str, key: &str, fields: Vec<String>) {
-    let coordinate = coordinate.to_string();
-    let key = key.to_string();
+pub fn spawn(project: &std::path::Path, coordinate: &str, key: &str, fields: Vec<String>) {
+    let (project, coordinate, key) = (project.to_path_buf(), coordinate.to_string(), key.to_string());
     std::thread::spawn(move || {
         let _ = std::process::Command::new(HANDLER)
+            .env("FLEET_PROJECT", &project) // the handler reaches the fleet with `fleetc -C`
             .arg(&coordinate)
             .arg(&key)
             .args(&fields)

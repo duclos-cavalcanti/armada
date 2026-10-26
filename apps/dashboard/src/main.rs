@@ -327,7 +327,7 @@ impl App {
         let Some((coordinate, fields)) = self.focused_action() else {
             return;
         };
-        action::spawn(&coordinate, &key_name, fields);
+        action::spawn(&self.project.root, &coordinate, &key_name, fields);
     }
 
     fn refresh(&mut self, force: bool) {

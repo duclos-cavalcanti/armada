@@ -216,7 +216,16 @@ fn detail_from_issue(issue: &serde_json::Value) -> Option<TicketDetail> {
             _ => String::new(),
         },
         held: None,
+        location: browse_url(issue).unwrap_or_default(),
     })
+}
+
+/// The issue's browse page, from its REST `self` link: `https://<host>/rest/api/…` →
+/// `https://<host>/browse/<KEY>`.
+fn browse_url(issue: &serde_json::Value) -> Option<String> {
+    let api = issue.get("self")?.as_str()?;
+    let host = api.split("/rest/").next()?;
+    Some(format!("{host}/browse/{}", issue.get("key")?.as_str()?))
 }
 
 /// Flatten an Atlassian Document Format node to plain text: text nodes as is, a line break after
@@ -345,6 +354,7 @@ mod tests {
     fn reads_an_issue_with_an_adf_description() {
         let issue = serde_json::json!({
             "key": "PROJ-7",
+            "self": "https://example.atlassian.net/rest/api/3/issue/10042",
             "fields": {
                 "summary": "Add neg", "status": {"name": "To Do"}, "issuetype": {"name": "Story"},
                 "description": {"type": "doc", "content": [
@@ -360,6 +370,7 @@ mod tests {
         assert_eq!((d.ticket.key.0.as_str(), d.kind.as_str()), ("PROJ-7", "story"));
         assert_eq!(d.description, "## Outcome\n\nneg works.\n\n- AC one");
         assert_eq!(capitalized("story"), "Story");
+        assert_eq!(d.location, "https://example.atlassian.net/browse/PROJ-7");
     }
 
     // Real jira --raw / REST field shape (trimmed).

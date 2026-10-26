@@ -17,10 +17,10 @@
 #   armada/ships       $1=iid  $2=ticket  $3=pilot  $4=url
 #   board/tickets      $1=key  $2=status  $3=convoy
 #   board/convoys      $1=key  $2=title
+#
+# Forge- and tracker-neutral: links come from the fleet itself (`fleetc -C "$FLEET_PROJECT"`,
+# the project folder the dashboard passes in), never from hardcoded hosts.
 set -euo pipefail
-
-readonly GITLAB_MR_BASE="<redacted>"
-readonly JIRA_BROWSE_BASE="<redacted>"
 
 # Switch the current tmux client to a cog's session (requires running inside tmux),
 # or report to stderr and fail if the session isn't alive.
@@ -33,9 +33,12 @@ launch_tmux() {
     tmux switch-client -t "=$session"
 }
 
-launch_browser()     { open "$1"; }
-launch_gitlab_mr()   { launch_browser "$GITLAB_MR_BASE/$1"; }
-launch_jira_ticket() { launch_browser "$JIRA_BROWSE_BASE/$1"; }
+launch_browser() { open "$1"; }
+fleet()          { fleetc -C "${FLEET_PROJECT:?the dashboard sets FLEET_PROJECT}" "$@"; }
+# A ticket opens where its tracker keeps it: a URL (Jira) or a file (ticket files).
+launch_ticket()  { local where; where="$(fleet ticket "$1" --where)" && open "$where"; }
+# An MR opens at the URL the forge reported for it.
+launch_mr()      { local url; url="$(fleet ship --iid "$1" | jq -r '.ship.url')" && launch_browser "$url"; }
 
 # main — map a (coordinate, key) + the focused row's fields to an action.
 main() {
@@ -48,25 +51,25 @@ main() {
         # enter attaches the cog's tmux session ($4); t opens its ticket ($2,
         # empty for a ticketless captain/lookout).
         fleet/cogs/enter) launch_tmux "${4:-}" ;;
-        fleet/cogs/t) [ -n "${2:-}" ] && launch_jira_ticket "${2:-}" || echo "cog has no ticket" >&2 ;;
+        fleet/cogs/t) [ -n "${2:-}" ] && launch_ticket "${2:-}" || echo "cog has no ticket" >&2 ;;
 
         # ---- Fleet · escalations ------------------------------------------
-        fleet/escalations/t) launch_jira_ticket "${1:-}" ;;
+        fleet/escalations/t) launch_ticket "${1:-}" ;;
         fleet/escalations/m)
             [ -n "${3:-}" ] || { echo "no MR associated with ${1:-}" >&2; exit 1; }
-            launch_gitlab_mr "${3:-}"
+            launch_mr "${3:-}"
             ;;
 
         # ---- Armada · ships -----------------------------------------------
         # enter opens the MR — by its url ($4) if present, else by iid ($1).
         armada/ships/enter)
-            if [ -n "${4:-}" ]; then launch_browser "${4}"; else launch_gitlab_mr "${1:-}"; fi
+            if [ -n "${4:-}" ]; then launch_browser "${4}"; else launch_mr "${1:-}"; fi
             ;;
-        armada/ships/t) [ -n "${2:-}" ] && launch_jira_ticket "${2:-}" || echo "peer ship has no ticket" >&2 ;;
+        armada/ships/t) [ -n "${2:-}" ] && launch_ticket "${2:-}" || echo "peer ship has no ticket" >&2 ;;
 
         # ---- Board · tickets / convoys ------------------------------------
-        board/tickets/enter | board/tickets/t) launch_jira_ticket "${1:-}" ;;
-        board/convoys/enter) launch_jira_ticket "${1:-}" ;;
+        board/tickets/enter | board/tickets/t) launch_ticket "${1:-}" ;;
+        board/convoys/enter) launch_ticket "${1:-}" ;;
 
         *) : ;; # unhandled (coordinate, key) — no-op
     esac
