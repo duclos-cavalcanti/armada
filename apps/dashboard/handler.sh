@@ -15,7 +15,6 @@
 #   fleet/dispatched   $1=ticket  $2=crew(worker|hand)
 #   fleet/impl         $1=ticket  $2=kind  $3=tmux_session  $4=state  $5=mr_iid
 #   fleet/merge        $1=ticket  $2=mr_iid  $3=url  $4=sailor_tmux(only when up)  $5=sailor_state
-#   fleet/escalations  $1=ticket  $2=raised_by  $3=ship_iid
 #   ships/list         $1=iid  $2=ticket  $3=pilot  $4=url
 #   board/tickets      $1=key  $2=status  $3=convoy
 #   board/convoys      $1=key  $2=title  $3=captain_tmux(live only)
@@ -61,13 +60,6 @@ main() {
             ;;
         fleet/merge/t) launch_ticket "${1:-}" ;;
         fleet/merge/m) launch_browser "${3:-}" ;;
-
-        # ---- Fleet · escalations ------------------------------------------
-        fleet/escalations/t) launch_ticket "${1:-}" ;;
-        fleet/escalations/m)
-            [ -n "${3:-}" ] || { echo "no MR associated with ${1:-}" >&2; exit 1; }
-            launch_mr "${3:-}"
-            ;;
 
         # ---- Ships --------------------------------------------------------
         # enter opens the MR — by its url ($4) if present, else by iid ($1); l attaches the lookout.

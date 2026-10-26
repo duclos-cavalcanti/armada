@@ -16,7 +16,6 @@ Cycle with `Tab` / `S-Tab`:
   - **impl** — builders at work (workers + hands): state, liveness, MR + pipeline, last action;
   - **merge** — our ships being landed: the sailor's state (dimmed once it's stood down),
     pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status;
-  - **escalations** — the open escalations.
 - **Ships** — every open MR fleetd tracks, ours + allies; the title shows the lookout.
 - **Board** — the sprint tickets + convoys (a convoy shows its captain while one is live).
 
@@ -28,7 +27,7 @@ Cycle with `Tab` / `S-Tab`:
 | `r` | refresh now |
 | `Tab` / `S-Tab` | next / previous tab |
 | `↑` / `↓`, `C-p` / `C-n` | previous / next pane |
-| `1`–`4` | focus the Nth pane |
+| `1`–`3` | focus the Nth pane |
 | `j` / `k` | move the cursor within the focused pane |
 | `space` | zoom the focused pane (toggle) |
 | `y` / `Y` | yank the focused pane / the whole page |

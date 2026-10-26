@@ -51,10 +51,10 @@ impl TabId {
         let all = Self::all();
         all[(self as isize + delta).rem_euclid(all.len() as isize) as usize]
     }
-    /// The tab's panes, top to bottom — `1`..`4` focus them, `↑`/`↓` cycle them.
+    /// The tab's panes, top to bottom — `1`..`3` focus them, `↑`/`↓` cycle them.
     pub fn panes(self) -> &'static [Pane] {
         match self {
-            TabId::Fleet => &[Pane::Dispatched, Pane::Impl, Pane::Merge, Pane::Escalations],
+            TabId::Fleet => &[Pane::Dispatched, Pane::Impl, Pane::Merge],
             TabId::Ships => &[Pane::Ships],
             TabId::Board => &[Pane::Tickets, Pane::Convoys],
         }
@@ -62,27 +62,25 @@ impl TabId {
 }
 
 /// Every pane on every tab. Fleet reads the line top-down: dispatched orders → builders at
-/// work (impl phase) → ships being landed (merge phase) → open escalations.
+/// work (impl phase) → ships being landed (merge phase).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Pane {
     Dispatched,
     Impl,
     Merge,
-    Escalations,
     Ships,
     Tickets,
     Convoys,
 }
 
 impl Pane {
-    const COUNT: usize = 7;
+    const COUNT: usize = 6;
     /// The `tab/pane` coordinate the action handler keys on.
     fn coordinate(self) -> &'static str {
         match self {
             Pane::Dispatched => "fleet/dispatched",
             Pane::Impl => "fleet/impl",
             Pane::Merge => "fleet/merge",
-            Pane::Escalations => "fleet/escalations",
             Pane::Ships => "ships/list",
             Pane::Tickets => "board/tickets",
             Pane::Convoys => "board/convoys",
@@ -149,7 +147,6 @@ impl App {
             Pane::Dispatched => f.dispatched.len(),
             Pane::Impl => f.builders.len(),
             Pane::Merge => f.landing.len(),
-            Pane::Escalations => f.escalations.len(),
             Pane::Ships => f.armada.len(),
             Pane::Tickets => f.board.len(),
             Pane::Convoys => f.convoys.len(),
@@ -164,7 +161,6 @@ impl App {
     ///   fleet/dispatched   ticket  crew(worker|hand)
     ///   fleet/impl         ticket  kind  tmux_session  state  mr_iid
     ///   fleet/merge        ticket  mr_iid  url  sailor_tmux(only when up)  sailor_state
-    ///   fleet/escalations  ticket  raised_by  ship_iid
     ///   ships/list         iid  ticket  pilot  url
     ///   board/tickets      key  status  convoy
     ///   board/convoys      key  title  captain_tmux(live only)
@@ -197,9 +193,6 @@ impl App {
                     tmux.unwrap_or_default(),
                     r.sailor.as_ref().and_then(|s| s.state.clone()).unwrap_or_default(),
                 ]
-            }),
-            Pane::Escalations => f.escalations.get(i).map(|e| {
-                vec![e.ticket.0.clone(), e.raised_by.as_str().into(), e.ship_iid.map(|n| n.to_string()).unwrap_or_default()]
             }),
             Pane::Ships => f.armada.get(i).map(|r| {
                 vec![r.ship.iid.to_string(), key(r.ship.ticket.as_ref()), r.ship.pilot.clone(), r.ship.url.clone()]
@@ -294,7 +287,7 @@ impl App {
                 self.step_pane(1);
                 return;
             }
-            KeyCode::Char(c @ '1'..='4') => {
+            KeyCode::Char(c @ '1'..='3') => {
                 self.focus_nth_pane(c as usize - '1' as usize);
                 return;
             }

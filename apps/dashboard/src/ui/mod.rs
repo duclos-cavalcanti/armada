@@ -5,7 +5,7 @@
 
 use crate::source::{open_blockers, CogRow, LandingRow, OrderRow, ShipRow};
 use crate::{App, Pane, TabId};
-use domain::{Convoy, Escalation, Event, PipelineStatus, ShipSnapshot, Ticket};
+use domain::{Convoy, Event, PipelineStatus, ShipSnapshot, Ticket};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -38,17 +38,13 @@ fn render_tab_strip(f: &mut Frame, area: Rect, app: &App) {
 /// The active tab's panes, stacked top to bottom (zoom shows just the focused one).
 fn render_body(f: &mut Frame, area: Rect, app: &App) {
     let panes: Vec<Pane> = if app.zoomed { vec![app.pane()] } else { app.tab.panes().to_vec() };
-    let views: Vec<_> = panes.iter().map(|p| pane_view(app, *p)).collect();
-    // Each pane fits its rows (borders + header + rows); the tab's main pane takes the rest.
-    let constraints = panes.iter().zip(&views).map(|(pane, (_, header, rows))| {
-        if app.zoomed || is_main(*pane) {
-            Constraint::Fill(1)
-        } else {
-            Constraint::Length((2 + header.is_some() as usize + rows.len().max(1)) as u16)
-        }
-    });
-    let areas = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
-    for ((pane, (title, header, rows)), area) in panes.into_iter().zip(views).zip(areas.iter()) {
+    // Every pane gets an equal share of the tab's height.
+    let areas = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(panes.iter().map(|_| Constraint::Fill(1)))
+        .split(area);
+    for (pane, area) in panes.into_iter().zip(areas.iter()) {
+        let (title, header, rows) = pane_view(app, pane);
         let focused = pane == app.pane();
         if focused {
             app.focused_area.set(Some(*area));
@@ -57,10 +53,6 @@ fn render_body(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-/// The pane that takes a tab's spare height — the one with the most rows to show.
-fn is_main(pane: Pane) -> bool {
-    matches!(pane, Pane::Merge | Pane::Ships | Pane::Tickets)
-}
 
 /// A pane's title, column header (if any), and rows.
 fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<'static>>) {
@@ -104,11 +96,6 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             ])),
             f.landing.iter().map(|r| landing_row(r, r.sailor.as_ref().is_some_and(|s| f.is_up(s)))).collect(),
         ),
-        Pane::Escalations => (
-            format!(" escalations · {} open ", f.escalations.len()),
-            None,
-            escalation_rows(&f.escalations),
-        ),
         Pane::Ships => (ships_title(app), None, ship_rows(&f.armada)),
         Pane::Tickets => (
             format!(" board · {} tickets ", f.board.len()),
@@ -137,7 +124,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         None => tick_summary(&app.fleet.tick),
     };
     let body = format!(
-        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-4 pane · j/k row · y/Y yank",
+        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-3 pane · j/k row · y/Y yank",
         flash, zoom, status,
     );
     f.render_widget(Paragraph::new(Line::from(body)).style(dim), area);
@@ -239,15 +226,6 @@ fn landing_row(r: &LandingRow, up: bool) -> Line<'static> {
         (fmt_age(age), 6, dim()),
         (merge_status, 0, Style::default()),
     ])
-}
-
-fn escalation_rows(es: &[Escalation]) -> Vec<Line<'static>> {
-    es.iter()
-        .map(|e| {
-            let ship = e.ship_iid.map(|i| format!("!{}", i)).unwrap_or_default();
-            Line::from(format!("{:<12} {:<8} {:<6} {}", e.ticket.0, e.raised_by.as_str(), ship, short(&e.summary, 60)))
-        })
-        .collect()
 }
 
 // ── ships · board ────────────────────────────────────────────────────────────────
