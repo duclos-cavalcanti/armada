@@ -1608,6 +1608,15 @@ mod tests {
         fn subtasks(&self, _parent: &TicketKey) -> Result<Vec<TicketStatus>> {
             Ok(self.subtasks.borrow().clone())
         }
+        fn read(&self, _: &TicketKey) -> Result<domain::TicketDetail> {
+            unimplemented!()
+        }
+        fn create(&self, _: &domain::TicketDraft) -> Result<TicketKey> {
+            unimplemented!()
+        }
+        fn block(&self, _: &TicketKey, _: &TicketKey) -> Result<()> {
+            Ok(())
+        }
     }
 
     /// `snapshot` returns a configured `ForgeShip` (for LaunchSailor's fresh poll) or errors,

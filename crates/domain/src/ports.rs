@@ -185,6 +185,12 @@ pub trait Tracker {
     fn parent_of(&self, key: &TicketKey) -> Result<Option<TicketKey>>;
     /// A parent's native sub-task statuses (empty = not a sub-task container, e.g. an Epic).
     fn subtasks(&self, parent: &TicketKey) -> Result<Vec<TicketStatus>>;
+    /// The ticket's full text — its board facts, type, and description (`fleetc ticket <KEY>`).
+    fn read(&self, key: &TicketKey) -> Result<TicketDetail>;
+    /// Create a ticket in To Do from `draft`, with its "is blocked by" edges; returns its key.
+    fn create(&self, draft: &TicketDraft) -> Result<TicketKey>;
+    /// Record that `key` is blocked by `by` (idempotent).
+    fn block(&self, key: &TicketKey, by: &TicketKey) -> Result<()>;
 }
 
 pub trait SessionHost {

@@ -1,14 +1,14 @@
 ---
-description: Create a git worktree + branch for a ticket in its project folder (beside the project checkout), forked off a given base (default: origin's default branch) of the project checkout, which it locates via `fleetc project` — run it from inside the project (or its checkout / a worktree). Pure worktree creation — no Jira lifecycle. The operator or captain runs this when producing a dispatch, then passes the emitted path to `fleetc dispatch --worktree`; fleetd's reconcile spawns the cog there (reconcile never creates worktrees).
+description: Create a git worktree + branch for a ticket in its project folder (beside the project checkout), forked off a given base (default: origin's default branch) of the project checkout, which it locates via `fleetc project` — run it from inside the project (or its checkout / a worktree). Pure worktree creation — no ticket lifecycle. The operator or captain runs this when producing a dispatch, then passes the emitted path to `fleetc dispatch --worktree`; fleetd's reconcile spawns the cog there (reconcile never creates worktrees).
 argument-hint: <ticket> [<fork-base-branch>]
 ---
 
 # Skill: fleet-berth
 
 You are creating the git worktree + branch for a ticket so downstream work
-can start. **This skill is Jira-read-only** — it fetches the ticket's issue-type
+can start. **This skill only reads the ticket** — it fetches the ticket's type
 to derive the branch name, refreshes the fork base, then creates the worktree
-in the project folder, beside the **project checkout** it forks off. Jira-side
+in the project folder, beside the **project checkout** it forks off. Tracker-side
 lifecycle (assign, label, sprint, transition) is NOT this skill's concern —
 fleetd's spawn claims the ticket when it launches the cog.
 
@@ -23,7 +23,7 @@ fleetd's spawn claims the ticket when it launches the cog.
 
 ## Side-effect contract
 
-This skill is **read-only against the project checkout's working tree and Jira**. Its only
+This skill is **read-only against the project checkout's working tree and the tracker**. Its only
 side effects, in order:
 
 1. **Git fetch** — `git -C "$REPO" fetch origin <base>` advances the project checkout's
@@ -41,7 +41,7 @@ side effects, in order:
 4. **Stdout** — emits the new worktree path + branch.
 
 **This skill never calls `Edit` / `Write` / `MultiEdit` against a working tree,
-and never writes to Jira.** If you find yourself reaching for those, the skill is
+and never writes to the tracker.** If you find yourself reaching for those, the skill is
 off-path — stop and reconsider.
 
 ---
@@ -57,13 +57,14 @@ calls):
    ```bash
    REPO="$(fleetc project)" || { echo "fleetd unreachable — start it (make run)" >&2; exit 1; }
    ```
-2. Fetch the ticket's issue type + summary (via the `jira` CLI):
+2. Read the ticket's type + title (its first two lines), from whichever tracker the
+   project uses:
    ```bash
-   jira issue view <ticket> --raw | jq '.fields | {issuetype: .issuetype.name, summary}'
+   fleetc ticket <ticket> | head -2    # "<KEY> · <type> · <status>" then the title
    ```
 3. Derive the names:
-   - **prefix** from issue type: `Story` → `feature`, `Bug` → `fix`, everything
-     else (`Task`, `Sub-task`, …) → `chore`.
+   - **prefix** from the type: `story` → `feature`, `bug` → `fix`, everything
+     else (`task`, `sub-task`, …) → `chore`.
    - **slug** — a kebab-case condensation of the summary (3–5 words).
    - **branch** = `<prefix>/<ticket>-<slug>`.
    - **path** — in the project folder (beside the project checkout), named
@@ -123,6 +124,6 @@ BRANCH=<prefix>/<ticket>-<slug>
   derived from issue type; forked off `origin/<base>`
 - [ ] Shared-cache symlinks planted in the new worktree (`target/` etc.) → the
   checkout, per the target repo's `worktree.symlinkDirectories`
-- [ ] No Jira writes performed (assign / label / sprint / transition all skipped
+- [ ] No tracker writes performed (assign / label / sprint / transition all skipped
   — fleetd's spawn claims the ticket)
 - [ ] `WORKTREE_PATH=` and `BRANCH=` emitted on stdout

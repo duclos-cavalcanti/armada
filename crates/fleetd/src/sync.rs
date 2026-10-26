@@ -211,6 +211,15 @@ mod tests {
         fn subtasks(&self, _: &TicketKey) -> Result<Vec<TicketStatus>> {
             Ok(vec![])
         }
+        fn read(&self, _: &TicketKey) -> Result<domain::TicketDetail> {
+            unimplemented!()
+        }
+        fn create(&self, _: &domain::TicketDraft) -> Result<TicketKey> {
+            unimplemented!()
+        }
+        fn block(&self, _: &TicketKey, _: &TicketKey) -> Result<()> {
+            Ok(())
+        }
     }
 
     fn tt(key: &str, status: TicketStatus) -> TrackerTicket {

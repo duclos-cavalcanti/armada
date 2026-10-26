@@ -20,7 +20,7 @@
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use domain::ports::Tracker;
-use domain::{ConvoyKey, TicketKey, TicketStatus, TrackerTicket};
+use domain::{ConvoyKey, TicketDetail, TicketDraft, TicketKey, TicketStatus, TrackerTicket};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -70,7 +70,7 @@ impl FsTracker {
         self.dir.join(format!("{}.md", key.0))
     }
 
-    fn read(&self, key: &TicketKey) -> Result<TicketFile> {
+    fn load(&self, key: &TicketKey) -> Result<TicketFile> {
         let path = self.path(key);
         let text = std::fs::read_to_string(&path).with_context(|| format!("ticket {}: {}", key.0, path.display()))?;
         parse(&text).with_context(|| format!("ticket {}", path.display()))
@@ -87,7 +87,7 @@ impl FsTracker {
 
     /// Read-modify-write one ticket's header.
     fn update(&self, key: &TicketKey, edit: impl FnOnce(&mut Header)) -> Result<()> {
-        let mut t = self.read(key)?;
+        let mut t = self.load(key)?;
         let before = t.header.clone();
         edit(&mut t.header);
         if t.header != before {
@@ -106,7 +106,7 @@ impl FsTracker {
             .collect();
         paths.sort();
         for path in paths {
-            match self.key_of(&path).and_then(|key| Ok((key.clone(), self.read(&key)?))) {
+            match self.key_of(&path).and_then(|key| Ok((key.clone(), self.load(&key)?))) {
                 Ok(ticket) => good.push(ticket),
                 Err(e) => bad.push((path, e)),
             }
@@ -184,7 +184,7 @@ impl Tracker for FsTracker {
     }
 
     fn get(&self, key: &TicketKey) -> Result<TrackerTicket> {
-        Ok(self.to_ticket(key.clone(), &self.read(key)?))
+        Ok(self.to_ticket(key.clone(), &self.load(key)?))
     }
 
     fn transition(&self, key: &TicketKey, to: TicketStatus) -> Result<()> {
@@ -192,7 +192,7 @@ impl Tracker for FsTracker {
     }
 
     fn assigned_to_peer(&self, key: &TicketKey) -> Result<bool> {
-        Ok(self.read(key)?.header.assignee.is_some_and(|a| a != self.user))
+        Ok(self.load(key)?.header.assignee.is_some_and(|a| a != self.user))
     }
 
     fn claim(&self, key: &TicketKey) -> Result<()> {
@@ -201,12 +201,59 @@ impl Tracker for FsTracker {
     }
 
     fn parent_of(&self, key: &TicketKey) -> Result<Option<TicketKey>> {
-        Ok(self.read(key)?.header.parent.as_deref().and_then(|p| TicketKey::parse(p).ok()))
+        Ok(self.load(key)?.header.parent.as_deref().and_then(|p| TicketKey::parse(p).ok()))
     }
 
     fn subtasks(&self, parent: &TicketKey) -> Result<Vec<TicketStatus>> {
         let (good, _) = self.scan()?;
         Ok(good.iter().filter(|(_, t)| t.header.parent.as_deref() == Some(&parent.0)).map(|(_, t)| t.header.status).collect())
+    }
+
+    fn read(&self, key: &TicketKey) -> Result<TicketDetail> {
+        let t = self.load(key)?;
+        Ok(TicketDetail { kind: t.header.kind.clone(), description: t.body.clone(), ticket: self.to_ticket(key.clone(), &t) })
+    }
+
+    fn create(&self, d: &TicketDraft) -> Result<TicketKey> {
+        // The next number after every <PREFIX>-N file name in the folder, bad files included, so a
+        // new ticket never takes the name of one that failed to parse.
+        let names = std::fs::read_dir(&self.dir).with_context(|| format!("reading tickets in {}", self.dir.display()))?;
+        let last = names
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter_map(|p| self.key_of(&p).ok())
+            .filter_map(|k| k.0.rsplit_once('-').and_then(|(_, n)| n.parse::<u64>().ok()))
+            .max()
+            .unwrap_or(0);
+        let key = TicketKey(format!("{}-{}", self.prefix, last + 1));
+        let ticket = TicketFile {
+            header: Header {
+                title: d.title.clone(),
+                kind: d.kind.clone(),
+                status: TicketStatus::Todo,
+                convoy: d.convoy.as_ref().map(|c| c.0.clone()),
+                blocked_by: d.blocked_by.iter().map(|b| b.0.clone()).collect(),
+                assignee: None,
+                parent: None,
+            },
+            body: d.description.clone(),
+        };
+        // create_new: fail rather than overwrite if the name was taken in the meantime.
+        let path = self.path(&key);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .with_context(|| format!("creating {}", path.display()))?;
+        std::io::Write::write_all(&mut file, render(&ticket)?.as_bytes())?;
+        Ok(key)
+    }
+
+    fn block(&self, key: &TicketKey, by: &TicketKey) -> Result<()> {
+        self.update(key, |h| {
+            if !h.blocked_by.contains(&by.0) {
+                h.blocked_by.push(by.0.clone());
+            }
+        })
     }
 }
 
@@ -266,6 +313,26 @@ mod tests {
         assert_eq!(t.board().unwrap().len(), 1, "only the good ticket");
         let e = t.preflight().unwrap_err().to_string();
         assert!(e.contains("2 bad ticket file(s)"), "{e}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn creates_the_next_numbered_ticket_and_blocks_it() {
+        let (t, dir) = tracker("create", &[("ARMT-4.md", ARMT_4), ("ARMT-9.md", "a bad file still holds its number")]);
+        let draft = TicketDraft {
+            title: "Add mul".into(),
+            kind: "story".into(),
+            description: "## Outcome\n\nmul works.\n".into(),
+            convoy: Some(ConvoyKey("ARMT-1".into())),
+            blocked_by: vec![],
+        };
+        let key = t.create(&draft).unwrap();
+        assert_eq!(key, TicketKey("ARMT-10".into()), "after the highest number, bad files included");
+        t.block(&key, &TicketKey("ARMT-4".into())).unwrap();
+        t.block(&key, &TicketKey("ARMT-4".into())).unwrap(); // idempotent
+        let d = t.read(&key).unwrap();
+        assert_eq!((d.kind.as_str(), d.description.as_str()), ("story", "## Outcome\n\nmul works.\n"));
+        assert_eq!((d.ticket.status, d.ticket.blocked_by.clone()), (TicketStatus::Todo, vec![TicketKey("ARMT-4".into())]));
         let _ = std::fs::remove_dir_all(dir);
     }
 

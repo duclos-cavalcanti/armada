@@ -378,6 +378,25 @@ pub struct TrackerTicket {
     pub blocked_by: Vec<TicketKey>,
 }
 
+/// A ticket's full text, as `fleetc ticket <KEY>` shows it: the board facts plus its type
+/// (`story`, `bug`, `task`, `epic`, …) and its description.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TicketDetail {
+    pub ticket: TrackerTicket,
+    pub kind: String,
+    pub description: String,
+}
+
+/// A new ticket, as `fleetc ticket new` asks the tracker to create it. It starts in To Do.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TicketDraft {
+    pub title: String,
+    pub kind: String,
+    pub description: String,
+    pub convoy: Option<ConvoyKey>,
+    pub blocked_by: Vec<TicketKey>,
+}
+
 /// A wall needing operator/SME judgment. No `kind` (categorized live at drain),
 /// no inspector `review`. Resolution folded in via `ended_at`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

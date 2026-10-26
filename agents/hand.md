@@ -38,8 +38,8 @@ hand). Ground it and brief the operator — this visibility is what they came fo
 TICKET="${FLEET_TICKET:-}"
 ```
 
-- **The ticket** — read it from Jira (Atlassian MCP); its acceptance criteria are the
-  definition of done.
+- **The ticket** — `fleetc ticket "$TICKET"` (from whichever tracker the project uses);
+  its acceptance criteria are the definition of done.
 - **The project** — `MANIFEST.md`, the ADDs for the area you're touching, `CLAUDE.md`,
   and the code on the branch. Read before briefing.
 

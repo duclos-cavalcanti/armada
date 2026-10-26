@@ -49,6 +49,7 @@ fn run() -> Result<()> {
         Some("review") => review(&args[1..]),
         Some("rebase") => rebase(&args[1..]),
         Some("launch") => launch(&args[1..]),
+        Some("ticket") => ticket(&args[1..]),
         Some("settings") => settings(&args[1..]),
         Some("project") => project(),
         Some("cost") => cost(&args[1..]),
@@ -71,6 +72,9 @@ fn run() -> Result<()> {
                  fleetc transcript --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] [--open]   (resolve a cog's transcript)\n  \
                  fleetc review   --iid <N>         (an MR's fresh review surface: open-thread count + floating notes)\n  \
                  fleetc rebase   --iid <N>         (server-side rebase an MR)\n  \
+                 fleetc ticket   <KEY-N>                (a ticket's full text: type, status, links, description)\n  \
+                 fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (prints the new key)\n  \
+                 fleetc ticket   block <KEY-N> --by <KEY-N>   (record an 'is blocked by' edge)\n  \
                  fleetc launch   --title <t> --body <text> [--ticket <KEY-N>] [--target <branch>] [--draft] [--worktree <path>]   (open the MR for the worktree's branch; prints its URL)\n  \
                  fleetc settings [list | set <key> <value>]   (live config levers; no restart)\n  \
                  fleetc project                   (the project checkout's path, from fleet.toml)\n  \
@@ -598,6 +602,94 @@ fn launch(args: &[String]) -> Result<()> {
     })
 }
 
+/// `fleetc ticket <KEY-N> | new … | block …` — read or write tickets through the project's tracker
+/// (Jira, the filesystem, …): one verb, whichever adapter fleet.toml picks.
+fn ticket(args: &[String]) -> Result<()> {
+    match args.first().map(String::as_str) {
+        Some("new") => ticket_new(&args[1..]),
+        Some("block") => ticket_block(&args[1..]),
+        Some(key) if !key.starts_with('-') => ticket_show(&ticket_key(key, "ticket")?),
+        _ => bail!("usage: fleetc ticket <KEY-N> | new --title <t> --type <type> … | block <KEY-N> --by <KEY-N>"),
+    }
+}
+
+/// Print a ticket's full text: a facts line, the title, its links, then the description.
+fn ticket_show(key: &str) -> Result<()> {
+    let (code, body) = wire::get_json(&socket(), &format!("/ticket?ticket={key}"))?;
+    if code != 200 {
+        bail!("fleetd ({code}): {body}");
+    }
+    let d: serde_json::Value = serde_json::from_str(&body)?;
+    print!("{}", render_ticket(&d));
+    Ok(())
+}
+
+fn render_ticket(d: &serde_json::Value) -> String {
+    let t = &d["ticket"];
+    let s = |v: &serde_json::Value| v.as_str().unwrap_or("").to_string();
+    let mut facts = vec![s(&t["key"]), s(&d["kind"]), s(&t["status"])];
+    if let Some(a) = t["assignee"].as_str() {
+        facts.push(format!("assignee {a}"));
+    }
+    let mut links = Vec::new();
+    if let Some(c) = t["convoy"].as_str() {
+        links.push(format!("convoy {c}"));
+    }
+    let blockers: Vec<String> = t["blocked_by"].as_array().into_iter().flatten().map(s).collect();
+    if !blockers.is_empty() {
+        links.push(format!("blocked by {}", blockers.join(", ")));
+    }
+    let mut out = format!("{}\n{}\n", facts.join(" · "), s(&t["title"]));
+    if !links.is_empty() {
+        out.push_str(&format!("{}\n", links.join(" · ")));
+    }
+    let description = s(&d["description"]);
+    if !description.trim().is_empty() {
+        out.push_str(&format!("\n{}\n", description.trim_end()));
+    }
+    out
+}
+
+/// `fleetc ticket new --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]`
+/// — create a ticket in To Do; `--body -` reads the description from stdin. Prints the new key.
+fn ticket_new(args: &[String]) -> Result<()> {
+    let (mut title, mut kind, mut convoy, mut body) = (None, None, None, String::new());
+    let mut blocked_by = Vec::new();
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
+        match flag.as_str() {
+            "--title" => title = Some(take()?),
+            "--type" => kind = Some(take()?),
+            "--convoy" => convoy = Some(convoy_key(&take()?, "ticket new")?),
+            "--blocked-by" => blocked_by.push(ticket_key(&take()?, "ticket new")?),
+            "--body" => body = take()?,
+            other => bail!("unknown flag: {other}"),
+        }
+    }
+    if body == "-" {
+        body.clear();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
+    }
+    post_and_print("/ticket-new", &wire::TicketNewCmd {
+        title: title.ok_or_else(|| anyhow!("--title required"))?,
+        kind: kind.ok_or_else(|| anyhow!("--type required (story, bug, task, epic, …)"))?,
+        description: body,
+        convoy,
+        blocked_by,
+    })
+}
+
+/// `fleetc ticket block <KEY-N> --by <KEY-N>` — record that the first ticket is blocked by the second.
+fn ticket_block(args: &[String]) -> Result<()> {
+    let key = ticket_key(args.first().ok_or_else(|| anyhow!("ticket block needs a <KEY-N>"))?, "ticket block")?;
+    let by = match &args[1..] {
+        [flag, by] if flag == "--by" => ticket_key(by, "ticket block")?,
+        _ => bail!("usage: fleetc ticket block <KEY-N> --by <KEY-N>"),
+    };
+    submit("/ticket-block", &wire::TicketBlockCmd { ticket: key, by })
+}
+
 /// POST `body` to fleetd and print its reply body (an action whose reply is the result).
 fn post_and_print<T: serde::Serialize>(path: &str, body: &T) -> Result<()> {
     let socket = socket();
@@ -714,6 +806,16 @@ fn cost(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renders_a_ticket_as_text() {
+        let d = serde_json::json!({
+            "ticket": {"key": "ARMT-4", "title": "Add neg", "status": "todo", "assignee": null, "convoy": "ARMT-1", "blocked_by": ["ARMT-3"]},
+            "kind": "story",
+            "description": "## Outcome\n\nneg works.\n"
+        });
+        assert_eq!(render_ticket(&d), "ARMT-4 · story · todo\nAdd neg\nconvoy ARMT-1 · blocked by ARMT-3\n\n## Outcome\n\nneg works.\n");
+    }
     use domain::{EntityKind, Event, EventKind, Seq};
 
     fn tick(payload: serde_json::Value) -> Event {

@@ -85,6 +85,9 @@ fn handle(
         (Some("GET"), Some(p)) if p.starts_with("/review") => handle_review(cmds, p),
         (Some("POST"), Some(p)) if p.starts_with("/rebase") => handle_rebase(cmds, p),
         (Some("POST"), Some("/launch")) => handle_launch(&request, cmds, deployment),
+        (Some("GET"), Some(p)) if p.starts_with("/ticket?") => handle_ticket_view(cmds, p),
+        (Some("POST"), Some("/ticket-new")) => handle_ticket_new(&request, cmds),
+        (Some("POST"), Some("/ticket-block")) => handle_ticket_block(&request, cmds),
         (Some("GET"), Some("/settings")) => handle_settings_list(cmds),
         (Some("POST"), Some("/settings")) => handle_setting(&request, cmds),
         _ => http_response("404 Not Found", "text/plain", "not found"),
@@ -343,6 +346,79 @@ fn handle_rebase(cmds: &Sender<Command>, path: &str) -> String {
     }
     match reply_rx.recv() {
         Ok(Ok(())) => http_response("200 OK", "text/plain", "rebased"),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
+/// `GET /ticket?ticket=<KEY>` — a ticket's full text, read through the tracker.
+fn handle_ticket_view(cmds: &Sender<Command>, path: &str) -> String {
+    let key = path.split_once("?ticket=").map(|(_, rest)| rest.split('&').next().unwrap_or("").trim()).unwrap_or("");
+    let ticket = match parse_ticket(key) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::GetTicket { ticket, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(detail)) => http_response("200 OK", "application/json", &serde_json::to_string(&detail).unwrap_or_default()),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
+/// `POST /ticket-new` — create a ticket; reply with its key.
+fn handle_ticket_new(request: &str, cmds: &Sender<Command>) -> String {
+    let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+    let dto: wire::TicketNewCmd = match serde_json::from_str(body) {
+        Ok(d) => d,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
+    };
+    let convoy = match dto.convoy.as_deref().map(ConvoyKey::parse).transpose() {
+        Ok(c) => c,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &e.to_string()),
+    };
+    let blocked_by = match dto.blocked_by.iter().map(|b| parse_ticket(b)).collect::<Result<Vec<_>, _>>() {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    if dto.title.trim().is_empty() {
+        return http_response("400 Bad Request", "text/plain", "a ticket needs a title");
+    }
+    let draft = domain::TicketDraft { title: dto.title, kind: dto.kind, description: dto.description, convoy, blocked_by };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::NewTicket { draft, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(key)) => http_response("200 OK", "text/plain", &key),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
+/// `POST /ticket-block` — record that a ticket is blocked by another.
+fn handle_ticket_block(request: &str, cmds: &Sender<Command>) -> String {
+    let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+    let dto: wire::TicketBlockCmd = match serde_json::from_str(body) {
+        Ok(d) => d,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
+    };
+    let (ticket, by) = match (parse_ticket(&dto.ticket), parse_ticket(&dto.by)) {
+        (Ok(t), Ok(b)) => (t, b),
+        (Err(r), _) | (_, Err(r)) => return r,
+    };
+    if ticket == by {
+        return http_response("400 Bad Request", "text/plain", "a ticket can't block itself");
+    }
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::BlockTicket { ticket, by, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(())) => http_response("200 OK", "text/plain", "ok"),
         Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
         Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
     }
@@ -634,6 +710,9 @@ mod tests {
                     Command::GetReview { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetSettings { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Launch { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::GetTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::NewTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                 }
             }
         });
@@ -680,6 +759,9 @@ mod tests {
                     Command::GetReview { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetSettings { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Launch { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::GetTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::NewTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                 }
             }
         });

@@ -60,7 +60,8 @@ DAG, the blockers, the holds — and handed you a verdict per ticket:
 For every ticket that is **`clean` and not `dispatched`**, make the one call fleetd
 can't — a grooming glance — then act on it:
 
-1. **Read it** (Jira) and judge it: are the acceptance criteria clear enough to build?
+1. **Read it** (`fleetc ticket <TICKET>`) and judge it against `/fleet-ready-done`'s
+   Ready: is the goal clear and are the acceptance criteria testable enough to build?
 2. **Well-formed** → dispatch it, forking off the right base:
    - **`clean`** → fork the default branch: `/fleet-berth <TICKET>` emits the path, then
      `fleetc dispatch --ticket <TICKET> --ac "<summary>" --worktree <path>`.

@@ -8,7 +8,7 @@
 
 use anyhow::{ensure, Context, Result};
 use domain::ports::Tracker;
-use domain::{ConvoyKey, TicketKey, TicketStatus, TrackerTicket};
+use domain::{ConvoyKey, TicketDetail, TicketDraft, TicketKey, TicketStatus, TrackerTicket};
 use std::process::Command;
 
 /// `[tracker]` in fleet.toml: the Jira `project` (its key is the ticket prefix) and the optional
@@ -162,6 +162,83 @@ impl Tracker for JiraTracker {
         // All issues whose parent is this one → just their statuses (the roll-up needs no more).
         Ok(self.all_issues(&format!("parent = {}", parent.0))?.into_iter().map(|t| t.status).collect())
     }
+
+    fn read(&self, key: &TicketKey) -> Result<TicketDetail> {
+        let issue: serde_json::Value = serde_json::from_str(&self.jira(&["issue", "view", &key.0, "--raw"])?)?;
+        detail_from_issue(&issue).with_context(|| format!("jira issue view {}: unexpected shape", key.0))
+    }
+
+    fn create(&self, d: &TicketDraft) -> Result<TicketKey> {
+        let kind = capitalized(&d.kind); // jira's type names: Story, Bug, Task, Epic
+        let mut args = vec!["issue", "create", "-p", &self.project, "-t", &kind, "-s", &d.title, "-b", &d.description];
+        if let Some(convoy) = &d.convoy {
+            args.extend(["-P", &convoy.0]);
+        }
+        args.extend(["--no-input", "--raw"]);
+        let out = self.jira(&args)?;
+        let key = serde_json::from_str::<serde_json::Value>(&out)
+            .ok()
+            .and_then(|v| v.get("key").and_then(|k| k.as_str()).and_then(|k| TicketKey::parse(k).ok()))
+            .or_else(|| TicketKey::find_in(&out, &self.project))
+            .with_context(|| format!("jira issue create printed no {}-N key: {out}", self.project))?;
+        for blocker in &d.blocked_by {
+            self.block(&key, blocker)?;
+        }
+        Ok(key)
+    }
+
+    fn block(&self, key: &TicketKey, by: &TicketKey) -> Result<()> {
+        // `jira issue link INWARD OUTWARD Blocks` reads "INWARD blocks OUTWARD" (Jira's link
+        // convention), so "key is blocked by `by`" is `link by key`. UNVERIFIED against a live Jira.
+        if self.get(key)?.blocked_by.contains(by) {
+            return Ok(()); // idempotent: the edge exists
+        }
+        self.jira(&["issue", "link", &by.0, &key.0, "Blocks"]).map(drop)
+    }
+}
+
+/// "story" → "Story".
+fn capitalized(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+/// One `jira issue view --raw` issue → its full text: the board facts, the issue type, and the
+/// description (Jira Cloud's ADF document flattened to text; a plain string as is).
+fn detail_from_issue(issue: &serde_json::Value) -> Option<TicketDetail> {
+    let f = issue.get("fields")?;
+    Some(TicketDetail {
+        ticket: issue_to_ticket(issue)?,
+        kind: f.pointer("/issuetype/name").and_then(|n| n.as_str()).unwrap_or("").to_lowercase(),
+        description: match f.get("description") {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(doc) if doc.is_object() => adf_text(doc).trim_end().to_string(),
+            _ => String::new(),
+        },
+    })
+}
+
+/// Flatten an Atlassian Document Format node to plain text: text nodes as is, a line break after
+/// each block (paragraph, heading, list item, code block), `- ` before list items.
+fn adf_text(node: &serde_json::Value) -> String {
+    let kind = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    if kind == "text" {
+        return node.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
+    }
+    if kind == "hardBreak" {
+        return "\n".into();
+    }
+    let inner: String = node.get("content").and_then(|c| c.as_array()).into_iter().flatten().map(adf_text).collect();
+    match kind {
+        "heading" => {
+            let level = node.pointer("/attrs/level").and_then(|l| l.as_u64()).unwrap_or(2) as usize;
+            format!("{} {inner}\n\n", "#".repeat(level))
+        }
+        "paragraph" | "codeBlock" => format!("{inner}\n\n"),
+        "listItem" => format!("- {}\n", inner.trim_end()),
+        "bulletList" | "orderedList" => format!("{inner}\n"),
+        _ => inner,
+    }
 }
 
 /// The first issue's `fields.parent.key` from a `--raw` page, if present.
@@ -262,6 +339,27 @@ fn jira_status_name(s: TicketStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_an_issue_with_an_adf_description() {
+        let issue = serde_json::json!({
+            "key": "PROJ-7",
+            "fields": {
+                "summary": "Add neg", "status": {"name": "To Do"}, "issuetype": {"name": "Story"},
+                "description": {"type": "doc", "content": [
+                    {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Outcome"}]},
+                    {"type": "paragraph", "content": [{"type": "text", "text": "neg works."}]},
+                    {"type": "bulletList", "content": [
+                        {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "AC one"}]}]}
+                    ]}
+                ]}
+            }
+        });
+        let d = detail_from_issue(&issue).unwrap();
+        assert_eq!((d.ticket.key.0.as_str(), d.kind.as_str()), ("PROJ-7", "story"));
+        assert_eq!(d.description, "## Outcome\n\nneg works.\n\n- AC one");
+        assert_eq!(capitalized("story"), "Story");
+    }
 
     // Real jira --raw / REST field shape (trimmed).
     const SAMPLE: &str = r#"{"issues":[

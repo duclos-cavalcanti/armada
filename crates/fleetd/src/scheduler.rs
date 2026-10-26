@@ -44,6 +44,8 @@ type PacketReply = std::sync::mpsc::Sender<std::result::Result<Packet, String>>;
 type ConvoyReply = std::sync::mpsc::Sender<std::result::Result<ConvoyView, String>>;
 /// An MR-review read's reply — the fresh open-thread count + floating notes.
 type ReviewReply = std::sync::mpsc::Sender<std::result::Result<domain::ReviewState, String>>;
+/// A ticket read's reply — its full text.
+type TicketReply = std::sync::mpsc::Sender<std::result::Result<domain::TicketDetail, String>>;
 /// A launch's reply — the new MR's URL.
 type UrlReply = std::sync::mpsc::Sender<std::result::Result<String, String>>;
 /// A settings-list read's reply — every live lever's effective value + source.
@@ -68,6 +70,9 @@ pub enum Command {
     GetReview { iid: i64, reply: ReviewReply }, // a read: an MR's fresh review surface (forge)
     Rebase { iid: i64, reply: Reply },          // an action: server-side rebase an MR (forge)
     Launch { launch: Launch, reply: UrlReply }, // an action: open a ticket's MR (forge)
+    GetTicket { ticket: TicketKey, reply: TicketReply }, // a read: a ticket's full text (tracker)
+    NewTicket { draft: domain::TicketDraft, reply: UrlReply }, // an action: create a ticket → its key (tracker)
+    BlockTicket { ticket: TicketKey, by: TicketKey, reply: Reply }, // an action: add an "is blocked by" edge (tracker)
     SetSetting { key: String, value: String, reply: Reply }, // live-config overwrite (validated here)
     GetSettings { reply: SettingsReply },                    // a read: every live lever + source
 }
@@ -215,6 +220,15 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         Command::Launch { launch: l, reply } => {
             let res = launch(ledger, forge, l).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
+        }
+        Command::GetTicket { ticket, reply } => {
+            let _ = reply.send(tracker.read(&ticket).map_err(|e| format!("{e:#}")));
+        }
+        Command::NewTicket { draft, reply } => {
+            let _ = reply.send(tracker.create(&draft).map(|k| k.0).map_err(|e| format!("{e:#}")));
+        }
+        Command::BlockTicket { ticket, by, reply } => {
+            let _ = reply.send(tracker.block(&ticket, &by).map_err(|e| format!("{e:#}")));
         }
         Command::SetSetting { key, value, reply } => {
             // Shape check (known lever + parseable type) here, authoritative, before the write.
@@ -591,6 +605,15 @@ mod tests {
         }
         fn subtasks(&self, _: &TicketKey) -> Result<Vec<TicketStatus>> {
             Ok(vec![])
+        }
+        fn read(&self, _: &TicketKey) -> Result<domain::TicketDetail> {
+            unimplemented!()
+        }
+        fn create(&self, _: &domain::TicketDraft) -> Result<TicketKey> {
+            unimplemented!()
+        }
+        fn block(&self, _: &TicketKey, _: &TicketKey) -> Result<()> {
+            Ok(())
         }
     }
 

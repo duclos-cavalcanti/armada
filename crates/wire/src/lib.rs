@@ -87,6 +87,25 @@ pub struct LaunchCmd {
     pub draft: bool,
 }
 
+/// Create a ticket (`POST /ticket-new`, `fleetc ticket new`): the tracker picks the key.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TicketNewCmd {
+    pub title: String,
+    pub kind: String,
+    pub description: String,
+    #[serde(default)]
+    pub convoy: Option<String>,
+    #[serde(default)]
+    pub blocked_by: Vec<String>,
+}
+
+/// Record that `ticket` is blocked by `by` (`POST /ticket-block`, `fleetc ticket block`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TicketBlockCmd {
+    pub ticket: String,
+    pub by: String,
+}
+
 /// An operator message pushed into a cog's tmux pane (`POST /send`). The target is the same per-cog
 /// addressing as the control verbs (worker/sailor/hand by `ticket`, a captain by `convoy`, the
 /// lookout as the singleton); `message` is typed into the pane and submitted (send-keys + Enter), so

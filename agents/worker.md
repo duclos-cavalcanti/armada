@@ -32,8 +32,9 @@ the project's canon before you write any code:
 TICKET="$FLEET_TICKET"
 ```
 
-- **The ticket** — read it from Jira (Atlassian MCP). Its acceptance criteria are
-  your definition of done.
+- **The ticket** — `fleetc ticket "$TICKET"` (its type, status, links, and description,
+  from whichever tracker the project uses). Its acceptance criteria are your definition
+  of done; `/fleet-ready-done` is how an MR meets them.
 - **The project** — `MANIFEST.md` (conventions + coordinates), the ADDs for the
   area you're touching, and `CLAUDE.md`. Read before implementing.
 
