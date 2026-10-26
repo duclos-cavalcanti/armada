@@ -10,7 +10,6 @@
 use crate::config::Config;
 use crate::settings;
 use crate::tmux::TmuxHost;
-use crate::tracker::JiraTracker;
 use crate::{context, now_rfc3339, reconcile, sync, Snapshot};
 use anyhow::{anyhow, Context, Result};
 use domain::ports::{
@@ -80,7 +79,7 @@ pub fn run(
     ledger: Ledger,
     host: TmuxHost,
     forge: Box<dyn Forge + Send>,
-    tracker: JiraTracker,
+    tracker: Box<dyn Tracker + Send>,
     snapshot: Snapshot,
     cfg: Config,
     cmds: Receiver<Command>,
@@ -98,7 +97,7 @@ pub fn run(
             next_poll = now + Duration::from_secs(settings::poll_secs(&cfg, &ledger));
         }
         if now >= next_sync {
-            if let Err(e) = tick_sync(&ledger, forge.as_ref(), &tracker) {
+            if let Err(e) = tick_sync(&ledger, forge.as_ref(), tracker.as_ref()) {
                 eprintln!("fleetd: sync tick error: {e}");
             }
             next_sync = now + Duration::from_secs(settings::sync_secs(&cfg, &ledger));
@@ -109,7 +108,7 @@ pub fn run(
             // extra tmux fan-out).
             let dry_run = settings::dry_run(&cfg, &ledger);
             let cogs = snapshot.lock().unwrap().clone();
-            match reconcile::tick(&ledger, &tracker, &host, forge.as_ref(), &cogs, &cfg.project.path, dry_run) {
+            match reconcile::tick(&ledger, tracker.as_ref(), &host, forge.as_ref(), &cogs, &cfg.project.path, dry_run) {
                 Ok(n) if n > 0 => {
                     let mode = if dry_run { "dry-run" } else { "live" };
                     eprintln!("fleetd: reconcile ({mode}) {n} actions");
@@ -121,7 +120,7 @@ pub fn run(
         }
         // Wait for a write up to the tick quantum, then loop to re-check the tickers.
         match cmds.recv_timeout(Duration::from_millis(500)) {
-            Ok(cmd) => apply(&ledger, &tracker, &host, forge.as_ref(), &cfg, cmd),
+            Ok(cmd) => apply(&ledger, tracker.as_ref(), &host, forge.as_ref(), &cfg, cmd),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break, // server gone → nothing left to do
         }
@@ -147,7 +146,7 @@ fn ensure_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey) -> Res
     TicketRepo::sync(ledger, &tt, &now_rfc3339())
 }
 
-fn apply(ledger: &Ledger, tracker: &JiraTracker, host: &TmuxHost, forge: &dyn Forge, cfg: &Config, cmd: Command) {
+fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Forge, cfg: &Config, cmd: Command) {
     match cmd {
         Command::RecordStatus { cog, ticket, state, last_action, reply } => {
             let res = record_status(ledger, cog, &ticket, state, last_action)

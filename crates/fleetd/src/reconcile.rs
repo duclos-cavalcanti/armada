@@ -417,7 +417,7 @@ fn convoy_has_work(ledger: &Ledger, convoy: &ConvoyKey) -> Result<bool> {
 /// nothing (identical to `tick_dry_run`); `dry_run=false` applies each action, recording
 /// what ran and what failed — a single action failing is never fatal, the next tick
 /// retries (converge's posture). Returns the count applied (dry-run: the count planned).
-pub fn tick<T: Tracker, H: SessionHost, F: Forge + ?Sized>(
+pub fn tick<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
     ledger: &Ledger,
     tracker: &T,
     host: &H,
@@ -458,7 +458,7 @@ pub fn tick<T: Tracker, H: SessionHost, F: Forge + ?Sized>(
 
 /// Dispatch one planned action to its port-driven effect. Spawn is live; handoff/reap/heal
 /// land in their own increments.
-fn execute<T: Tracker, H: SessionHost, F: Forge + ?Sized>(
+fn execute<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
     action: &Action,
     ledger: &Ledger,
     tracker: &T,
@@ -486,7 +486,7 @@ fn execute<T: Tracker, H: SessionHost, F: Forge + ?Sized>(
 /// emit `SessionStarted`. A missing worktree aborts the launch (recorded as a failure — the
 /// producer must materialise it), mirroring converge's `dispatch_missing_worktree`. Jira is
 /// claimed AFTER the worktree check, so a missing worktree never moves the ticket.
-fn spawn<T: Tracker, H: SessionHost>(
+fn spawn<T: Tracker + ?Sized, H: SessionHost>(
     ledger: &Ledger,
     tracker: &T,
     host: &H,
@@ -604,7 +604,7 @@ pub(crate) fn spawn_ticketless_hand<H: SessionHost>(ledger: &Ledger, host: &H, w
 /// the builder (end its session + kill its tmux, best-effort — the builder may already be dead,
 /// which is a finish, not an error). The sailor is NOT launched here — `LaunchSailor` owns that,
 /// firing once the ship appears in the armada sync.
-fn handoff<T: Tracker, H: SessionHost, F: Forge + ?Sized>(
+fn handoff<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
     ledger: &Ledger,
     tracker: &T,
     host: &H,
@@ -661,7 +661,7 @@ fn handoff<T: Tracker, H: SessionHost, F: Forge + ?Sized>(
 /// terminal (the merged-ship case moves In QA → Done; a terminal ticket is idempotently
 /// skipped), end every live session + kill its tmux, reclaim the now-dead worktree, and retire the
 /// order (the fulfilled dispatch intent — converge's "reap packet").
-fn reap<T: Tracker, H: SessionHost>(
+fn reap<T: Tracker + ?Sized, H: SessionHost>(
     ledger: &Ledger,
     tracker: &T,
     host: &H,
@@ -719,7 +719,7 @@ fn reap<T: Tracker, H: SessionHost>(
 /// terminal, close the empty parent container (the parent carries no work of its own). A no-op for
 /// a non-sub-task (`parent_of` → None) or an Epic (`subtasks` empty — the guard). Fully live: the
 /// completeness check must be authoritative, so it can't be cached off the sprint-scoped ledger.
-fn roll_up_parent<T: Tracker>(tracker: &T, child: &TicketKey) -> Result<()> {
+fn roll_up_parent<T: Tracker + ?Sized>(tracker: &T, child: &TicketKey) -> Result<()> {
     let Some(parent) = tracker.parent_of(child)? else { return Ok(()) };
     let subs = tracker.subtasks(&parent)?;
     let all_done =

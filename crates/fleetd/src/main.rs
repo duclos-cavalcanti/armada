@@ -7,9 +7,11 @@
 
 mod collector;
 mod config;
+mod filesystem;
 mod git;
 mod github;
 mod gitlab;
+mod jira;
 mod otlp;
 mod preflight;
 mod reconcile;
@@ -18,7 +20,6 @@ mod server;
 mod settings;
 mod sync;
 mod tmux;
-mod tracker;
 
 use anyhow::Result;
 use domain::ports::{Forge, SessionHost, SessionRepo, Tracker};
@@ -80,7 +81,7 @@ fn main() -> Result<()> {
     let cfg = config::Config::load(&project)?;
     match args.first().map(String::as_str) {
         Some("sync") => run_sync(&project, &cfg),
-        Some("preflight") => preflight(&project, &cfg, forge(&cfg).as_ref(), &tracker(&cfg), &TmuxHost::new()),
+        Some("preflight") => preflight(&project, &cfg, forge(&cfg).as_ref(), tracker(&cfg).as_ref(), &TmuxHost::new()),
         None => run_daemon(&project, cfg),
         Some(other) => anyhow::bail!("unknown command {other:?} — usage: fleetd [-C <dir>] [sync | preflight]"),
     }
@@ -95,8 +96,23 @@ fn forge(cfg: &config::Config) -> Box<dyn Forge + Send> {
         Some(config::ForgeKind::Gitlab) | None => Box::new(gitlab::GlabForge::new(project, prefix)),
     }
 }
-fn tracker(cfg: &config::Config) -> tracker::JiraTracker {
-    tracker::JiraTracker::new(&cfg.tracker.project, cfg.tracker.claim_label.clone())
+fn tracker(cfg: &config::Config) -> Box<dyn Tracker + Send> {
+    let t = &cfg.tracker;
+    match t.kind {
+        Some(config::TrackerKind::Filesystem) => {
+            let dir = t.path.clone().unwrap_or_default(); // resolved by Config::load
+            let user = t.user.clone().or_else(git_user).unwrap_or_else(|| "me".into());
+            Box::new(filesystem::FsTracker::new(dir, &t.project, user))
+        }
+        Some(config::TrackerKind::Jira) | None => Box::new(jira::JiraTracker::new(&t.project, t.claim_label.clone())),
+    }
+}
+
+/// `git config user.name` — the filesystem tracker's default "me".
+fn git_user() -> Option<String> {
+    let out = std::process::Command::new("git").args(["config", "user.name"]).output().ok()?;
+    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !name.is_empty()).then_some(name)
 }
 
 /// Every adapter's preflight + the project's runtime state + its checkout, as one checklist
@@ -124,7 +140,7 @@ fn run_sync(project: &wire::Project, cfg: &config::Config) -> Result<()> {
     let ledger = Ledger::open(&project.ledger())?;
     let now = now_rfc3339();
     // Board first so ships can link their ticket FK.
-    let tickets = sync::sync_board(&ledger, &tracker(cfg), &now)?;
+    let tickets = sync::sync_board(&ledger, tracker(cfg).as_ref(), &now)?;
     let ships = sync::sync_armada(&ledger, forge(cfg).as_ref(), &now)?;
     println!("fleetd sync: {tickets} tickets + {ships} ships synced to the ledger");
     Ok(())
@@ -133,7 +149,7 @@ fn run_sync(project: &wire::Project, cfg: &config::Config) -> Result<()> {
 fn run_daemon(project: &wire::Project, cfg: config::Config) -> Result<()> {
     let (host, forge, tracker) = (TmuxHost::new(), forge(&cfg), tracker(&cfg));
     println!("fleetd: preflight · {}", project.root.display());
-    preflight(project, &cfg, forge.as_ref(), &tracker, &host)?;
+    preflight(project, &cfg, forge.as_ref(), tracker.as_ref(), &host)?;
     let ledger = Ledger::open(&project.ledger())?;
 
     // Seed the snapshot once so /context isn't empty before the first poll.

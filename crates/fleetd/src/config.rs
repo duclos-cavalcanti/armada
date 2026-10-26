@@ -79,21 +79,26 @@ pub enum ForgeKind {
     Github,
 }
 
-/// `[tracker]` in fleet.toml — which tracker adapter, its project, and the optional claim label.
+/// `[tracker]` in fleet.toml — which tracker adapter, its project, and the adapter's own settings.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct TrackerConfig {
     pub kind: Option<TrackerKind>,
     /// The tracker's project. For Jira its key is also the ticket key prefix (`PROJ` → `PROJ-12`).
     pub project: String,
-    /// A label a worker's claim adds to the ticket (a team convention); `None` = no label.
+    /// Jira: a label a worker's claim adds to the ticket (a team convention); `None` = no label.
     pub claim_label: Option<String>,
+    /// Filesystem: the folder of ticket files, relative to the project folder (default `tickets`).
+    pub path: Option<String>,
+    /// Filesystem: who "me" is — a claim assigns this user (default: `git config user.name`).
+    pub user: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TrackerKind {
     Jira,
+    Filesystem,
 }
 
 impl Default for Config {
@@ -149,6 +154,8 @@ impl Config {
             c.otel_addr = v;
         }
         c.project.path = resolve_project(&c.project.path, &project.root);
+        let tickets = c.tracker.path.as_deref().unwrap_or("tickets");
+        c.tracker.path = Some(resolve_project(tickets, &project.root));
         c.validate()?;
         Ok(c)
     }
@@ -165,7 +172,7 @@ impl Config {
                 self.forge.project
             );
         }
-        ensure!(self.tracker.kind.is_some(), "{path}: [tracker] kind is required (\"jira\")");
+        ensure!(self.tracker.kind.is_some(), "{path}: [tracker] kind is required (\"jira\" or \"filesystem\")");
         ensure!(
             domain::is_key_prefix(&self.tracker.project),
             "{path}: [tracker] project must be a key prefix like \"PROJ\" (or FLEET_TRACKER_PROJECT), got {:?}",
@@ -264,6 +271,13 @@ mod tests {
         assert_eq!(c.tracker.claim_label, None, "no label unless configured");
         let c: Config = toml::from_str(&format!("{FORGE}{TRACKER}claim_label = \"Team-X\"\n")).unwrap();
         assert_eq!(c.tracker.claim_label.as_deref(), Some("Team-X"));
+    }
+
+    #[test]
+    fn filesystem_tracker_parses_with_its_folder_and_user() {
+        let c: Config = toml::from_str(&format!("{FORGE}[tracker]\nkind = \"filesystem\"\nproject = \"ARMT\"\nuser = \"me\"\n")).unwrap();
+        assert_eq!((c.tracker.kind, c.ticket_prefix(), c.tracker.user.as_deref()), (Some(TrackerKind::Filesystem), "ARMT", Some("me")));
+        assert!(c.validate().is_ok());
     }
 
     #[test]

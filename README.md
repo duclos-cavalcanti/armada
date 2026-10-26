@@ -42,7 +42,8 @@ Integrations are chosen in `fleet.toml` (`[forge]`, `[tracker]`); initialize eac
 - **Forges:** GitLab — `glab auth login`. GitHub — `gh auth login`; enable "Allow auto-merge" and
   protect the default branch with your CI check. GitHub has no MR dependencies, so it doesn't stack.
 - **Trackers:** Jira — `jira init` (its board is the one claimed tickets join the active
-  sprint of). Filesystem — planned.
+  sprint of). Filesystem — no setup: a folder of `<KEY>.md` ticket files with a YAML header
+  (`[tracker] path`, default `tickets/` in the project folder).
 
 ### 2. Install
 
