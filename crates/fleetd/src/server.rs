@@ -85,6 +85,7 @@ fn handle(
         (Some("GET"), Some(p)) if p.starts_with("/review") => handle_review(cmds, p),
         (Some("POST"), Some(p)) if p.starts_with("/rebase") => handle_rebase(cmds, p),
         (Some("GET"), Some(p)) if p.starts_with("/ci?") => handle_ci(cmds, p),
+        (Some("POST"), Some("/reply")) => handle_reply(&request, cmds),
         (Some("POST"), Some(p)) if p.starts_with("/retry-ci?") => handle_retry_ci(cmds, p),
         (Some("POST"), Some("/launch")) => handle_launch(&request, cmds, deployment),
         (Some("POST"), Some("/arm")) => handle_arm(&request, cmds),
@@ -333,6 +334,27 @@ fn handle_review(cmds: &Sender<Command>, path: &str) -> String {
             let body = serde_json::to_string(&review).unwrap_or_else(|_| "{}".into());
             http_response("200 OK", "application/json", &body)
         }
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
+/// `POST /reply` — answer one review thread, resolving it when asked.
+fn handle_reply(request: &str, cmds: &Sender<Command>) -> String {
+    let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+    let cmd: wire::ReplyCmd = match serde_json::from_str(body) {
+        Ok(d) => d,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
+    };
+    if cmd.thread.trim().is_empty() || cmd.body.trim().is_empty() {
+        return http_response("400 Bad Request", "text/plain", "a reply needs a thread and a body");
+    }
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::Reply { cmd, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(())) => http_response("200 OK", "text/plain", "replied"),
         Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
         Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
     }
@@ -772,6 +794,7 @@ mod tests {
                     Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::Reply { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::RetryCi { reply, .. } => { let _ = reply.send(Ok(())); }
                 }
             }
@@ -824,6 +847,7 @@ mod tests {
                     Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::Reply { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::RetryCi { reply, .. } => { let _ = reply.send(Ok(())); }
                 }
             }

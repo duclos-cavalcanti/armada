@@ -9,7 +9,7 @@
 
 use anyhow::{anyhow, ensure, Context, Result};
 use domain::ports::Forge;
-use domain::{Approvals, CiReport, FailedJob, FloatingNote, ForgeShip, MrDraft, PipelineStatus, ReviewState, ShipState, TicketKey};
+use domain::{Approvals, CiReport, FailedJob, FloatingNote, ForgeShip, MrDraft, PipelineStatus, ReviewState, ReviewThread, ShipState, TicketKey};
 use std::process::Command;
 
 pub struct GlabForge {
@@ -153,8 +153,21 @@ impl Forge for GlabForge {
             self.api_paginate(&format!("projects/{}/merge_requests/{iid}/discussions", self.project))?;
         Ok(ReviewState {
             open_threads: count_open_threads(&discussions),
+            threads: open_threads(&discussions),
             floating_notes: floating_notes(&discussions),
         })
+    }
+
+    fn reply(&self, iid: i64, thread: &str, body: &str, resolve: bool) -> Result<()> {
+        let discussion = format!("projects/{}/merge_requests/{iid}/discussions/{thread}", self.project);
+        let note = format!("{discussion}/notes");
+        let out = Command::new("glab").args(["api", "--method", "POST", &note, "-f", &format!("body={body}")]).output()?;
+        ensure!(out.status.success(), "glab reply failed: {}", String::from_utf8_lossy(&out.stderr));
+        if resolve {
+            let out = Command::new("glab").args(["api", "--method", "PUT", &discussion, "-f", "resolved=true"]).output()?;
+            ensure!(out.status.success(), "glab resolve failed: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        Ok(())
     }
 
     fn rebase(&self, iid: i64) -> Result<()> {
@@ -343,6 +356,25 @@ fn count_open_threads(discussions: &[serde_json::Value]) -> i64 {
         .iter()
         .filter(|d| notes(d).any(|n| nbool(n, "resolvable") && !nbool(n, "resolved") && !nbool(n, "system")))
         .count() as i64
+}
+
+/// The open threads themselves (the same predicate as the count): each discussion with an
+/// unresolved resolvable note, pointed at by its opening note.
+fn open_threads(discussions: &[serde_json::Value]) -> Vec<ReviewThread> {
+    discussions
+        .iter()
+        .filter(|d| notes(d).any(|n| nbool(n, "resolvable") && !nbool(n, "resolved") && !nbool(n, "system")))
+        .filter_map(|d| {
+            let first = notes(d).next()?;
+            Some(ReviewThread {
+                id: d.get("id")?.as_str()?.to_string(),
+                path: first.pointer("/position/new_path").and_then(|p| p.as_str()).map(String::from),
+                line: first.pointer("/position/new_line").and_then(|l| l.as_i64()),
+                author: first.pointer("/author/username").and_then(|u| u.as_str()).map(String::from),
+                body: first.get("body").and_then(|b| b.as_str()).unwrap_or("").to_string(),
+            })
+        })
+        .collect()
 }
 
 /// The floating notes the count EXCLUDES: notes that are not resolvable and not system (a reviewer
@@ -544,7 +576,7 @@ mod tests {
     fn review_filters_split_blocking_threads_from_floating_notes() {
         let discussions: Vec<serde_json::Value> = serde_json::from_str(
             r#"[
-              {"notes":[{"id":1,"resolvable":true,"resolved":false,"system":false,"author":{"username":"rev"},"created_at":"t1","body":"fix this"}]},
+              {"id":"d1","notes":[{"id":1,"resolvable":true,"resolved":false,"system":false,"author":{"username":"rev"},"created_at":"t1","body":"fix this","position":{"new_path":"src/a.rs","new_line":7}}]},
               {"notes":[{"id":2,"resolvable":true,"resolved":true,"system":false,"author":{"username":"rev"},"created_at":"t2","body":"done"}]},
               {"notes":[{"id":3,"system":true,"author":{"username":"gitlab"},"created_at":"t3","body":"added 2 commits"}]},
               {"notes":[{"id":4,"resolvable":false,"system":false,"author":{"username":"rev"},"created_at":"t4","body":"HOLD: must-fix"}]}
@@ -554,6 +586,10 @@ mod tests {
 
         // Only the resolvable-AND-unresolved-AND-not-system thread blocks the merge.
         assert_eq!(count_open_threads(&discussions), 1);
+        let threads = open_threads(&discussions);
+        assert_eq!(threads.len(), 1, "the thread list matches the count");
+        let t = &threads[0];
+        assert_eq!((t.id.as_str(), t.path.as_deref(), t.line, t.body.as_str()), ("d1", Some("src/a.rs"), Some(7), "fix this"));
 
         // The non-resolvable, non-system note floats; the system note belongs to neither surface.
         let floating = floating_notes(&discussions);

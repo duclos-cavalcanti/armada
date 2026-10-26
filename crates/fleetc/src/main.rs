@@ -49,6 +49,7 @@ fn run() -> Result<()> {
         Some("review") => review(&args[1..]),
         Some("rebase") => rebase(&args[1..]),
         Some("ci") => ci(&args[1..]),
+        Some("reply") => reply(&args[1..]),
         Some("retry-ci") => retry_ci(&args[1..]),
         Some("launch") => launch(&args[1..]),
         Some("ticket") => ticket(&args[1..]),
@@ -73,7 +74,8 @@ fn run() -> Result<()> {
                  fleetc context  --convoy <KEY> [--format table]   (a captain's convoy slice)\n  \
                  fleetc plan                       (fleetd's latest reconcile plan — the parity lens)\n  \
                  fleetc transcript --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] [--open]   (resolve a cog's transcript)\n  \
-                 fleetc review   --iid <N>         (an MR's fresh review surface: open-thread count + floating notes)\n  \
+                 fleetc review   --iid <N>         (an MR's fresh review surface: open threads + floating notes)\n  \
+                 fleetc reply    --iid <N> --thread <id> --body <text|-> [--resolve]   (answer a review thread)\n  \
                  fleetc rebase   --iid <N>         (server-side rebase an MR)\n  \
                  fleetc ci       --iid <N>         (the MR's CI: status + each failed job's log tail, as JSON)\n  \
                  fleetc retry-ci --iid <N>         (re-run the MR's failed CI jobs)\n  \
@@ -566,6 +568,34 @@ fn review(args: &[String]) -> Result<()> {
     }
     println!("{body}");
     Ok(())
+}
+
+/// `fleetc reply --iid <N> --thread <id> --body <text|-> [--resolve]` — answer one review thread
+/// (`--body -` reads stdin), resolving it once its ask is addressed.
+fn reply(args: &[String]) -> Result<()> {
+    let (mut iid, mut thread, mut body, mut resolve) = (None, None, None, false);
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
+        match flag.as_str() {
+            "--iid" => iid = Some(take()?.parse::<i64>().map_err(|_| anyhow!("--iid must be a number"))?),
+            "--thread" => thread = Some(take()?),
+            "--body" => body = Some(take()?),
+            "--resolve" => resolve = true,
+            other => bail!("unknown flag: {other}"),
+        }
+    }
+    let mut body = body.ok_or_else(|| anyhow!("--body required"))?;
+    if body == "-" {
+        body.clear();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
+    }
+    post_and_print("/reply", &wire::ReplyCmd {
+        iid: iid.ok_or_else(|| anyhow!("--iid required"))?,
+        thread: thread.ok_or_else(|| anyhow!("--thread required"))?,
+        body,
+        resolve,
+    })
 }
 
 /// `fleetc ci --iid <N>` — the MR's CI as JSON: `{status, failed: [{name, url, log_tail}]}`, failed

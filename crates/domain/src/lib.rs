@@ -374,7 +374,22 @@ pub struct FailedJob {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewState {
     pub open_threads: i64,
+    /// The open (unresolved, merge-blocking) threads themselves — what fleet-parley answers.
+    #[serde(default)]
+    pub threads: Vec<ReviewThread>,
     pub floating_notes: Vec<FloatingNote>,
+}
+
+/// One open review thread: where it points and what its opening comment says.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewThread {
+    /// The forge's thread id (GitLab discussion id, GitHub review-thread node id) — what
+    /// `fleetc reply --thread` takes.
+    pub id: String,
+    pub path: Option<String>,
+    pub line: Option<i64>,
+    pub author: Option<String>,
+    pub body: String,
 }
 
 /// One floating review note — content only; detection here, judgment at the caller.

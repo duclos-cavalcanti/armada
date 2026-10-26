@@ -87,6 +87,16 @@ pub struct LaunchCmd {
     pub draft: bool,
 }
 
+/// Reply on one review thread, resolving it when `resolve` (`POST /reply`, `fleetc reply`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReplyCmd {
+    pub iid: i64,
+    pub thread: String,
+    pub body: String,
+    #[serde(default)]
+    pub resolve: bool,
+}
+
 /// Arm a ticket's open MR to merge once its gates pass (`POST /arm`, `fleetc arm`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArmCmd {

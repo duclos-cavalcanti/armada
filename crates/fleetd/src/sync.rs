@@ -127,6 +127,9 @@ mod tests {
         fn retry_ci(&self, _: i64) -> Result<()> {
             Ok(())
         }
+        fn reply(&self, _: i64, _: &str, _: &str, _: bool) -> Result<()> {
+            Ok(())
+        }
         fn request_review(&self, _: &domain::TicketKey) -> Result<Vec<String>> {
             Ok(vec![])
         }

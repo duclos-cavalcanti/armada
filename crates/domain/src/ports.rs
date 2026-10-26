@@ -144,6 +144,8 @@ pub trait Forge {
     /// open-thread count + the floating notes (the bash `mr-open-threads`/`mr-floating-notes`
     /// pair, now one fetch). Fresh on demand: a cog resolving review needs current state.
     fn review_state(&self, iid: i64) -> Result<ReviewState>;
+    /// Reply on one review thread, and resolve it when `resolve` (the ask is addressed).
+    fn reply(&self, iid: i64, thread: &str, body: &str, resolve: bool) -> Result<()>;
     fn rebase(&self, iid: i64) -> Result<()>;
     /// Declare a GitLab MR dependency: `child` is blocked by `parent` (GitLab then gates the
     /// child's merge + merge-train until the parent merges). Idempotent — an already-declared

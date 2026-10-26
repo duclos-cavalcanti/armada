@@ -71,6 +71,7 @@ pub enum Command {
     GetConvoyView { convoy: ConvoyKey, reply: ConvoyReply }, // a read: the captain's convoy slice
     GetReview { iid: i64, reply: ReviewReply }, // a read: an MR's fresh review surface (forge)
     Rebase { iid: i64, reply: Reply },          // an action: server-side rebase an MR (forge)
+    Reply { cmd: wire::ReplyCmd, reply: Reply }, // an action: answer (and resolve) a review thread (forge)
     GetCi { iid: i64, reply: CiReply },         // a read: an MR's CI status + failed jobs (forge)
     RetryCi { iid: i64, reply: Reply },         // an action: re-run an MR's failed CI jobs (forge)
     Launch { launch: Launch, reply: UrlReply }, // an action: open a ticket's MR (forge)
@@ -220,6 +221,10 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         }
         Command::Rebase { iid, reply } => {
             let res = forge.rebase(iid).map_err(|e| e.to_string());
+            let _ = reply.send(res);
+        }
+        Command::Reply { cmd, reply } => {
+            let res = forge.reply(cmd.iid, &cmd.thread, &cmd.body, cmd.resolve).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
         Command::GetCi { iid, reply } => {
@@ -619,6 +624,9 @@ mod tests {
             unimplemented!()
         }
         fn retry_ci(&self, _: i64) -> Result<()> {
+            Ok(())
+        }
+        fn reply(&self, _: i64, _: &str, _: &str, _: bool) -> Result<()> {
             Ok(())
         }
         fn open_mr(&self, d: &MrDraft) -> Result<String> {

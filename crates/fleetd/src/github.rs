@@ -7,7 +7,7 @@
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use domain::ports::Forge;
-use domain::{Approvals, CiReport, FailedJob, FloatingNote, ForgeShip, MrDraft, PipelineStatus, ReviewState, ShipState, TicketKey};
+use domain::{Approvals, CiReport, FailedJob, FloatingNote, ForgeShip, MrDraft, PipelineStatus, ReviewState, ReviewThread, ShipState, TicketKey};
 use serde_json::Value;
 use std::process::Command;
 
@@ -61,6 +61,25 @@ impl GhForge {
         Ok(serde_json::from_str(&stdout)?)
     }
 
+    /// `gh api graphql` with string (`-f`) and typed (`-F`, e.g. Int) variables.
+    fn graphql(&self, query: &str, strings: &[(&str, &str)], typed: &[(&str, &str)]) -> Result<Value> {
+        let mut cmd = Command::new("gh");
+        cmd.args(["api", "graphql", "-f", &format!("query={query}")]);
+        for (k, v) in strings {
+            cmd.args(["-f", &format!("{k}={v}")]);
+        }
+        for (k, v) in typed {
+            cmd.args(["-F", &format!("{k}={v}")]);
+        }
+        let out = cmd.output()?;
+        ensure!(out.status.success(), "gh api graphql failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        let v: Value = serde_json::from_slice(&out.stdout)?;
+        if let Some(errors) = v.get("errors") {
+            bail!("gh api graphql: {errors}");
+        }
+        Ok(v)
+    }
+
     fn owner_name(&self) -> (&str, &str) {
         self.repo.split_once('/').unwrap_or((&self.repo, ""))
     }
@@ -103,16 +122,21 @@ impl Forge for GhForge {
     fn review_state(&self, n: i64) -> Result<ReviewState> {
         let (owner, name) = self.owner_name();
         let query = "query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){\
-                     reviewThreads(first:100){nodes{isResolved}}\
+                     reviewThreads(first:100){nodes{id isResolved path line comments(first:1){nodes{author{login} body}}}}\
                      comments(first:100){nodes{databaseId author{login} createdAt body}}\
                      reviews(first:100){nodes{databaseId author{login} createdAt body}}}}}";
-        let out = Command::new("gh")
-            .args(["api", "graphql", "-f", &format!("query={query}")])
-            .args(["-f", &format!("o={owner}"), "-f", &format!("n={name}"), "-F", &format!("p={n}")])
-            .output()?;
-        ensure!(out.status.success(), "gh api graphql failed: {}", String::from_utf8_lossy(&out.stderr).trim());
-        let v: Value = serde_json::from_slice(&out.stdout)?;
+        let v = self.graphql(query, &[("o", owner), ("n", name)], &[("p", &n.to_string())])?;
         review_state_from(v.pointer("/data/repository/pullRequest").context("graphql: no pullRequest")?)
+    }
+
+    fn reply(&self, _n: i64, thread: &str, body: &str, resolve: bool) -> Result<()> {
+        let reply = "mutation($t:ID!,$b:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$t,body:$b}){comment{id}}}";
+        self.graphql(reply, &[("t", thread), ("b", body)], &[])?;
+        if resolve {
+            let resolve = "mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}";
+            self.graphql(resolve, &[("t", thread)], &[])?;
+        }
+        Ok(())
     }
 
     fn rebase(&self, n: i64) -> Result<()> {
@@ -351,10 +375,21 @@ fn merge_status(state: &str, decision: &str, pipeline: Option<PipelineStatus>) -
 /// comments and non-empty review bodies are the floating notes (they gate approval, not merge).
 fn review_state_from(pr: &Value) -> Result<ReviewState> {
     let nodes = |k: &str| pr.pointer(&format!("/{k}/nodes")).and_then(Value::as_array).cloned().unwrap_or_default();
-    let open_threads = nodes("reviewThreads")
+    let threads: Vec<ReviewThread> = nodes("reviewThreads")
         .iter()
         .filter(|t| !t.get("isResolved").and_then(Value::as_bool).unwrap_or(true))
-        .count() as i64;
+        .map(|t| {
+            let first = t.pointer("/comments/nodes/0");
+            ReviewThread {
+                id: t.get("id").and_then(Value::as_str).unwrap_or("").to_string(),
+                path: t.get("path").and_then(Value::as_str).map(String::from),
+                line: t.get("line").and_then(Value::as_i64),
+                author: first.and_then(|c| c.pointer("/author/login")).and_then(Value::as_str).map(String::from),
+                body: first.and_then(|c| c.get("body")).and_then(Value::as_str).unwrap_or("").to_string(),
+            }
+        })
+        .collect();
+    let open_threads = threads.len() as i64;
     let note = |n: &Value| FloatingNote {
         id: n.get("databaseId").and_then(Value::as_i64).unwrap_or(0),
         author: n.pointer("/author/login").and_then(Value::as_str).map(String::from),
@@ -364,7 +399,7 @@ fn review_state_from(pr: &Value) -> Result<ReviewState> {
     let mut floating_notes: Vec<FloatingNote> =
         nodes("comments").iter().chain(nodes("reviews").iter()).map(note).filter(|n| !n.body.trim().is_empty()).collect();
     floating_notes.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-    Ok(ReviewState { open_threads, floating_notes })
+    Ok(ReviewState { open_threads, threads, floating_notes })
 }
 
 #[cfg(test)]
@@ -440,12 +475,17 @@ mod tests {
     #[test]
     fn review_state_counts_unresolved_threads_and_keeps_bodied_notes() {
         let pr = json!({
-            "reviewThreads": {"nodes": [{"isResolved": false}, {"isResolved": true}]},
+            "reviewThreads": {"nodes": [
+                {"id": "PRRT_1", "isResolved": false, "path": "src/lib.rs", "line": 23, "comments": {"nodes": [{"author": {"login": "rev"}, "body": "rename mul?"}]}},
+                {"id": "PRRT_2", "isResolved": true}
+            ]},
             "comments": {"nodes": [{"databaseId": 9, "author": {"login": "me"}, "createdAt": "2026-10-25T20:28:37Z", "body": "Probe floating note."}]},
             "reviews": {"nodes": [{"databaseId": 7, "author": {"login": "rev"}, "createdAt": "2026-10-25T20:20:00Z", "body": ""}]}
         });
         let r = review_state_from(&pr).unwrap();
         assert_eq!(r.open_threads, 1);
+        let t = &r.threads[0];
+        assert_eq!((t.id.as_str(), t.path.as_deref(), t.line, t.body.as_str()), ("PRRT_1", Some("src/lib.rs"), Some(23), "rename mul?"));
         assert_eq!(r.floating_notes.len(), 1, "an empty review body isn't a note");
         assert_eq!(r.floating_notes[0].body, "Probe floating note.");
     }
