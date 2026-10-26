@@ -28,11 +28,10 @@ canonical list. The installer gates on it.
 # 2. Install every Brewfile entry (idempotent):
 brew bundle --file=./Brewfile
 
-# 3. Set up a project: a folder projects/<name>/ holding its fleet.toml (forge, tracker,
-#    cadences) and its checkout — `[project] path`, relative to that fleet.toml. The tracked
-#    showcase projects/armada-test/ (GitHub + ticket files) is the worked example to copy.
-mkdir -p projects/<name>   # then write projects/<name>/fleet.toml
-git clone <remote> projects/<name>/<default-branch>
+# 3. Set up a project — a folder projects/<name>/ holding its fleet.toml (forge, tracker,
+#    cadences) and its checkout. `/fleet-new-project` (in Claude, from the repo root) asks
+#    what it needs, writes the folder, and runs preflight; the tracked showcase
+#    projects/armada-test/ is the worked example of every field.
 
 # 4. Third-party backends live in third-party/
 #    Keep current: re-clone, or `git -C third-party/<repo> pull`.
