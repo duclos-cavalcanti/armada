@@ -15,8 +15,10 @@ LOOP.md
 # committed (the workspace ships binaries).
 /target
 
-# Harness profiles — per-deployment settings overlays (harness/apply.sh); never committed.
-/harness/profiles/work.json
+# Harness profiles — per-deployment settings overlays (harness/apply.sh); never committed,
+# except the example.
+/harness/profiles/*
+!/harness/profiles/example.json
 /example_claude/
 
 # Work-only skill (publishes to an internal site behind SSO) — kept locally, not in the kit.
