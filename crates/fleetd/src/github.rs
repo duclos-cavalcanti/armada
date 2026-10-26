@@ -166,6 +166,13 @@ impl Forge for GhForge {
         self.gh(&args).map(drop)
     }
 
+    fn close_mr(&self, n: i64) -> Result<()> {
+        if self.view(n)?.get("state").and_then(Value::as_str) == Some("CLOSED") {
+            return Ok(()); // already closed
+        }
+        self.gh(&["pr", "close", &n.to_string()]).map(drop)
+    }
+
     fn open_mr(&self, d: &MrDraft) -> Result<String> {
         let create = |draft: bool| {
             let mut args = vec![

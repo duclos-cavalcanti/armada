@@ -104,6 +104,7 @@ fn handle(
         (Some("POST"), Some("/ticket-new")) => handle_ticket_new(&request, cmds),
         (Some("POST"), Some("/ticket-block")) => handle_ticket_block(&request, cmds),
         (Some("POST"), Some("/propose")) => handle_propose(&request, cmds),
+        (Some("POST"), Some("/decommission")) => handle_decommission(&request, cmds),
         (Some("POST"), Some("/proposal-accept")) => handle_proposal(&request, cmds, true),
         (Some("POST"), Some("/proposal-drop")) => handle_proposal(&request, cmds, false),
         (Some("GET"), Some("/settings")) => handle_settings_list(cmds),
@@ -544,6 +545,20 @@ fn handle_propose(request: &str, cmds: &Sender<Command>) -> String {
     }
 }
 
+/// `POST /decommission` — withdraw a ticket from the fleet; reply with what was done.
+fn handle_decommission(request: &str, cmds: &Sender<Command>) -> String {
+    let parsed = parse_body::<wire::DecommissionCmd>(request).and_then(|dto| {
+        if dto.reason.trim().is_empty() {
+            return Err(http_response("400 Bad Request", "text/plain", "a decommission needs a reason"));
+        }
+        Ok((parse_ticket(&dto.ticket)?, dto.reason))
+    });
+    match parsed {
+        Ok((ticket, reason)) => relay(cmds, |reply| Command::Decommission { ticket, reason, reply }),
+        Err(r) => r,
+    }
+}
+
 /// `POST /proposal-accept` (`accept`: reply with the ticket it became or was) or `/proposal-drop`.
 fn handle_proposal(request: &str, cmds: &Sender<Command>, accept: bool) -> String {
     let dto: wire::ProposalCmd = match parse_body(request) {
@@ -920,6 +935,7 @@ mod tests {
                     Command::Propose { reply, .. }
                     | Command::AcceptProposal { reply, .. }
                     | Command::AddToConvoy { reply, .. }
+                    | Command::Decommission { reply, .. }
                     | Command::RemoveFromConvoy { reply, .. }
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }
@@ -980,6 +996,7 @@ mod tests {
                     Command::Propose { reply, .. }
                     | Command::AcceptProposal { reply, .. }
                     | Command::AddToConvoy { reply, .. }
+                    | Command::Decommission { reply, .. }
                     | Command::RemoveFromConvoy { reply, .. }
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }

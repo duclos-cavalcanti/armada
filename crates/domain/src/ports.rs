@@ -58,6 +58,9 @@ pub trait ShipRepo {
     fn set_swept(&self, id: &ShipId, fingerprint: Option<&str>) -> Result<()>;
     /// Record the `head_sha` the last lookout reviewed (the review cold-loop change-detector).
     fn set_reviewed(&self, id: &ShipId, head_sha: &str) -> Result<()>;
+    /// Retire a ship — it left the open list, merged or closed (sets `ended_at`). Idempotent; a
+    /// reopened MR's next upsert clears it again.
+    fn retire(&self, id: &ShipId, at: &str) -> Result<()>;
 }
 
 pub trait OrderRepo {
@@ -173,6 +176,8 @@ pub trait Forge {
     /// Cancel an armed auto-merge, so the MR won't merge on its own. Idempotent — an unarmed MR is
     /// a success no-op. A hold calls it: an armed MR lives on the forge, beyond the fleet's gates.
     fn disarm(&self, iid: i64) -> Result<()>;
+    /// Close the MR unmerged (its branch stays). Idempotent — a closed MR is a success no-op.
+    fn close_mr(&self, iid: i64) -> Result<()>;
     /// Mark the MR draft (`true`: it can't merge, armed or not) or ready (`false`). Idempotent — an
     /// MR already in that state is a success no-op. Errors where the forge has no drafts.
     fn set_draft(&self, iid: i64, draft: bool) -> Result<()>;
@@ -221,6 +226,8 @@ pub trait Tracker {
     fn create(&self, draft: &TicketDraft) -> Result<TicketKey>;
     /// Record that `key` is blocked by `by` (idempotent).
     fn block(&self, key: &TicketKey, by: &TicketKey) -> Result<()>;
+    /// Add a comment to the ticket — a decision's why, kept where the team reads the ticket.
+    fn comment(&self, key: &TicketKey, body: &str) -> Result<()>;
 }
 
 pub trait SessionHost {

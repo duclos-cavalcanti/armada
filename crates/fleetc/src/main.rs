@@ -41,6 +41,7 @@ fn run() -> Result<()> {
         Some("sink") => sink(&args[1..]),
         Some("send") => send(&args[1..]),
         Some("hold") => hold(&args[1..]),
+        Some("decommission") => decommission(&args[1..]),
         Some("unhold") => unhold(&args[1..]),
         Some("packet") => packet(&args[1..]),
         Some("context") => context(&args[1..]),
@@ -76,6 +77,7 @@ fn run() -> Result<()> {
                  fleetc sink     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (scuttle — hard teardown)\n  \
                  fleetc send     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] <message>   (message into the cog's pane)\n  \
                  fleetc hold     <KEY-N> [--reason <why>]  (hold off the frontier; disarms + drafts its open MR)\n  \
+                 fleetc decommission <KEY-N> --reason <why> [--yes]   (withdraw it for good: close its MR, cancel it with the reason, reap its cogs + worktree)\n  \
                  fleetc unhold   <KEY-N>          (release back onto the frontier; readies its MR)\n  \
                  fleetc packet   <KEY-N>          (the cog's work-packet: order + ship + ticket)\n  \
                  fleetc context  --convoy <KEY> [--format table]   (a captain's convoy slice)\n  \
@@ -249,6 +251,57 @@ fn sink(args: &[String]) -> Result<()> {
 /// `fleetc hold <KEY-N> --reason <why>` — hold the ticket off the dispatch frontier (the captain's
 /// groom-gate decision, or an operator lever); fleetd also disarms its open MR and marks it draft. `--reason`
 /// rides on the `TicketHeld` event.
+/// `fleetc decommission <KEY-N> --reason <why> [--yes]` — withdraw a ticket from the fleet for good:
+/// fleetd closes its open MR (noting why), comments the reason on the ticket and cancels it, then
+/// reaps its cogs, worktree and order. The operator's call — a cog can't — and it asks first, showing
+/// what will go, unless `--yes`. fleetd refuses once its MR has merged.
+fn decommission(args: &[String]) -> Result<()> {
+    if std::env::var("FLEET_TICKET").is_ok_and(|t| !t.is_empty()) {
+        bail!("a cog doesn't decommission tickets — the operator does (propose it instead)");
+    }
+    let usage = "usage: fleetc decommission <KEY-N> --reason <why> [--yes]";
+    let ticket = ticket_key(args.first().ok_or_else(|| anyhow!("{usage}"))?, "decommission")?;
+    let (mut reason, mut yes) = (None, false);
+    let mut it = args[1..].iter();
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--reason" => reason = Some(it.next().cloned().ok_or_else(|| anyhow!("--reason needs a value"))?),
+            "--yes" => yes = true,
+            other => bail!("unknown flag {other:?} — {usage}"),
+        }
+    }
+    let reason = reason.filter(|r| !r.trim().is_empty()).ok_or_else(|| anyhow!("decommission needs --reason <why> — it goes on the ticket"))?;
+    if !yes {
+        eprint!("{}Proceed? [y/N] ", decommission_preview(&ticket)?);
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim(), "y" | "Y" | "yes") {
+            bail!("not decommissioned");
+        }
+    }
+    post_and_print("/decommission", &wire::DecommissionCmd { ticket, reason })
+}
+
+/// What a decommission takes down, read off the ledger: its open MRs, its live cogs, its worktree.
+fn decommission_preview(ticket: &str) -> Result<String> {
+    use domain::ports::{OrderRepo, SessionRepo, ShipRepo};
+    let db = project_dir().ledger();
+    let ledger = ledger::Ledger::open_readonly(&db).map_err(|_| anyhow!("no ledger yet ({db})"))?;
+    let key = domain::TicketKey(ticket.to_string());
+    let mut out = format!("decommission {ticket} — for good:\n");
+    for ship in ShipRepo::armada(&ledger)?.into_iter().filter(|s| s.ticket.as_ref() == Some(&key)) {
+        out += &format!("  close !{} (disarmed first, the reason noted on it)\n", ship.iid);
+    }
+    out += &format!("  comment the reason on {ticket}, then move it to Cancelled\n");
+    for s in SessionRepo::for_ticket(&ledger, &key)?.into_iter().filter(|s| s.ended_at.is_none()) {
+        out += &format!("  end {} (its tmux too)\n", s.tmux_session);
+    }
+    if let Some(wt) = OrderRepo::get(&ledger, &key)?.and_then(|o| o.worktree_path) {
+        out += &format!("  remove the worktree {wt} and its local branch, retire the order\n");
+    }
+    Ok(out)
+}
+
 fn hold(args: &[String]) -> Result<()> {
     let ticket = require_ticket(args, "hold")?;
     let mut reason = None;

@@ -165,6 +165,14 @@ pub struct ProposalCmd {
     pub convoy: Option<String>,
 }
 
+/// Withdraw a ticket from the fleet for good (`POST /decommission`, `fleetc decommission`): close
+/// its open MR, cancel it with `reason` as a comment, and reap its cogs, worktree and order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecommissionCmd {
+    pub ticket: String,
+    pub reason: String,
+}
+
 /// Record that `ticket` is blocked by `by` (`POST /ticket-block`, `fleetc ticket block`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TicketBlockCmd {

@@ -261,6 +261,13 @@ impl Tracker for FsTracker {
             }
         })
     }
+
+    /// A comment is appended to the ticket's body, under a dated heading.
+    fn comment(&self, key: &TicketKey, body: &str) -> Result<()> {
+        let mut t = self.load(key)?;
+        t.body = format!("{}\n\n## Comment · {}\n\n{}\n", t.body.trim_end(), crate::now_rfc3339(), body.trim());
+        self.write(key, &t)
+    }
 }
 
 #[cfg(test)]

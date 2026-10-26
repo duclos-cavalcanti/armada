@@ -111,6 +111,10 @@ impl Tracker for JiraTracker {
             .context("ticket not found")
     }
 
+    fn comment(&self, key: &TicketKey, body: &str) -> Result<()> {
+        self.jira(&["issue", "comment", "add", &key.0, body, "--no-input"]).map(drop)
+    }
+
     fn transition(&self, key: &TicketKey, to: TicketStatus) -> Result<()> {
         // Idempotent: a Jira workflow has no self-transition, so `jira issue move` to the status a
         // ticket already holds fails — yet "already there" is success, not error. This matters for

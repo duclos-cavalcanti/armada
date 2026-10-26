@@ -264,6 +264,17 @@ impl Forge for GlabForge {
         Ok(stdout.lines().rev().find(|l| l.trim_start().starts_with("http")).unwrap_or(stdout.trim()).trim().to_string())
     }
 
+    fn close_mr(&self, iid: i64) -> Result<()> {
+        let mr: serde_json::Value =
+            serde_json::from_str(&self.api(&format!("projects/{}/merge_requests/{iid}", self.project))?)?;
+        if mr.get("state").and_then(|s| s.as_str()) == Some("closed") {
+            return Ok(()); // already closed
+        }
+        let out = Command::new("glab").args(["mr", "close", &iid.to_string(), "-R", &self.repo()?]).output()?;
+        ensure!(out.status.success(), "glab mr close failed: {}", crate::preflight::one_line(&out.stderr));
+        Ok(())
+    }
+
     fn set_draft(&self, iid: i64, draft: bool) -> Result<()> {
         let mr: serde_json::Value =
             serde_json::from_str(&self.api(&format!("projects/{}/merge_requests/{iid}", self.project))?)?;

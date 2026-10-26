@@ -926,6 +926,11 @@ impl ShipRepo for Ledger {
         Ok(ShipId(id))
     }
 
+    fn retire(&self, id: &ShipId, at: &str) -> Result<()> {
+        self.conn.execute("UPDATE ships SET ended_at = ?2 WHERE id = ?1 AND ended_at IS NULL", params![id.0, at])?;
+        Ok(())
+    }
+
     fn get_by_iid(&self, iid: i64) -> Result<Option<Ship>> {
         Ok(self
             .conn

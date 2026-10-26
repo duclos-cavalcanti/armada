@@ -134,6 +134,19 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
         }
     }
 
+    // TERMINAL-REAP with no cog left: a Done / Cancelled ticket (by the tracker, or a decommission)
+    // whose order is still open reaps all the same — the order, the worktree. The pass below reaps
+    // the ones with a live cog.
+    for order in OrderRepo::queue(ledger)? {
+        let status = TicketRepo::get(ledger, &order.ticket)?.and_then(|t| t.status);
+        let terminal = matches!(status, Some(TicketStatus::Done) | Some(TicketStatus::Cancelled));
+        let live = SessionRepo::for_ticket(ledger, &order.ticket)?.iter().any(|s| s.ended_at.is_none());
+        let reap = Action::Reap { ticket: order.ticket.0.clone() };
+        if terminal && !live && !actions.contains(&reap) {
+            actions.push(reap);
+        }
+    }
+
     // HANDOFF + terminal-REAP + HEAL — per live cog, blending its report with liveness.
     for cog in cogs {
         // Ticketless cogs (captains, standing singletons) aren't part of the per-ticket
@@ -661,7 +674,7 @@ fn handoff<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
 /// terminal (the merged-ship case moves In QA → Done; a terminal ticket is idempotently
 /// skipped), end every live session + kill its tmux, reclaim the now-dead worktree, and retire the
 /// order (the fulfilled dispatch intent — converge's "reap packet").
-fn reap<T: Tracker + ?Sized, H: SessionHost>(
+pub(crate) fn reap<T: Tracker + ?Sized, H: SessionHost>(
     ledger: &Ledger,
     tracker: &T,
     host: &H,
@@ -712,6 +725,14 @@ fn reap<T: Tracker + ?Sized, H: SessionHost>(
 
     // Retire the order: the dispatch intent is fulfilled (a no-op if there's none).
     OrderRepo::cancel(ledger, &tkey)?;
+
+    // End the ticket's ships that left the open list (merged, or closed): nothing waits on them now.
+    for ship in ledger.armada()?.into_iter().filter(|s| s.ticket.as_ref() == Some(&tkey)) {
+        let done = ShipRepo::snapshot(ledger, &ship.id)?.is_some_and(|s| matches!(s.state, ShipState::Merged | ShipState::Closed));
+        if done {
+            ShipRepo::retire(ledger, &ship.id, &now_rfc3339())?;
+        }
+    }
     Ok(())
 }
 
@@ -1509,6 +1530,14 @@ mod tests {
     }
 
     #[test]
+    fn a_terminal_ticket_with_an_order_reaps_with_no_cog_left() {
+        let db = db();
+        ticket(&db, "PROJ-1", TicketStatus::Cancelled, false, vec![]);
+        order(&db, "PROJ-1", true); // no session at all: nothing live to trigger the per-cog reap
+        assert_eq!(plan(&db, &[], true).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
+    }
+
+    #[test]
     fn terminal_ticket_reaps_its_live_session() {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::Done, false, vec![]);
@@ -1655,6 +1684,9 @@ mod tests {
         fn block(&self, _: &TicketKey, _: &TicketKey) -> Result<()> {
             Ok(())
         }
+        fn comment(&self, _: &TicketKey, _: &str) -> Result<()> {
+            Ok(())
+        }
     }
 
     /// `snapshot` returns a configured `ForgeShip` (for LaunchSailor's fresh poll) or errors,
@@ -1694,6 +1726,9 @@ mod tests {
             Ok(())
         }
         fn disarm(&self, _iid: i64) -> Result<()> {
+            Ok(())
+        }
+        fn close_mr(&self, _: i64) -> Result<()> {
             Ok(())
         }
         fn set_draft(&self, _: i64, _: bool) -> Result<()> {

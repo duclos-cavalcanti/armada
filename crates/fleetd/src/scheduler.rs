@@ -18,7 +18,8 @@ use domain::ports::{
 };
 use domain::{
     CogState, ConvoyKey, ConvoyTicketView, ConvoyView, CrewKind, EntityKind, EventKind,
-    LivenessThresholds, MrDraft, Order, Packet, Proposal, ProposalId, Proposed, Report, Session, TicketKey,
+    LivenessThresholds, MrDraft, Order, Packet, Proposal, ProposalId, Proposed, Report, Session, ShipState, TicketKey,
+    TicketStatus,
 };
 use ledger::Ledger;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -88,6 +89,7 @@ pub enum Command {
     DropProposal { id: ProposalId, reply: UrlReply },
     AddToConvoy { convoy: ConvoyKey, ticket: TicketKey, reply: UrlReply }, // → what it says (and what it left)
     RemoveFromConvoy { convoy: ConvoyKey, ticket: TicketKey, reply: UrlReply },
+    Decommission { ticket: TicketKey, reason: String, reply: UrlReply }, // an action: close MR, cancel, reap → what it did
     SetSetting { key: String, value: String, reply: Reply }, // live-config overwrite (validated here)
     GetSettings { reply: SettingsReply },                    // a read: every live lever + source
 }
@@ -278,6 +280,10 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let res = ConvoyRepo::remove_member(ledger, &convoy, &ticket);
             let _ = reply.send(res.map(|()| format!("{} left {} (back to its epic's convoy)", ticket.0, convoy.0)).map_err(|e| format!("{e:#}")));
         }
+        Command::Decommission { ticket, reason, reply } => {
+            let res = decommission(ledger, forge, tracker, host, &cfg.project.path, &ticket, &reason);
+            let _ = reply.send(res.map_err(|e| format!("{e:#}")));
+        }
         Command::DropProposal { id, reply } => {
             let res = ProposalRepo::settle(ledger, &id, &now_rfc3339(), None).map(|()| "dropped".to_string());
             let _ = reply.send(res.map_err(|e| format!("{e:#}")));
@@ -306,6 +312,64 @@ fn propose(ledger: &Ledger, tracker: &dyn Tracker, from: Option<TicketKey>, mut 
     }
     let p = Proposal { id: ProposalId(0), from_ticket: from, proposed, created_at: now_rfc3339(), ended_at: None, accepted_as: None };
     ledger.propose(&p)
+}
+
+/// Decommission a ticket: withdraw it from the fleet for good. Its open MRs are disarmed, told why,
+/// and closed; `reason` goes on the ticket as a comment and it moves to Cancelled; then the reap ends
+/// its cogs, removes its worktree and retires its order. Refused, before any change, once an MR of
+/// it has merged. Each step is idempotent, so a run cut short is safe to repeat. Says what it did.
+fn decommission<H: SessionHost>(
+    ledger: &Ledger,
+    forge: &dyn Forge,
+    tracker: &dyn Tracker,
+    host: &H,
+    project: &str,
+    ticket: &TicketKey,
+    reason: &str,
+) -> Result<String> {
+    ensure_ticket(ledger, tracker, ticket)?;
+    let mut ships = Vec::new();
+    for ship in ledger.armada()?.into_iter().filter(|s| s.ticket.as_ref() == Some(ticket)) {
+        let state = forge.snapshot(ship.iid)?.state;
+        anyhow::ensure!(state != ShipState::Merged, "{}'s MR !{} has merged — nothing to decommission", ticket.0, ship.iid);
+        ships.push((ship, state));
+    }
+    let now = now_rfc3339();
+    let mut did = Vec::new();
+    for (ship, state) in &ships {
+        if matches!(state, ShipState::Open | ShipState::Draft) {
+            forge.disarm(ship.iid)?; // before the close: an armed MR mustn't merge mid-way
+            forge.post_review(ship.iid, &format!("Decommissioned: {reason}"), false)?;
+            forge.close_mr(ship.iid)?;
+            did.push(format!("closed !{}", ship.iid));
+        }
+        ShipRepo::retire(ledger, &ship.id, &now)?;
+    }
+
+    tracker.comment(ticket, &format!("Decommissioned from the fleet: {reason}"))?;
+    tracker.transition(ticket, TicketStatus::Cancelled)?;
+    let mut t = tracker.get(ticket)?;
+    t.status = TicketStatus::Cancelled; // the ledger learns it now: the reap must not move it to Done
+    TicketRepo::sync(ledger, &t, &now)?;
+    did.push(format!("{} → Cancelled (reason commented)", ticket.0));
+
+    let cogs = SessionRepo::for_ticket(ledger, ticket)?.iter().filter(|s| s.ended_at.is_none()).count();
+    let worktree = OrderRepo::get(ledger, ticket)?.and_then(|o| o.worktree_path);
+    reconcile::reap(ledger, tracker, host, project, &ticket.0)?;
+    if cogs > 0 {
+        did.push(format!("ended {cogs} cog(s)"));
+    }
+    if let Some(wt) = worktree {
+        did.push(format!("removed {wt}"));
+    }
+    ledger.append(
+        &now,
+        EventKind::TicketDecommissioned,
+        EntityKind::Ticket,
+        &ticket.0,
+        &serde_json::json!({ "reason": reason, "closed": ships.iter().map(|(s, _)| s.iid).collect::<Vec<_>>() }),
+    )?;
+    Ok(did.join(" · "))
 }
 
 /// Put a ticket in a convoy — its only one (an off-sprint ticket is pulled onto the board first).
@@ -708,6 +772,9 @@ mod tests {
         drafted: std::cell::RefCell<Vec<(i64, bool)>>,
         opened: std::cell::RefCell<Vec<MrDraft>>,
         no_drafts: bool, // a forge plan without drafts
+        closed: std::cell::RefCell<Vec<i64>>,
+        noted: std::cell::RefCell<Vec<(i64, String)>>,
+        state: Option<ShipState>, // what `snapshot` reports (None: never polled in that test)
     }
     impl Forge for FakeForge {
         fn preflight(&self) -> Result<String> {
@@ -719,8 +786,26 @@ mod tests {
         fn armada(&self) -> Result<Vec<ForgeShip>> {
             Ok(vec![])
         }
-        fn snapshot(&self, _: i64) -> Result<ForgeShip> {
-            unimplemented!()
+        fn snapshot(&self, iid: i64) -> Result<ForgeShip> {
+            let state = self.state.expect("this test doesn't poll the forge");
+            Ok(ForgeShip {
+                iid,
+                url: "u".into(),
+                target: "master".into(),
+                source: String::new(),
+                pilot: "me".into(),
+                ticket: None,
+                title: "T".into(),
+                state,
+                head_sha: "sha".into(),
+                has_conflicts: false,
+                open_threads: 0,
+                approvals: Approvals { current: 0, required: 0 },
+                armed: true,
+                on_merge_train: false,
+                pipeline: None,
+                merge_status: None,
+            })
         }
         fn review_state(&self, _: i64) -> Result<ReviewState> {
             unimplemented!()
@@ -737,6 +822,10 @@ mod tests {
         }
         fn disarm(&self, iid: i64) -> Result<()> {
             self.disarmed.borrow_mut().push(iid);
+            Ok(())
+        }
+        fn close_mr(&self, iid: i64) -> Result<()> {
+            self.closed.borrow_mut().push(iid);
             Ok(())
         }
         fn set_draft(&self, iid: i64, draft: bool) -> Result<()> {
@@ -758,7 +847,8 @@ mod tests {
         fn fetch_ref(&self, iid: i64) -> String {
             format!("pull/{iid}/head")
         }
-        fn post_review(&self, _: i64, _: &str, _: bool) -> Result<()> {
+        fn post_review(&self, iid: i64, body: &str, _: bool) -> Result<()> {
+            self.noted.borrow_mut().push((iid, body.into()));
             Ok(())
         }
         fn open_mr(&self, d: &MrDraft) -> Result<String> {
@@ -803,6 +893,9 @@ mod tests {
             Ok(TicketKey("PROJ-100".into()))
         }
         fn block(&self, _: &TicketKey, _: &TicketKey) -> Result<()> {
+            Ok(())
+        }
+        fn comment(&self, _: &TicketKey, _: &str) -> Result<()> {
             Ok(())
         }
     }
@@ -1162,6 +1255,44 @@ mod tests {
             SessionRepo::get(&db, &id).unwrap().unwrap().anchored_at.is_none(),
             "send is a nudge, not a hold — no gate"
         );
+    }
+
+    #[test]
+    fn decommission_closes_the_mr_cancels_the_ticket_and_reaps_it() {
+        let (db, id) = db_with_live_worker();
+        let key = TicketKey("PROJ-1".into());
+        let ship = |iid| Ship {
+            id: ShipId(0),
+            ticket: Some(key.clone()),
+            iid,
+            url: "u".into(),
+            target: "master".into(),
+            source: String::new(),
+            pilot: "me".into(),
+            created_at: "t".into(),
+            ended_at: None,
+            swept: None,
+            reviewed: None,
+        };
+        ShipRepo::upsert(&db, &ship(7)).unwrap();
+        let tracker = FakeTracker(vec![tt("PROJ-1", TicketStatus::InProgress)]);
+        let host = FakeHost::new();
+
+        let merged = FakeForge { state: Some(ShipState::Merged), ..Default::default() };
+        assert!(decommission(&db, &merged, &tracker, &host, "/p", &key, "dup").is_err(), "a merged MR is refused");
+        assert!(merged.closed.borrow().is_empty() && SessionRepo::get(&db, &id).unwrap().unwrap().ended_at.is_none(), "untouched");
+
+        let forge = FakeForge { state: Some(ShipState::Open), ..Default::default() };
+        let said = decommission(&db, &forge, &tracker, &host, "/p", &key, "superseded by PROJ-2").unwrap();
+        assert_eq!(*forge.disarmed.borrow(), vec![7], "disarmed before the close");
+        assert_eq!(*forge.closed.borrow(), vec![7]);
+        assert_eq!(*forge.noted.borrow(), vec![(7, "Decommissioned: superseded by PROJ-2".to_string())]);
+        assert_eq!(TicketRepo::get(&db, &key).unwrap().unwrap().status, Some(TicketStatus::Cancelled), "cancelled, not Done");
+        assert!(SessionRepo::get(&db, &id).unwrap().unwrap().ended_at.is_some(), "its cog reaped");
+        assert_eq!(host.killed.borrow().as_slice(), &["worker-PROJ-1".to_string()]);
+        assert!(db.armada().unwrap().is_empty(), "the ship ended");
+        assert!(said.contains("closed !7") && said.contains("Cancelled") && said.contains("ended 1 cog"), "said: {said}");
+        assert!(db.since(Seq(0)).unwrap().iter().any(|e| e.kind == EventKind::TicketDecommissioned));
     }
 
     #[test]
