@@ -12,7 +12,9 @@ tools: >-
   Read, Glob, Grep, Bash, Edit, Write, Skill, Agent, WebFetch, WebSearch
 skills: >-
   fleet-launch, fleet-ready-done, fleet-propose
-initialPrompt: /goal Deliver your ticket (the FLEET_TICKET env var): implemented to its acceptance criteria, tests passing, its draft MR surveyed clean, concluded.
+initialPrompt: >-
+  /goal Deliver your ticket (the FLEET_TICKET env var): implemented to its acceptance criteria,
+  tests passing, its draft MR surveyed clean, concluded.
 ---
 
 # Worker

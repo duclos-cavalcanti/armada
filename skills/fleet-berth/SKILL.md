@@ -1,5 +1,11 @@
 ---
-description: Create a git worktree + branch for a ticket in its project folder (beside the project checkout), forked off a given base (default: origin's default branch) of the project checkout, which it locates via `fleetc project` — run it from inside the project (or its checkout / a worktree). Pure worktree creation — no ticket lifecycle. The operator or captain runs this when producing a dispatch, then passes the emitted path to `fleetc dispatch --worktree`; fleetd's reconcile spawns the cog there (reconcile never creates worktrees).
+description: >-
+  Create a git worktree + branch for a ticket in its project folder (beside the project
+  checkout), forked off a given base (default: origin's default branch) of the project checkout,
+  which it locates via `fleetc project` — run it from inside the project (or its checkout / a
+  worktree). Pure worktree creation — no ticket lifecycle. The operator or captain runs this when
+  producing a dispatch, then passes the emitted path to `fleetc dispatch --worktree`; fleetd's
+  reconcile spawns the cog there (reconcile never creates worktrees).
 argument-hint: <ticket> [<fork-base-branch>]
 ---
 
