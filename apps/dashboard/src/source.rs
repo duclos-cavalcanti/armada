@@ -5,9 +5,9 @@
 //! (that was the bash kit's `types.rs`). Opens the ledger READ-ONLY — a concurrent
 //! reader beside fleetd's single writer (SQLite WAL), exactly like `fleetc plan`.
 //!
-//! The Fleet tab reads the line top-down by how far each ticket has got: a dispatched
-//! order waiting for its builder → a live builder (worker / hand) → a ship being landed
-//! (sailor). Each ticket sits in exactly one of the three — the partition is here.
+//! The Fleet tab reads the line top-down: every dispatched order (the tickets the fleet is
+//! working, each with its phase) → the live builders (worker / hand) → the ships being landed
+//! (sailor). A ticket in phase 2 or 3 sits in exactly one of those two — the partition is here.
 //!
 //! Liveness note: the `Active/Quiet/Dead` freshness classification isn't in the
 //! ledger (fleetd derives it in-memory from tmux probes). The proxy here is report
@@ -47,9 +47,31 @@ pub struct ShipRow {
     pub sailor_state: Option<String>,
 }
 
-/// Phase 1 — a dispatched order with no builder at work and no ship yet: what it waits on.
+/// How far a dispatched ticket has got.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    /// No builder at work and no ship yet.
+    Waiting,
+    /// A worker / hand is building it.
+    Implementation,
+    /// Its ship is being landed.
+    Merge,
+}
+
+impl Phase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Phase::Waiting => "waiting",
+            Phase::Implementation => "implementation",
+            Phase::Merge => "merge",
+        }
+    }
+}
+
+/// A dispatched order — a ticket the fleet is working — with its phase and what it waits on.
 pub struct OrderRow {
     pub order: Order,
+    pub phase: Phase,
     /// The ticket's status, `None` when the ticket isn't on the board.
     pub status: Option<TicketStatus>,
     /// `Some(reason)` when the ticket is held (`""` when no reason was given).
@@ -79,7 +101,7 @@ pub struct LandingRow {
 pub struct Fleet {
     pub ledger_path: PathBuf,
     pub load_error: Option<String>,
-    /// Phase 1: dispatched orders waiting for their builder.
+    /// Every dispatched order, with its phase.
     pub dispatched: Vec<OrderRow>,
     /// Phase 2: live builders (workers + hands).
     pub builders: Vec<CogRow>,
@@ -185,11 +207,16 @@ impl Fleet {
 
         let mut dispatched = Vec::new();
         for order in orders.iter().cloned() {
-            if building.contains(&order.ticket) || sailing.contains(&order.ticket) {
-                continue;
-            }
+            let phase = if building.contains(&order.ticket) {
+                Phase::Implementation
+            } else if sailing.contains(&order.ticket) {
+                Phase::Merge
+            } else {
+                Phase::Waiting
+            };
             let ticket = tickets.get(order.ticket.0.as_str());
             dispatched.push(OrderRow {
+                phase,
                 status: ticket.and_then(|t| t.status),
                 held: held_reasons.get(&order.ticket.0).cloned(),
                 blockers: ticket.map(|t| open_blockers(t, &board)).unwrap_or_default(),

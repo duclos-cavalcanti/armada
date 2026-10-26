@@ -3,7 +3,7 @@
 //! focused row highlighted. Lists are short (the fleet runs few cogs/ships at once),
 //! so a plain `Paragraph` suffices — no scroll state.
 
-use crate::source::{open_blockers, CogRow, LandingRow, OrderRow, ShipRow};
+use crate::source::{open_blockers, CogRow, LandingRow, OrderRow, Phase, ShipRow};
 use crate::{App, Pane, TabId};
 use domain::{Convoy, Event, PipelineStatus, ShipSnapshot, Ticket};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -59,8 +59,16 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
     let f = &app.fleet;
     match pane {
         Pane::Dispatched => (
-            format!(" Dispatch · {} waiting ", f.dispatched.len()),
-            Some(header(&[("Ticket", 12), ("Crew", 7), ("Merge", 7), ("Status", 12), ("Age", 6), ("Waiting on", 0)])),
+            format!(" Dispatch · {} orders ", f.dispatched.len()),
+            Some(header(&[
+                ("Ticket", 12),
+                ("Crew", 7),
+                ("Phase", 15),
+                ("Merge", 7),
+                ("Status", 12),
+                ("Age", 6),
+                ("Waiting on", 0),
+            ])),
             f.dispatched.iter().map(order_row).collect(),
         ),
         Pane::Impl => (
@@ -145,9 +153,15 @@ fn order_row(o: &OrderRow) -> Line<'static> {
     }
     let waiting = if waiting.is_empty() { "—".to_string() } else { waiting.join("  ") };
     let waiting_style = if waiting == "—" { dim() } else { Style::default().fg(Color::Yellow) };
+    let phase_style = match o.phase {
+        Phase::Waiting => yellow(),
+        Phase::Implementation => Style::default(),
+        Phase::Merge => Style::default().fg(Color::Cyan),
+    };
     cells(vec![
         (o.order.ticket.0.clone(), 12, Style::default()),
         (crew.into(), 7, Style::default()),
+        (o.phase.as_str().into(), 15, phase_style),
         (merge.into(), 7, Style::default()),
         (status, 12, Style::default()),
         (fmt_age(o.age_secs), 6, dim()),
