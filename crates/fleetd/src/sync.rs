@@ -34,7 +34,7 @@ pub fn sync_armada(ledger: &Ledger, forge: &dyn Forge, now: &str) -> Result<usiz
             match forge.snapshot(fs.iid) {
                 Ok(enriched) => enriched,
                 Err(e) => {
-                    eprintln!("fleetd: enrich iid {} failed: {e}", fs.iid);
+                    tracing::warn!("enrich !{} failed: {e:#}", fs.iid);
                     fs
                 }
             }

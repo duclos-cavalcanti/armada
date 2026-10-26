@@ -29,9 +29,14 @@ uninstall:                       ## Uninstall the kit and remove fleetc
 preflight: .project              ## Check project P's setup: runtime state, checkout, forge + tracker CLIs, tmux + claude
 	cargo run -q -p fleetd -- -C projects/$(P) preflight
 
-run: .project                    ## Build + run project P's fleet daemon in the foreground (open a pane first; Ctrl-C to stop)
-	@if pgrep -x fleetd >/dev/null; then echo "fleetd already running — make stop first"; exit 1; fi
-	cargo run -p fleetd -- -C projects/$(P)
+# One fleet at a time: `run` refuses while another project's fleetd is up. fleetd itself refuses
+# when its own socket already answers, so a second `run` just reopens the dashboard. fleetd logs
+# to projects/P/.fleet/fleetd.log (the dashboard's Log tab).
+run: .project                    ## Start project P's fleetd in the background (unless it's up), then open its dashboard
+	@pids=$$(pgrep -x fleetd | paste -sd, -); if [ -n "$$pids" ] && ps -o args= -p "$$pids" | grep -v '/fleetd -C projects/$(P)$$'; then echo "↑ another project's fleetd is up — make stop P=<it> first"; exit 1; fi
+	@cargo build -q -p fleetd
+	@nohup target/debug/fleetd -C projects/$(P) </dev/null >/dev/null 2>&1 &
+	@$(MAKE) --no-print-directory dashboard P=$(P)
 
 export: .project                 ## Snapshot project P's ledger to projects/P/exports/P-<UTC stamp>.db (safe while running)
 	cargo run -q -p fleetc -- -C projects/$(P) export "projects/$(P)/exports/$(P)-$$(date -u +%Y%m%dT%H%M%SZ).db"

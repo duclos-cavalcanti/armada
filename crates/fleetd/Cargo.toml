@@ -12,6 +12,8 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
-time = { version = "0.3", features = ["formatting", "std"] }
+time = { version = "0.3", features = ["formatting", "std", "macros", "local-offset"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["local-time"] }
 uuid = { version = "1", features = ["v4"] }
 serde-saphyr = "2"

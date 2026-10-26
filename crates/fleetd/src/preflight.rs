@@ -32,6 +32,12 @@ fn headline(err: &str) -> String {
         .to_string()
 }
 
+/// A CLI's stderr as one log-friendly line: ANSI colour stripped, wrapped lines and blank runs
+/// collapsed to single spaces.
+pub(crate) fn one_line(stderr: &[u8]) -> String {
+    strip_ansi(&String::from_utf8_lossy(stderr)).split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// The last `lines` lines of a CLI log, ANSI colour stripped — a failed CI job's tail.
 pub(crate) fn log_tail(log: &str, lines: usize) -> String {
     let clean = strip_ansi(log);
@@ -75,9 +81,24 @@ pub fn runtime(project: &wire::Project) -> Result<String> {
     Ok(format!("{} · {state}", dir.display()))
 }
 
-/// Render the checklist; `Err` (after printing it) if any check failed.
+/// Print the checklist; `Err` (after printing it) if any check failed.
 pub fn report(checks: &[(&str, Result<String>)]) -> Result<()> {
     print!("{}", render(checks));
+    verdict(checks)
+}
+
+/// Log the checklist, one event per check; `Err` if any check failed.
+pub fn log(checks: &[(&str, Result<String>)]) -> Result<()> {
+    for (name, r) in checks {
+        match r {
+            Ok(ok) => tracing::info!("✓ {name:<8} {ok}"),
+            Err(e) => tracing::error!("✗ {name:<8} {e:#}"),
+        }
+    }
+    verdict(checks)
+}
+
+fn verdict(checks: &[(&str, Result<String>)]) -> Result<()> {
     let failed = checks.iter().filter(|(_, r)| r.is_err()).count();
     if failed > 0 {
         bail!("preflight: {failed} of {} checks failed", checks.len());
@@ -107,6 +128,12 @@ mod tests {
         assert!(out.contains("✗ tracker") && out.contains("jira not found on PATH"));
         assert!(report(&checks).is_err());
         assert!(report(&checks[..1]).is_ok());
+    }
+
+    #[test]
+    fn one_line_collapses_a_wrapped_cli_error() {
+        let glab = b"   ERROR\n\n  Get \"https://x/2327\": read: connection reset by\n  peer.\n\n";
+        assert_eq!(one_line(glab), "ERROR Get \"https://x/2327\": read: connection reset by peer.");
     }
 
     #[test]

@@ -302,8 +302,8 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
                 .map(|p| p.blocked_by.contains(&ticket.key))
                 .unwrap_or(false);
             if parent_blocked_by_child {
-                eprintln!(
-                    "fleetd: block {child_iid}←{parent_iid}: skipped — {} and {} block each other (grooming cycle)",
+                tracing::warn!(
+                    "block {child_iid}←{parent_iid}: skipped — {} and {} block each other (grooming cycle)",
                     ticket.key.0, blocker.0
                 );
                 continue;
@@ -505,7 +505,7 @@ fn spawn<T: Tracker + ?Sized, H: SessionHost>(
     // benign (the order stays queued; a later tick re-checks). A gate *error* is fatal (fail
     // closed: don't claim if we can't verify ownership).
     if tracker.assigned_to_peer(&tkey)? {
-        eprintln!("fleetd: spawn {ticket}: assigned to a peer — skipping the claim (respecting it)");
+        tracing::info!("spawn {ticket}: assigned to a peer — skipping the claim (respecting it)");
         return Ok(());
     }
 
@@ -520,7 +520,7 @@ fn spawn<T: Tracker + ?Sized, H: SessionHost>(
         // Claim follow-ons, best-effort: a failure is a partial claim — logged, not fatal (the
         // transition already locked the ticket and the cog must launch).
         if let Err(e) = tracker.claim(&tkey) {
-            eprintln!("fleetd: spawn {ticket}: claim follow-ons failed: {e:#}");
+            tracing::warn!("spawn {ticket}: claim follow-ons failed: {e:#}");
         }
     }
 
@@ -636,10 +636,10 @@ fn handoff<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
     //    the iid from the ticket's branch, so the ship needn't be in our ledger yet.
     match forge.request_review(&tkey) {
         Ok(reviewers) if reviewers.is_empty() => {
-            eprintln!("fleetd: handoff {ticket}: marked ready; review request skipped (the forge requests reviewers itself)")
+            tracing::info!("handoff {ticket}: marked ready; review request skipped (the forge requests reviewers itself)")
         }
-        Ok(reviewers) => eprintln!("fleetd: handoff {ticket}: review requested from {reviewers:?}"),
-        Err(e) => eprintln!("fleetd: handoff {ticket}: review request failed (non-fatal): {e:#}"),
+        Ok(reviewers) => tracing::info!("handoff {ticket}: review requested from {reviewers:?}"),
+        Err(e) => tracing::warn!("handoff {ticket}: review request failed (non-fatal): {e:#}"),
     }
 
     // 3. Reap the builder: end its session + kill its tmux (best-effort).
@@ -681,7 +681,7 @@ fn reap<T: Tracker + ?Sized, H: SessionHost>(
     // terminal, close the empty parent container. Best-effort — a tracker hiccup or a redundant
     // close (two last siblings reaping together) never fails the reap.
     if let Err(e) = roll_up_parent(tracker, &tkey) {
-        eprintln!("fleetd: reap {ticket}: parent rollup failed: {e:#}");
+        tracing::warn!("reap {ticket}: parent rollup failed: {e:#}");
     }
 
     for session in SessionRepo::for_ticket(ledger, &tkey)? {
@@ -705,7 +705,7 @@ fn reap<T: Tracker + ?Sized, H: SessionHost>(
     if let Some(wt) = worktree {
         if std::path::Path::new(&wt).exists() {
             if let Err(e) = crate::git::GitWorktrees::new(project).remove(&wt) {
-                eprintln!("fleetd: reap {ticket}: worktree cleanup failed (non-fatal): {e:#}");
+                tracing::warn!("reap {ticket}: worktree cleanup failed (non-fatal): {e:#}");
             }
         }
     }
@@ -895,7 +895,7 @@ fn fresh_snapshot<F: Forge + ?Sized>(ledger: &Ledger, forge: &F, ship: &Ship) ->
             Ok(snap)
         }
         Err(e) => {
-            eprintln!("fleetd: fresh poll of !{} failed, using last sync: {e:#}", ship.iid);
+            tracing::warn!("fresh poll of !{} failed, using last sync: {e:#}", ship.iid);
             ShipRepo::snapshot(ledger, &ship.id)?
                 .ok_or_else(|| anyhow!("ship {}: no snapshot", ship.iid))
         }

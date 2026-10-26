@@ -178,7 +178,7 @@ impl Tracker for FsTracker {
     fn board(&self) -> Result<Vec<TrackerTicket>> {
         let (good, bad) = self.scan()?;
         for (path, e) in &bad {
-            eprintln!("fleetd: tracker: skipping {}: {e:#}", path.display());
+            tracing::warn!("skipping {}: {e:#}", path.display());
         }
         Ok(good.into_iter().map(|(key, t)| self.to_ticket(key, &t)).collect())
     }

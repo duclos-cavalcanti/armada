@@ -113,7 +113,7 @@ pub fn run(
         }
         if now >= next_sync {
             if let Err(e) = tick_sync(&ledger, forge.as_ref(), tracker.as_ref()) {
-                eprintln!("fleetd: sync tick error: {e}");
+                tracing::error!("sync tick error: {e:#}");
             }
             next_sync = now + Duration::from_secs(settings::sync_secs(&cfg, &ledger));
         }
@@ -126,10 +126,10 @@ pub fn run(
             match reconcile::tick(&ledger, tracker.as_ref(), &host, forge.as_ref(), &cogs, &cfg.project.path, dry_run) {
                 Ok(n) if n > 0 => {
                     let mode = if dry_run { "dry-run" } else { "live" };
-                    eprintln!("fleetd: reconcile ({mode}) {n} actions");
+                    tracing::info!("reconcile ({mode}) {n} actions");
                 }
                 Ok(_) => {}
-                Err(e) => eprintln!("fleetd: reconcile tick error: {e}"),
+                Err(e) => tracing::error!("reconcile tick error: {e:#}"),
             }
             next_reconcile = now + Duration::from_secs(settings::reconcile_secs(&cfg, &ledger));
         }
@@ -597,7 +597,7 @@ fn record_status(
 fn tick_liveness(ledger: &Ledger, host: &TmuxHost, snapshot: &Snapshot, thresholds: &LivenessThresholds) {
     match context(ledger, host, thresholds) {
         Ok(cogs) => *snapshot.lock().unwrap() = cogs,
-        Err(e) => eprintln!("fleetd: liveness tick error: {e}"),
+        Err(e) => tracing::error!("liveness tick error: {e:#}"),
     }
 }
 

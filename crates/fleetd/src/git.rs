@@ -49,7 +49,7 @@ impl GitWorktrees {
         ensure!(
             out.status.success(),
             "git worktree remove {path} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
+            crate::preflight::one_line(&out.stderr)
         );
 
         if let Some(b) = branch {

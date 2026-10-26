@@ -34,7 +34,7 @@ impl GhForge {
             out.status.success(),
             "gh {} failed: {}",
             args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
+            crate::preflight::one_line(&out.stderr)
         );
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
@@ -52,7 +52,7 @@ impl GhForge {
             .output()?;
         let stdout = String::from_utf8_lossy(&out.stdout);
         if !out.status.success() && !matches!(out.status.code(), Some(1) | Some(8)) || stdout.trim().is_empty() {
-            let err = String::from_utf8_lossy(&out.stderr);
+            let err = crate::preflight::one_line(&out.stderr);
             if err.contains("no checks reported") {
                 return Ok(vec![]);
             }
@@ -72,7 +72,7 @@ impl GhForge {
             cmd.args(["-F", &format!("{k}={v}")]);
         }
         let out = cmd.output()?;
-        ensure!(out.status.success(), "gh api graphql failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        ensure!(out.status.success(), "gh api graphql failed: {}", crate::preflight::one_line(&out.stderr));
         let v: Value = serde_json::from_slice(&out.stdout)?;
         if let Some(errors) = v.get("errors") {
             bail!("gh api graphql: {errors}");
@@ -180,7 +180,7 @@ impl Forge for GhForge {
         // Squash is chosen at merge (`arm_merge`), not here. Drafts are a plan feature on private repos.
         let out = match create(d.draft) {
             Err(e) if d.draft && e.to_string().to_lowercase().contains("draft") => {
-                eprintln!("fleetd: ⚠ {}: drafts unavailable here, opening {} ready instead ({e:#})", self.repo, d.source);
+                tracing::warn!("{}: drafts unavailable here, opening {} ready instead ({e:#})", self.repo, d.source);
                 create(false)?
             }
             other => other?,

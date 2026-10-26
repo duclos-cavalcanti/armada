@@ -28,6 +28,13 @@ pub struct Deployment {
     pub stacks: bool,
 }
 
+/// Refuse to start when another fleetd already answers on `path` — one writer per ledger. A socket
+/// file nobody answers is a crash's leftover, which `serve` clears.
+pub fn refuse_if_running(path: &str) -> Result<()> {
+    anyhow::ensure!(UnixStream::connect(path).is_err(), "fleetd is already running on {path}");
+    Ok(())
+}
+
 /// Bind the socket (clearing any stale file) and serve forever. `cmds` is the write
 /// channel to the scheduler; each connection gets its own clone.
 pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, deployment: Deployment) -> Result<()> {
@@ -42,11 +49,11 @@ pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, deployment: 
                 let deployment = deployment.clone();
                 std::thread::spawn(move || {
                     if let Err(e) = handle(&mut s, &snapshot, &cmds, &deployment) {
-                        eprintln!("fleetd: connection error: {e}");
+                        tracing::warn!("connection error: {e}");
                     }
                 });
             }
-            Err(e) => eprintln!("fleetd: accept error: {e}"),
+            Err(e) => tracing::warn!("accept error: {e}"),
         }
     }
     Ok(())
@@ -772,6 +779,17 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         sock
+    }
+
+    #[test]
+    fn a_live_socket_refuses_a_second_fleetd_but_a_stale_file_does_not() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sock = spawn_server(Arc::new(Mutex::new(vec![])), tx, "guard");
+        assert!(refuse_if_running(&sock).unwrap_err().to_string().contains("already running"));
+        let stale = format!("/tmp/fleetd-test-{}-stale.sock", std::process::id());
+        drop(UnixListener::bind(&stale).unwrap()); // the file stays; nobody answers
+        assert!(refuse_if_running(&stale).is_ok());
+        let _ = std::fs::remove_file(&stale);
     }
 
     fn roundtrip(sock: &str, req: &[u8]) -> String {

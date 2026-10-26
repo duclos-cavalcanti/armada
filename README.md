@@ -75,7 +75,7 @@ git checkout .claude/settings.json
 
 ```bash
 make preflight P=<name>   # check the setup (runtime state, checkout, CLI auth, tmux + claude); `make run` gates on it
-make run P=<name>         # build + run project <name>'s fleetd in the foreground (open a tmux pane first; Ctrl-C stops)
+make run P=<name>         # start project <name>'s fleetd in the background (unless it's up), then open its dashboard
 make stop P=<name>        # stop that project's fleet daemon
 make dashboard P=<name>   # build + run the TUI dashboard
 make export P=<name>      # snapshot the project's ledger → projects/<name>/exports/<name>-<UTC stamp>.db
@@ -85,7 +85,7 @@ make export P=<name>      # snapshot the project's ledger → projects/<name>/ex
 `fleetc` is the control surface — run `fleetc` for its verbs.
 
 **A project is a folder.** `projects/<name>/` holds the project's `fleet.toml`, its runtime state
-in `.fleet/` (ledger, socket, telemetry), its checkout, and its ticket worktrees. `fleetd`,
+in `.fleet/` (ledger, socket, telemetry, `fleetd.log`), its checkout, and its ticket worktrees. `fleetd`,
 `fleetc`, the dashboard and every cog find the project as the nearest folder with a `fleet.toml`,
 starting from the current directory, or from `-C <dir>` (`fleetc -C projects/<name> …`). Outside a
 project they refuse to run. One fleet runs at a time. To switch, let the cogs finish (or

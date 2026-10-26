@@ -28,7 +28,7 @@ impl GlabForge {
         ensure!(
             out.status.success(),
             "glab api {path} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
+            crate::preflight::one_line(&out.stderr)
         );
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
@@ -40,7 +40,7 @@ impl GlabForge {
         ensure!(
             out.status.success(),
             "glab api --paginate {path} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
+            crate::preflight::one_line(&out.stderr)
         );
         let text = String::from_utf8_lossy(&out.stdout);
         let mut all = Vec::new();
@@ -101,7 +101,7 @@ impl GlabForge {
     fn cancel_auto_merge(&self, iid: i64) -> Result<()> {
         let path = format!("projects/{}/merge_requests/{iid}/cancel_merge_when_pipeline_succeeds", self.project);
         let out = Command::new("glab").args(["api", "--method", "POST", &path]).output()?;
-        ensure!(out.status.success(), "glab cancel auto-merge failed: {}", String::from_utf8_lossy(&out.stderr));
+        ensure!(out.status.success(), "glab cancel auto-merge failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
 
@@ -162,10 +162,10 @@ impl Forge for GlabForge {
         let discussion = format!("projects/{}/merge_requests/{iid}/discussions/{thread}", self.project);
         let note = format!("{discussion}/notes");
         let out = Command::new("glab").args(["api", "--method", "POST", &note, "-f", &format!("body={body}")]).output()?;
-        ensure!(out.status.success(), "glab reply failed: {}", String::from_utf8_lossy(&out.stderr));
+        ensure!(out.status.success(), "glab reply failed: {}", crate::preflight::one_line(&out.stderr));
         if resolve {
             let out = Command::new("glab").args(["api", "--method", "PUT", &discussion, "-f", "resolved=true"]).output()?;
-            ensure!(out.status.success(), "glab resolve failed: {}", String::from_utf8_lossy(&out.stderr));
+            ensure!(out.status.success(), "glab resolve failed: {}", crate::preflight::one_line(&out.stderr));
         }
         Ok(())
     }
@@ -192,7 +192,7 @@ impl Forge for GlabForge {
                 &format!("projects/{}/merge_requests/{iid}/rebase", self.project),
             ])
             .output()?;
-        ensure!(out.status.success(), "glab rebase failed: {}", String::from_utf8_lossy(&out.stderr));
+        ensure!(out.status.success(), "glab rebase failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
 
@@ -229,7 +229,7 @@ impl Forge for GlabForge {
                 &format!("blocking_merge_request_id={gid}"),
             ])
             .output()?;
-        ensure!(out.status.success(), "block_on failed: {}", String::from_utf8_lossy(&out.stderr));
+        ensure!(out.status.success(), "block_on failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
 
@@ -256,7 +256,7 @@ impl Forge for GlabForge {
             args.push("--draft");
         }
         let out = Command::new("glab").args(&args).output()?;
-        ensure!(out.status.success(), "glab mr create failed: {}", String::from_utf8_lossy(&out.stderr));
+        ensure!(out.status.success(), "glab mr create failed: {}", crate::preflight::one_line(&out.stderr));
         let stdout = String::from_utf8_lossy(&out.stdout);
         Ok(stdout.lines().rev().find(|l| l.trim_start().starts_with("http")).unwrap_or(stdout.trim()).trim().to_string())
     }
@@ -269,7 +269,7 @@ impl Forge for GlabForge {
         }
         let flag = if draft { "--draft" } else { "--ready" };
         let out = Command::new("glab").args(["mr", "update", &iid.to_string(), "-R", &self.repo()?, flag]).output()?;
-        ensure!(out.status.success(), "glab mr update {flag} failed: {}", String::from_utf8_lossy(&out.stderr));
+        ensure!(out.status.success(), "glab mr update {flag} failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
 
@@ -289,11 +289,11 @@ impl Forge for GlabForge {
     fn post_review(&self, iid: i64, body: &str, approve: bool) -> Result<()> {
         let notes = format!("projects/{}/merge_requests/{iid}/notes", self.project);
         let out = Command::new("glab").args(["api", "--method", "POST", &notes, "-f", &format!("body={body}")]).output()?;
-        ensure!(out.status.success(), "glab review note failed: {}", String::from_utf8_lossy(&out.stderr));
+        ensure!(out.status.success(), "glab review note failed: {}", crate::preflight::one_line(&out.stderr));
         if approve {
             let path = format!("projects/{}/merge_requests/{iid}/approve", self.project);
             let out = Command::new("glab").args(["api", "--method", "POST", &path]).output()?;
-            ensure!(out.status.success(), "glab approve failed: {}", String::from_utf8_lossy(&out.stderr));
+            ensure!(out.status.success(), "glab approve failed: {}", crate::preflight::one_line(&out.stderr));
         }
         Ok(())
     }
@@ -302,7 +302,7 @@ impl Forge for GlabForge {
         let (pid, _) = self.latest_pipeline(iid)?.ok_or_else(|| anyhow!("!{iid}: no pipeline to retry"))?;
         let path = format!("projects/{}/pipelines/{pid}/retry", self.project);
         let out = Command::new("glab").args(["api", "--method", "POST", &path]).output()?;
-        ensure!(out.status.success(), "glab pipeline retry failed: {}", String::from_utf8_lossy(&out.stderr));
+        ensure!(out.status.success(), "glab pipeline retry failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
 
@@ -311,7 +311,7 @@ impl Forge for GlabForge {
         let out = Command::new("glab")
             .args(["mr", "merge", &iid.to_string(), "-R", &repo, "--auto-merge", "--yes"])
             .output()?;
-        ensure!(out.status.success(), "glab arm-merge failed: {}", String::from_utf8_lossy(&out.stderr));
+        ensure!(out.status.success(), "glab arm-merge failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
 
@@ -338,7 +338,7 @@ impl Forge for GlabForge {
         ensure!(
             out.status.success(),
             "glab mr update --reviewer failed: {}",
-            String::from_utf8_lossy(&out.stderr)
+            crate::preflight::one_line(&out.stderr)
         );
         Ok(reviewers)
     }

@@ -31,7 +31,7 @@ impl JiraTracker {
         ensure!(
             out.status.success(),
             "jira issue list failed: {}",
-            String::from_utf8_lossy(&out.stderr)
+            crate::preflight::one_line(&out.stderr)
         );
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
@@ -50,7 +50,7 @@ impl JiraTracker {
             out.status.success(),
             "jira {} failed: {}",
             args.join(" "),
-            String::from_utf8_lossy(&out.stderr)
+            crate::preflight::one_line(&out.stderr)
         );
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
@@ -122,7 +122,7 @@ impl Tracker for JiraTracker {
         let out = Command::new("jira")
             .args(["issue", "move", &key.0, jira_status_name(to)])
             .output()?;
-        ensure!(out.status.success(), "jira move failed: {}", String::from_utf8_lossy(&out.stderr));
+        ensure!(out.status.success(), "jira move failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
 
@@ -139,7 +139,7 @@ impl Tracker for JiraTracker {
         if out.status.success() {
             return Ok(!String::from_utf8_lossy(&out.stdout).trim().is_empty());
         }
-        let err = String::from_utf8_lossy(&out.stderr);
+        let err = crate::preflight::one_line(&out.stderr);
         ensure!(err.contains("No result found"), "jira assignee check failed: {err}");
         Ok(false) // empty match → no peer → claimable
     }

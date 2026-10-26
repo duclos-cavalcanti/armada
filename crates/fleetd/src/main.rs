@@ -12,6 +12,7 @@ mod git;
 mod github;
 mod gitlab;
 mod jira;
+mod logbook;
 mod otlp;
 mod preflight;
 mod reconcile;
@@ -78,11 +79,17 @@ fn now_rfc3339() -> String {
 fn main() -> Result<()> {
     let (dir, args) = wire::split_dir_flag(std::env::args().skip(1).collect())?;
     let project = wire::Project::find(dir.as_deref())?;
-    let cfg = config::Config::load(&project)?;
+    let load = || config::Config::load(&project);
     match args.first().map(String::as_str) {
-        Some("sync") => run_sync(&project, &cfg),
-        Some("preflight") => preflight(&project, &cfg, forge(&cfg).as_ref(), tracker(&cfg).as_ref(), &TmuxHost::new()),
-        None => run_daemon(&project, cfg),
+        Some("sync") => {
+            logbook::init(None)?;
+            run_sync(&project, &load()?)
+        }
+        Some("preflight") => {
+            let cfg = load()?;
+            preflight::report(&checks(&project, &cfg, forge(&cfg).as_ref(), tracker(&cfg).as_ref(), &TmuxHost::new()))
+        }
+        None => run_daemon(&project),
         Some(other) => anyhow::bail!("unknown command {other:?} — usage: fleetd [-C <dir>] [sync | preflight]"),
     }
 }
@@ -116,21 +123,21 @@ fn git_user() -> Option<String> {
 }
 
 /// Every adapter's preflight + the project's runtime state + its checkout, as one checklist
-/// (`fleetd preflight`, and the boot gate before ONLINE).
-fn preflight(
+/// (`fleetd preflight` prints it; the boot gate before ONLINE logs it).
+fn checks(
     project: &wire::Project,
     cfg: &config::Config,
     forge: &dyn Forge,
     tracker: &dyn Tracker,
     host: &dyn SessionHost,
-) -> Result<()> {
-    preflight::report(&[
+) -> [(&'static str, Result<String>); 5] {
+    [
         ("runtime", preflight::runtime(project)),
         ("project", git::GitWorktrees::new(&cfg.project.path).preflight()),
         ("forge", forge.preflight()),
         ("tracker", tracker.preflight()),
         ("host", host.preflight()),
-    ])
+    ]
 }
 
 /// One-shot: pull the armada from the forge into the ledger. The scheduler will run
@@ -146,10 +153,22 @@ fn run_sync(project: &wire::Project, cfg: &config::Config) -> Result<()> {
     Ok(())
 }
 
-fn run_daemon(project: &wire::Project, cfg: config::Config) -> Result<()> {
+/// The daemon. A second fleetd on a live project is refused before it touches anything — the
+/// socket, the log, the ledger (the single-writer rule). Past that, a fatal error (fleet.toml's
+/// included) is logged too — `make run` starts fleetd in the background, so the log is its voice.
+fn run_daemon(project: &wire::Project) -> Result<()> {
+    std::fs::create_dir_all(project.runtime())?;
+    server::refuse_if_running(&project.socket())?;
+    logbook::init(Some(&project.log()))?;
+    config::Config::load(project)
+        .and_then(|cfg| boot(project, cfg))
+        .inspect_err(|e| tracing::error!("{e:#}"))
+}
+
+fn boot(project: &wire::Project, cfg: config::Config) -> Result<()> {
     let (host, forge, tracker) = (TmuxHost::new(), forge(&cfg), tracker(&cfg));
-    println!("fleetd: preflight · {}", project.root.display());
-    preflight(project, &cfg, forge.as_ref(), tracker.as_ref(), &host)?;
+    tracing::info!("preflight · {}", project.root.display());
+    preflight::log(&checks(project, &cfg, forge.as_ref(), tracker.as_ref(), &host))?;
     let ledger = Ledger::open(&project.ledger())?;
 
     // Seed the snapshot once so /context isn't empty before the first poll.
@@ -161,7 +180,7 @@ fn run_daemon(project: &wire::Project, cfg: config::Config) -> Result<()> {
     let otel_addr = cfg.otel_addr.clone();
     std::thread::spawn(move || {
         if let Err(e) = collector::serve(&otel_addr, telemetry) {
-            eprintln!("fleetd: otlp collector exited: {e}");
+            tracing::error!("otlp collector exited: {e}");
         }
     });
 
@@ -183,8 +202,8 @@ fn run_daemon(project: &wire::Project, cfg: config::Config) -> Result<()> {
     // tmux probe re-adopted (proof the restart resumed the fleet, not cold-started it), the
     // effective cadences, and the forge target. Read it as the go/no-go after a (re)start.
     let mode = if settings::dry_run(&cfg, &ledger) { "dry-run — planning only" } else { "LIVE — driving the line" };
-    println!(
-        "fleetd: ONLINE · {mode} · {} cogs adopted · poll {}s / sync {}s / reconcile {}s · forge {} · tracker {}",
+    tracing::info!(
+        "ONLINE · {mode} · {} cogs adopted · poll {}s / sync {}s / reconcile {}s · forge {} · tracker {}",
         snapshot.lock().unwrap().len(),
         settings::poll_secs(&cfg, &ledger),
         settings::sync_secs(&cfg, &ledger),
@@ -194,7 +213,7 @@ fn run_daemon(project: &wire::Project, cfg: config::Config) -> Result<()> {
     );
     std::thread::spawn(move || scheduler::run(ledger, host, forge, tracker, sched_snapshot, cfg, cmd_rx));
 
-    println!("fleetd: serving context on {socket}");
+    tracing::info!("serving context on {socket}");
     server::serve(&socket, snapshot, cmd_tx, deployment) // blocks forever
 }
 

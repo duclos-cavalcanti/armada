@@ -208,6 +208,10 @@ impl Project {
     pub fn telemetry_db(&self) -> String {
         self.runtime().join("telemetry.db").to_string_lossy().into_owned()
     }
+    /// fleetd's log — one line per event; the previous run's is kept as `fleetd.log.1`.
+    pub fn log(&self) -> std::path::PathBuf {
+        self.runtime().join("fleetd.log")
+    }
 }
 
 /// Split a leading `-C <dir>` off a binary's args (like `git -C`): the directory to find the

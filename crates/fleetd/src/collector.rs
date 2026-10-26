@@ -25,11 +25,11 @@ fn serve_on(listener: TcpListener, store: Arc<Mutex<TelemetryStore>>) -> Result<
                 let store = store.clone();
                 std::thread::spawn(move || {
                     if let Err(e) = handle(&mut s, &store) {
-                        eprintln!("fleetd: otlp receiver error: {e}");
+                        tracing::warn!("otlp receiver error: {e}");
                     }
                 });
             }
-            Err(e) => eprintln!("fleetd: otlp accept error: {e}"),
+            Err(e) => tracing::warn!("otlp accept error: {e}"),
         }
     }
     Ok(())
@@ -56,7 +56,7 @@ fn ingest_logs(body: &str, store: &TelemetryStore) -> String {
     };
     for row in otlp::parse_logs(&json, &crate::now_rfc3339()) {
         if let Err(e) = store.record(&row) {
-            eprintln!("fleetd: telemetry record failed: {e}");
+            tracing::warn!("telemetry record failed: {e}");
         }
     }
     ok()
