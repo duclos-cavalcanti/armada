@@ -93,8 +93,8 @@ fn run() -> Result<()> {
                  fleetc settings [list | set <key> <value>]   (live config levers; no restart)\n  \
                  fleetc project                   (the project checkout's path, from fleet.toml)\n  \
                  fleetc cost     [--since <RFC3339>]\n  \
-                 fleetc export   [--to <dir>]      (snapshot the project's state: default exports/<UTC stamp>/)\n  \
-                 fleetc import   <export-dir>      (restore a snapshot; fleetd must be stopped)"
+                 fleetc export   <file>            (snapshot the project's ledger into <file>; safe while fleetd runs)\n  \
+                 fleetc import   <file>            (restore a ledger snapshot; fleetd must be stopped)"
             );
             std::process::exit(2);
         }
@@ -615,55 +615,31 @@ fn reply(args: &[String]) -> Result<()> {
     })
 }
 
-/// A project's state: each database in `.fleet/`, with the schema version this build reads.
-const STATE: [(&str, i64); 2] = [("ledger.db", ledger::SCHEMA_VERSION), ("telemetry.db", ledger::telemetry::SCHEMA_VERSION)];
-
-/// `fleetc export [--to <dir>]` — snapshot the project's state (the ledger + telemetry) into
-/// `<dir>` (default `exports/<UTC stamp>/` in the project folder). Each copy is consistent
-/// (`VACUUM INTO`) and standalone, taken read-only beside a running fleetd.
+/// `fleetc export <file>` — snapshot the project's ledger (its state: tickets, ships, orders,
+/// sessions, events) into `<file>`: a consistent, standalone copy (`VACUUM INTO`), taken read-only
+/// beside a running fleetd. Name it as you like, e.g. with `$(date -u +%Y%m%dT%H%M%SZ)`.
+/// Telemetry (the spend log) isn't state and isn't exported.
 fn export(args: &[String]) -> Result<()> {
-    let to = match args {
-        [] => {
-            let t = time::OffsetDateTime::now_utc();
-            let stamp = format!(
-                "{:04}-{:02}-{:02}T{:02}-{:02}-{:02}Z",
-                t.year(),
-                u8::from(t.month()),
-                t.day(),
-                t.hour(),
-                t.minute(),
-                t.second()
-            );
-            project_dir().root.join("exports").join(stamp)
-        }
-        [flag, dir] if flag == "--to" => std::path::PathBuf::from(dir),
-        _ => bail!("usage: fleetc export [--to <dir>]"),
-    };
-    let runtime = project_dir().runtime();
-    std::fs::create_dir_all(&to)?;
-    let mut copied = Vec::new();
-    for (name, _) in STATE {
-        let (src, dst) = (runtime.join(name), to.join(name));
-        if !src.exists() {
-            continue; // e.g. no telemetry collected yet
-        }
-        anyhow::ensure!(!dst.exists(), "{} already exists — export into a new directory", dst.display());
-        ledger::snapshot(&src.to_string_lossy(), &dst.to_string_lossy())?;
-        copied.push(name);
+    let [file] = args else { bail!("usage: fleetc export <file>") };
+    let ledger = project_dir().ledger();
+    anyhow::ensure!(std::path::Path::new(&ledger).exists(), "no state to export: {ledger} doesn't exist yet");
+    anyhow::ensure!(!std::path::Path::new(file).exists(), "{file} already exists — export to a new file");
+    if let Some(dir) = std::path::Path::new(file).parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
     }
-    anyhow::ensure!(!copied.is_empty(), "no state to export: {} has no ledger yet", runtime.display());
-    println!("exported {} → {}", copied.join(" + "), to.display());
+    ledger::snapshot(&ledger, file)?;
+    println!("exported the ledger → {file}");
     Ok(())
 }
 
-/// `fleetc import <export-dir>` — restore a snapshot into the project's `.fleet/`. Refused while
-/// fleetd is running for this project, or when the export's schema version isn't this build's.
+/// `fleetc import <file>` — restore a ledger snapshot into the project's `.fleet/`. Refused while
+/// fleetd is running for this project, or when the file's schema version isn't this build's.
 fn import(args: &[String]) -> Result<()> {
-    let [from] = args else { bail!("usage: fleetc import <export-dir>") };
-    import_into(project_dir(), std::path::Path::new(from))
+    let [file] = args else { bail!("usage: fleetc import <file>") };
+    import_into(project_dir(), std::path::Path::new(file))
 }
 
-fn import_into(project: &wire::Project, from: &std::path::Path) -> Result<()> {
+fn import_into(project: &wire::Project, file: &std::path::Path) -> Result<()> {
     // 1. fleetd must not be running: something answering on the project's socket means it is. A
     //    socket file nothing answers on is a crash leftover — remove it.
     let socket = project.socket();
@@ -673,33 +649,26 @@ fn import_into(project: &wire::Project, from: &std::path::Path) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => std::fs::remove_file(&socket)?,
         Err(e) => bail!("can't tell whether fleetd is running ({socket}: {e})"),
     }
-    // 2. Check the whole export before touching anything.
-    let mut restore = Vec::new();
-    for (name, want) in STATE {
-        let src = from.join(name);
-        if !src.exists() {
-            anyhow::ensure!(name != "ledger.db", "{} has no ledger.db — not an export", from.display());
-            continue;
-        }
-        let found = ledger::schema_version(&src.to_string_lossy())?;
-        anyhow::ensure!(found == want, "{name} in the export is schema v{found}, this build reads v{want} — use a matching build");
-        restore.push((name, src));
+    // 2. Check the snapshot before touching anything.
+    let found = ledger::schema_version(&file.to_string_lossy())
+        .map_err(|e| anyhow!("{}: not a ledger snapshot ({e})", file.display()))?;
+    anyhow::ensure!(
+        found == ledger::SCHEMA_VERSION,
+        "{} is ledger schema v{found}, this build reads v{} — use a matching build",
+        file.display(),
+        ledger::SCHEMA_VERSION
+    );
+    // 3. Restore. The live ledger's -wal/-shm go first: a stale write-ahead log would be replayed
+    //    onto the restored database. The copy lands under a temp name, then renames into place.
+    std::fs::create_dir_all(project.runtime())?;
+    let dst = project.ledger();
+    for side in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{dst}{side}"));
     }
-    // 3. Restore. The live file's -wal/-shm go first: a stale write-ahead log would be replayed onto
-    //    the restored database. Each copy lands under a temp name, then renames into place.
-    let runtime = project.runtime();
-    std::fs::create_dir_all(&runtime)?;
-    for (name, src) in &restore {
-        let dst = runtime.join(name);
-        for side in ["-wal", "-shm"] {
-            let _ = std::fs::remove_file(format!("{}{side}", dst.display()));
-        }
-        let tmp = runtime.join(format!("{name}.importing"));
-        std::fs::copy(src, &tmp)?;
-        std::fs::rename(&tmp, &dst)?;
-    }
-    let names: Vec<&str> = restore.iter().map(|(n, _)| *n).collect();
-    println!("imported {} from {} — start the fleet to resume from it", names.join(" + "), from.display());
+    let tmp = format!("{dst}.importing");
+    std::fs::copy(file, &tmp)?;
+    std::fs::rename(&tmp, &dst)?;
+    println!("imported {} → the ledger — start the fleet to resume from it", file.display());
     Ok(())
 }
 
@@ -1043,9 +1012,8 @@ mod tests {
     #[test]
     fn import_restores_a_snapshot_and_drops_the_stale_wal() {
         let (p, root) = project("ok");
-        let export = root.join("exports/x");
-        std::fs::create_dir_all(&export).unwrap();
-        ledger::snapshot(&p.ledger(), &export.join("ledger.db").to_string_lossy()).unwrap();
+        let export = root.join("snapshot.db");
+        ledger::snapshot(&p.ledger(), &export.to_string_lossy()).unwrap();
         ledger::Ledger::open(&p.ledger()).unwrap().setting_set("poll_secs", "99").unwrap(); // the state moves on
         std::fs::write(format!("{}-wal", p.ledger()), b"stale").unwrap();
         std::os::unix::net::UnixListener::bind(p.socket()).map(drop).unwrap(); // a crash-leftover socket file
@@ -1060,9 +1028,8 @@ mod tests {
     #[test]
     fn import_refuses_while_fleetd_answers_or_on_another_schema() {
         let (p, root) = project("refuse");
-        let export = root.join("exports/x");
-        std::fs::create_dir_all(&export).unwrap();
-        ledger::snapshot(&p.ledger(), &export.join("ledger.db").to_string_lossy()).unwrap();
+        let export = root.join("snapshot.db");
+        ledger::snapshot(&p.ledger(), &export.to_string_lossy()).unwrap();
 
         let listening = std::os::unix::net::UnixListener::bind(p.socket()).unwrap(); // fleetd "running"
         let e = import_into(&p, &export).unwrap_err().to_string();
@@ -1070,7 +1037,7 @@ mod tests {
         drop(listening);
         let _ = std::fs::remove_file(p.socket());
 
-        let other = rusqlite_version(&export.join("ledger.db"), ledger::SCHEMA_VERSION + 1);
+        let other = rusqlite_version(&export, ledger::SCHEMA_VERSION + 1);
         let e = import_into(&p, &export).unwrap_err().to_string();
         assert!(e.contains(&format!("schema v{other}")), "{e}");
         let _ = std::fs::remove_dir_all(root);

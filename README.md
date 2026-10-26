@@ -92,9 +92,9 @@ project they refuse to run. One fleet runs at a time. To switch, let the cogs fi
 `fleetc sink` them), `make stop`, then `make run P=<other>`. Each project's state stays in its
 folder, so you come back to it exactly as you left it.
 
-`.fleet/` is live SQLite; to keep or move a project's state, snapshot it with `fleetc export`
-(a consistent copy, safe beside a running fleet) and restore it with `fleetc import <dir>`
-(with the fleet stopped).
+`.fleet/` is live SQLite; to keep or move a project's state, snapshot its ledger with
+`fleetc export <file>` (a consistent copy, safe beside a running fleet) and restore it with
+`fleetc import <file>` (with the fleet stopped).
 
 ---
 
