@@ -121,7 +121,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 f.proposals.len(),
                 f.held.len()
             ),
-            Some(header(&[("What", 9), ("Ref", 12), ("From", 12), ("Convoy", 12), ("Age", 6), ("Detail", 0)])),
+            Some(header(&[("What", 9), ("Id", 5), ("Ticket", 12), ("From", 12), ("Convoy", 12), ("Age", 6), ("Detail", 0)])),
             f.proposals.iter().map(proposal_row).chain(f.held.iter().map(|t| held_row(t, &f.held_reasons))).collect(),
         ),
         Pane::Log => (
@@ -349,20 +349,22 @@ fn convoy_row(c: &Convoy, f: &crate::source::Fleet) -> Line<'static> {
     ])
 }
 
-/// Proposals · a proposal: accept or drop it.
+/// Proposals · a proposal: accept or drop it. An existing ticket shows its key (a new one has
+/// none until it's filed).
 fn proposal_row(p: &Proposal) -> Line<'static> {
     let key = |k: Option<&String>| k.cloned().unwrap_or_else(|| "—".into());
-    let (detail, style) = match &p.proposed {
-        Proposed::New(d) => (format!("new {}: {}", d.kind, d.title), Style::default()),
-        Proposed::Existing { ticket, why, .. } => (format!("{} · {why}", ticket.0), Style::default().fg(Color::Cyan)),
+    let (what, ticket, detail) = match &p.proposed {
+        Proposed::New(d) => ("new", "—".to_string(), format!("{}: {}", d.kind, d.title)),
+        Proposed::Existing { ticket, why, .. } => ("existing", ticket.0.clone(), why.clone()),
     };
     cells(vec![
-        ("proposal".into(), 9, Style::default().fg(Color::Cyan)),
-        (format!("#{}", p.id.0), 12, Style::default()),
+        (what.into(), 9, Style::default().fg(Color::Cyan)),
+        (format!("#{}", p.id.0), 5, Style::default()),
+        (ticket, 12, Style::default()),
         (key(p.from_ticket.as_ref().map(|k| &k.0)), 12, Style::default()),
         (key(p.proposed.convoy().map(|c| &c.0)), 12, Style::default()),
         (fmt_age(age_of(&p.created_at)), 6, dim()),
-        (detail, 0, style),
+        (detail, 0, Style::default()),
     ])
 }
 
@@ -371,6 +373,7 @@ fn held_row(t: &Ticket, reasons: &HashMap<String, String>) -> Line<'static> {
     let reason = reasons.get(&t.key.0).map(String::as_str).filter(|r| !r.is_empty()).unwrap_or("(no reason given)");
     cells(vec![
         ("held".into(), 9, Style::default().fg(Color::Magenta)),
+        ("—".into(), 5, dim()),
         (t.key.0.clone(), 12, Style::default()),
         ("—".into(), 12, dim()),
         (t.convoy.as_ref().map(|c| c.0.clone()).unwrap_or_default(), 12, Style::default()),
