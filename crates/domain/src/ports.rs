@@ -163,6 +163,12 @@ pub trait Forge {
     fn open_mr(&self, draft: &MrDraft) -> Result<String>;
     /// The MR's CI: its status and every failed job with its log tail (child pipelines included).
     fn ci(&self, iid: i64) -> Result<CiReport>;
+    /// The ref an MR's head can be fetched by from `origin` (GitHub `pull/N/head`, GitLab
+    /// `merge-requests/N/head`) — how a reviewer gets an MR it didn't author.
+    fn fetch_ref(&self, iid: i64) -> String;
+    /// Post one review comment on the MR, then approve it when `approve` (the comment stands even
+    /// if the forge refuses the approval, e.g. on your own MR).
+    fn post_review(&self, iid: i64, body: &str, approve: bool) -> Result<()>;
     /// Re-run the MR's failed CI jobs (a transient failure's fix — no commit).
     fn retry_ci(&self, iid: i64) -> Result<()>;
     /// Hand our MR to the team's review: mark it ready (a draft is the pre-review state), resolve

@@ -315,9 +315,14 @@ pub struct ShipSnapshot {
     pub synced_at: Timestamp,
 }
 
-/// Read-layer view-model — the ONLY place `Ship` + snapshot couple. Never a table.
+/// Read-layer view-model — the ONLY place `Ship` + snapshot couple. Never a table. `fleetc ship`
+/// returns it, with the ref `git fetch origin <fetch_ref>` gets the MR's head by (any author's MR).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ShipView { pub ship: Ship, pub snapshot: Option<ShipSnapshot> }
+pub struct ShipView {
+    pub ship: Ship,
+    pub snapshot: Option<ShipSnapshot>,
+    pub fetch_ref: String,
+}
 
 /// A ship as the **forge** reports it (a `Forge` port DTO) — facts + mirror fields
 /// together, *before* we assign our internal `ShipId`. The sync splits it into a

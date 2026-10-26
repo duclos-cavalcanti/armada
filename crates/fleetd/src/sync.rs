@@ -130,6 +130,12 @@ mod tests {
         fn reply(&self, _: i64, _: &str, _: &str, _: bool) -> Result<()> {
             Ok(())
         }
+        fn fetch_ref(&self, iid: i64) -> String {
+            format!("pull/{iid}/head")
+        }
+        fn post_review(&self, _: i64, _: &str, _: bool) -> Result<()> {
+            Ok(())
+        }
         fn request_review(&self, _: &domain::TicketKey) -> Result<Vec<String>> {
             Ok(vec![])
         }

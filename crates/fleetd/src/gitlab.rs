@@ -282,6 +282,22 @@ impl Forge for GlabForge {
         Ok(CiReport { status: pipeline_status(&status), failed })
     }
 
+    fn fetch_ref(&self, iid: i64) -> String {
+        format!("merge-requests/{iid}/head")
+    }
+
+    fn post_review(&self, iid: i64, body: &str, approve: bool) -> Result<()> {
+        let notes = format!("projects/{}/merge_requests/{iid}/notes", self.project);
+        let out = Command::new("glab").args(["api", "--method", "POST", &notes, "-f", &format!("body={body}")]).output()?;
+        ensure!(out.status.success(), "glab review note failed: {}", String::from_utf8_lossy(&out.stderr));
+        if approve {
+            let path = format!("projects/{}/merge_requests/{iid}/approve", self.project);
+            let out = Command::new("glab").args(["api", "--method", "POST", &path]).output()?;
+            ensure!(out.status.success(), "glab approve failed: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        Ok(())
+    }
+
     fn retry_ci(&self, iid: i64) -> Result<()> {
         let (pid, _) = self.latest_pipeline(iid)?.ok_or_else(|| anyhow!("!{iid}: no pipeline to retry"))?;
         let path = format!("projects/{}/pipelines/{pid}/retry", self.project);

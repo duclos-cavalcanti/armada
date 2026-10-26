@@ -87,6 +87,15 @@ pub struct LaunchCmd {
     pub draft: bool,
 }
 
+/// Post one review comment on an MR, approving it when `approve` (`POST /review-post`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewPostCmd {
+    pub iid: i64,
+    pub body: String,
+    #[serde(default)]
+    pub approve: bool,
+}
+
 /// Reply on one review thread, resolving it when `resolve` (`POST /reply`, `fleetc reply`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReplyCmd {

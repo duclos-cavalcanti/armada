@@ -86,6 +86,8 @@ fn handle(
         (Some("POST"), Some(p)) if p.starts_with("/rebase") => handle_rebase(cmds, p),
         (Some("GET"), Some(p)) if p.starts_with("/ci?") => handle_ci(cmds, p),
         (Some("POST"), Some("/reply")) => handle_reply(&request, cmds),
+        (Some("GET"), Some(p)) if p.starts_with("/ship?") => handle_ship(cmds, p),
+        (Some("POST"), Some("/review-post")) => handle_review_post(&request, cmds),
         (Some("POST"), Some(p)) if p.starts_with("/retry-ci?") => handle_retry_ci(cmds, p),
         (Some("POST"), Some("/launch")) => handle_launch(&request, cmds, deployment),
         (Some("POST"), Some("/arm")) => handle_arm(&request, cmds),
@@ -334,6 +336,43 @@ fn handle_review(cmds: &Sender<Command>, path: &str) -> String {
             let body = serde_json::to_string(&review).unwrap_or_else(|_| "{}".into());
             http_response("200 OK", "application/json", &body)
         }
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
+/// `GET /ship?iid=N` — one ship (ours or an ally's) with its snapshot and fetch ref.
+fn handle_ship(cmds: &Sender<Command>, path: &str) -> String {
+    let Some(iid) = parse_iid(path) else {
+        return http_response("400 Bad Request", "text/plain", "missing/invalid ?iid=");
+    };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::GetShip { iid, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(view)) => http_response("200 OK", "application/json", &serde_json::to_string(&view).unwrap_or_default()),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
+/// `POST /review-post` — post one review comment on an MR, approving it when asked.
+fn handle_review_post(request: &str, cmds: &Sender<Command>) -> String {
+    let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+    let cmd: wire::ReviewPostCmd = match serde_json::from_str(body) {
+        Ok(d) => d,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
+    };
+    if cmd.body.trim().is_empty() {
+        return http_response("400 Bad Request", "text/plain", "a review needs a body");
+    }
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::PostReview { cmd, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(())) => http_response("200 OK", "text/plain", "posted"),
         Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
         Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
     }
@@ -795,6 +834,8 @@ mod tests {
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Reply { reply, .. } => { let _ = reply.send(Ok(())); }
+                    Command::GetShip { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::PostReview { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::RetryCi { reply, .. } => { let _ = reply.send(Ok(())); }
                 }
             }
@@ -848,6 +889,8 @@ mod tests {
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Reply { reply, .. } => { let _ = reply.send(Ok(())); }
+                    Command::GetShip { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::PostReview { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::RetryCi { reply, .. } => { let _ = reply.send(Ok(())); }
                 }
             }

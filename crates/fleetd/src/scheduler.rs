@@ -44,6 +44,8 @@ type PacketReply = std::sync::mpsc::Sender<std::result::Result<Packet, String>>;
 type ConvoyReply = std::sync::mpsc::Sender<std::result::Result<ConvoyView, String>>;
 /// An MR-review read's reply — the fresh open-thread count + floating notes.
 type ReviewReply = std::sync::mpsc::Sender<std::result::Result<domain::ReviewState, String>>;
+/// A ship read's reply — the ship, its snapshot, and its fetch ref.
+type ShipReply = std::sync::mpsc::Sender<std::result::Result<domain::ShipView, String>>;
 /// A CI read's reply — status + failed jobs with log tails.
 type CiReply = std::sync::mpsc::Sender<std::result::Result<domain::CiReport, String>>;
 /// A ticket read's reply — its full text.
@@ -71,7 +73,9 @@ pub enum Command {
     GetConvoyView { convoy: ConvoyKey, reply: ConvoyReply }, // a read: the captain's convoy slice
     GetReview { iid: i64, reply: ReviewReply }, // a read: an MR's fresh review surface (forge)
     Rebase { iid: i64, reply: Reply },          // an action: server-side rebase an MR (forge)
-    Reply { cmd: wire::ReplyCmd, reply: Reply }, // an action: answer (and resolve) a review thread (forge)
+    Reply { cmd: wire::ReplyCmd, reply: Reply },
+    GetShip { iid: i64, reply: ShipReply },           // a read: one ship + snapshot + fetch ref (ledger + forge)
+    PostReview { cmd: wire::ReviewPostCmd, reply: Reply }, // an action: a summary review comment (+ approve) (forge) // an action: answer (and resolve) a review thread (forge)
     GetCi { iid: i64, reply: CiReply },         // a read: an MR's CI status + failed jobs (forge)
     RetryCi { iid: i64, reply: Reply },         // an action: re-run an MR's failed CI jobs (forge)
     Launch { launch: Launch, reply: UrlReply }, // an action: open a ticket's MR (forge)
@@ -223,6 +227,12 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let res = forge.rebase(iid).map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
+        Command::GetShip { iid, reply } => {
+            let _ = reply.send(ship_view(ledger, forge, iid).map_err(|e| format!("{e:#}")));
+        }
+        Command::PostReview { cmd, reply } => {
+            let _ = reply.send(forge.post_review(cmd.iid, &cmd.body, cmd.approve).map_err(|e| format!("{e:#}")));
+        }
         Command::Reply { cmd, reply } => {
             let res = forge.reply(cmd.iid, &cmd.thread, &cmd.body, cmd.resolve).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
@@ -273,6 +283,13 @@ fn launch(ledger: &Ledger, forge: &dyn Forge, l: Launch) -> Result<String> {
     };
     let target = base.strip_prefix("origin/").unwrap_or(&base).to_string();
     forge.open_mr(&MrDraft { source, target, title: l.title, description: l.description, draft: l.draft })
+}
+
+/// One ship by iid — ours or an ally's — with its snapshot and the ref to fetch its head by.
+fn ship_view(ledger: &Ledger, forge: &dyn Forge, iid: i64) -> Result<domain::ShipView> {
+    let ship = ShipRepo::get_by_iid(ledger, iid)?.ok_or_else(|| anyhow!("!{iid}: not in the armada (synced yet?)"))?;
+    let snapshot = ShipRepo::snapshot(ledger, &ship.id)?;
+    Ok(domain::ShipView { ship, snapshot, fetch_ref: forge.fetch_ref(iid) })
 }
 
 /// A ticket's full text from the tracker, plus the fleet's hold on it from the ledger.
@@ -660,6 +677,12 @@ mod tests {
             Ok(())
         }
         fn reply(&self, _: i64, _: &str, _: &str, _: bool) -> Result<()> {
+            Ok(())
+        }
+        fn fetch_ref(&self, iid: i64) -> String {
+            format!("pull/{iid}/head")
+        }
+        fn post_review(&self, _: i64, _: &str, _: bool) -> Result<()> {
             Ok(())
         }
         fn open_mr(&self, d: &MrDraft) -> Result<String> {

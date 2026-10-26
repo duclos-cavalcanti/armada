@@ -1675,6 +1675,12 @@ mod tests {
         fn reply(&self, _: i64, _: &str, _: &str, _: bool) -> Result<()> {
             Ok(())
         }
+        fn fetch_ref(&self, iid: i64) -> String {
+            format!("pull/{iid}/head")
+        }
+        fn post_review(&self, _: i64, _: &str, _: bool) -> Result<()> {
+            Ok(())
+        }
         fn request_review(&self, ticket: &TicketKey) -> Result<Vec<String>> {
             self.review_requested.borrow_mut().push(ticket.0.clone());
             Ok(vec!["alice".into(), "bob".into()])

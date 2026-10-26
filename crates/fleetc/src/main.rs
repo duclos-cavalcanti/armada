@@ -50,6 +50,8 @@ fn run() -> Result<()> {
         Some("rebase") => rebase(&args[1..]),
         Some("ci") => ci(&args[1..]),
         Some("reply") => reply(&args[1..]),
+        Some("ship") => ship(&args[1..]),
+        Some("review-post") => review_post(&args[1..]),
         Some("retry-ci") => retry_ci(&args[1..]),
         Some("launch") => launch(&args[1..]),
         Some("ticket") => ticket(&args[1..]),
@@ -76,6 +78,8 @@ fn run() -> Result<()> {
                  fleetc transcript --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] [--open]   (resolve a cog's transcript)\n  \
                  fleetc review   --iid <N>         (an MR's fresh review surface: open threads + floating notes)\n  \
                  fleetc reply    --iid <N> --thread <id> --body <text|-> [--resolve]   (answer a review thread)\n  \
+                 fleetc ship     --iid <N>         (one MR, ours or an ally's: ship + snapshot + fetch ref, as JSON)\n  \
+                 fleetc review-post --iid <N> --body <text|-> [--approve]   (post one review comment; approve if clean)\n  \
                  fleetc rebase   --iid <N>         (server-side rebase an MR)\n  \
                  fleetc ci       --iid <N>         (the MR's CI: status + each failed job's log tail, as JSON)\n  \
                  fleetc retry-ci --iid <N>         (re-run the MR's failed CI jobs)\n  \
@@ -605,6 +609,40 @@ fn reply(args: &[String]) -> Result<()> {
         body,
         resolve,
     })
+}
+
+/// `fleetc ship --iid <N>` — one MR (ours or an ally's) as JSON: the ship, its snapshot, and the
+/// ref to fetch its head by (`git fetch origin <fetch_ref>`).
+fn ship(args: &[String]) -> Result<()> {
+    let iid = require_iid(args, "ship")?;
+    let (code, body) = wire::get_json(&socket(), &format!("/ship?iid={iid}"))?;
+    if code != 200 {
+        bail!("fleetd ({code}): {body}");
+    }
+    println!("{body}");
+    Ok(())
+}
+
+/// `fleetc review-post --iid <N> --body <text|-> [--approve]` — post one review comment on an MR
+/// (`--body -` reads stdin), then approve it when asked.
+fn review_post(args: &[String]) -> Result<()> {
+    let (mut iid, mut body, mut approve) = (None, None, false);
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
+        match flag.as_str() {
+            "--iid" => iid = Some(take()?.parse::<i64>().map_err(|_| anyhow!("--iid must be a number"))?),
+            "--body" => body = Some(take()?),
+            "--approve" => approve = true,
+            other => bail!("unknown flag: {other}"),
+        }
+    }
+    let mut body = body.ok_or_else(|| anyhow!("--body required"))?;
+    if body == "-" {
+        body.clear();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
+    }
+    post_and_print("/review-post", &wire::ReviewPostCmd { iid: iid.ok_or_else(|| anyhow!("--iid required"))?, body, approve })
 }
 
 /// `fleetc ci --iid <N>` — the MR's CI as JSON: `{status, failed: [{name, url, log_tail}]}`, failed

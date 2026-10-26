@@ -210,6 +210,19 @@ impl Forge for GhForge {
         Ok(CiReport { status: checks_status(&checks), failed: jobs })
     }
 
+    fn fetch_ref(&self, n: i64) -> String {
+        format!("pull/{n}/head")
+    }
+
+    fn post_review(&self, n: i64, body: &str, approve: bool) -> Result<()> {
+        let n = n.to_string();
+        self.gh(&["pr", "comment", &n, "--body", body])?;
+        if approve {
+            self.gh(&["pr", "review", &n, "--approve"])?;
+        }
+        Ok(())
+    }
+
     fn retry_ci(&self, n: i64) -> Result<()> {
         let mut runs: Vec<String> = self
             .checks(n)?
