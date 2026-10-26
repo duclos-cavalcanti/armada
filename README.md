@@ -79,6 +79,7 @@ make preflight P=<name>   # check the setup (runtime state, checkout, CLI auth, 
 make run P=<name>         # build + run project <name>'s fleetd in the foreground (open a tmux pane first; Ctrl-C stops)
 make stop                 # stop the fleet daemon
 make dashboard P=<name>   # build + run the TUI dashboard
+make export P=<name>      # snapshot the project's ledger → projects/<name>/exports/<name>-<UTC stamp>.db
 ```
 
 `fleetd` self-ticks (poll / sync / reconcile cadences, set in `fleet.toml`);

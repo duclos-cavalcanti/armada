@@ -8,7 +8,7 @@
 # `make` with no target prints the help summary.
 
 .DEFAULT_GOAL := help
-.PHONY: help install uninstall need-project preflight run stop dashboard
+.PHONY: help install uninstall need-project preflight run stop dashboard export
 
 help:                            ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / { printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -31,6 +31,9 @@ preflight: need-project          ## Check project P's setup: runtime state, chec
 run: need-project                ## Build + run project P's fleet daemon in the foreground (open a pane first; Ctrl-C to stop)
 	@if pgrep -x fleetd >/dev/null; then echo "fleetd already running — make stop first"; exit 1; fi
 	cargo run -p fleetd -- -C projects/$(P)
+
+export: need-project             ## Snapshot project P's ledger to projects/P/exports/P-<UTC stamp>.db (safe while running)
+	cargo run -q -p fleetc -- -C projects/$(P) export "projects/$(P)/exports/$(P)-$$(date -u +%Y%m%dT%H%M%SZ).db"
 
 stop:                            ## Stop the fleet daemon
 	@pkill -x fleetd && echo "fleetd stopped" || echo "fleetd not running"
