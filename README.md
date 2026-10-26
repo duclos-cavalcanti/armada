@@ -77,7 +77,7 @@ git checkout .claude/settings.json
 ```bash
 make preflight P=<name>   # check the setup (runtime state, checkout, CLI auth, tmux + claude); `make run` gates on it
 make run P=<name>         # build + run project <name>'s fleetd in the foreground (open a tmux pane first; Ctrl-C stops)
-make stop                 # stop the fleet daemon
+make stop P=<name>        # stop that project's fleet daemon
 make dashboard P=<name>   # build + run the TUI dashboard
 make export P=<name>      # snapshot the project's ledger → projects/<name>/exports/<name>-<UTC stamp>.db
 ```
