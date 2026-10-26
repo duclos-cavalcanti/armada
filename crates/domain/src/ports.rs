@@ -159,6 +159,10 @@ pub trait Forge {
     /// Open a new MR from `draft` (the source branch is already pushed), assigned to the fleet's
     /// user. Returns its URL; the next sync picks the MR up into the armada.
     fn open_mr(&self, draft: &MrDraft) -> Result<String>;
+    /// The MR's CI: its status and every failed job with its log tail (child pipelines included).
+    fn ci(&self, iid: i64) -> Result<CiReport>;
+    /// Re-run the MR's failed CI jobs (a transient failure's fix — no commit).
+    fn retry_ci(&self, iid: i64) -> Result<()>;
     /// Hand our MR to the team's review: mark it ready (a draft is the pre-review state), resolve
     /// the reviewer set (GitLab: the approval rules' approvers, minus the author), assign them, and
     /// return the set — empty where the forge requests review itself (GitHub's CODEOWNERS on ready). Called once at handoff — the MR may not be in the ledger yet, so the forge

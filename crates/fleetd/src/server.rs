@@ -84,6 +84,8 @@ fn handle(
         (Some("GET"), Some(p)) if p.starts_with("/packet") => handle_packet(cmds, p),
         (Some("GET"), Some(p)) if p.starts_with("/review") => handle_review(cmds, p),
         (Some("POST"), Some(p)) if p.starts_with("/rebase") => handle_rebase(cmds, p),
+        (Some("GET"), Some(p)) if p.starts_with("/ci?") => handle_ci(cmds, p),
+        (Some("POST"), Some(p)) if p.starts_with("/retry-ci?") => handle_retry_ci(cmds, p),
         (Some("POST"), Some("/launch")) => handle_launch(&request, cmds, deployment),
         (Some("POST"), Some("/arm")) => handle_arm(&request, cmds),
         (Some("GET"), Some(p)) if p.starts_with("/ticket?") => handle_ticket_view(cmds, p),
@@ -331,6 +333,38 @@ fn handle_review(cmds: &Sender<Command>, path: &str) -> String {
             let body = serde_json::to_string(&review).unwrap_or_else(|_| "{}".into());
             http_response("200 OK", "application/json", &body)
         }
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
+/// `GET /ci?iid=N` — the MR's CI: status + every failed job with its log tail.
+fn handle_ci(cmds: &Sender<Command>, path: &str) -> String {
+    let Some(iid) = parse_iid(path) else {
+        return http_response("400 Bad Request", "text/plain", "missing/invalid ?iid=");
+    };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::GetCi { iid, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(ci)) => http_response("200 OK", "application/json", &serde_json::to_string(&ci).unwrap_or_default()),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
+/// `POST /retry-ci?iid=N` — re-run the MR's failed CI jobs.
+fn handle_retry_ci(cmds: &Sender<Command>, path: &str) -> String {
+    let Some(iid) = parse_iid(path) else {
+        return http_response("400 Bad Request", "text/plain", "missing/invalid ?iid=");
+    };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::RetryCi { iid, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(())) => http_response("200 OK", "text/plain", "retried"),
         Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
         Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
     }
@@ -737,6 +771,8 @@ mod tests {
                     Command::NewTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
+                    Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::RetryCi { reply, .. } => { let _ = reply.send(Ok(())); }
                 }
             }
         });
@@ -787,6 +823,8 @@ mod tests {
                     Command::NewTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
+                    Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::RetryCi { reply, .. } => { let _ = reply.send(Ok(())); }
                 }
             }
         });

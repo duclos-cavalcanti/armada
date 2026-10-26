@@ -48,6 +48,8 @@ fn run() -> Result<()> {
         Some("transcript") => transcript(&args[1..]),
         Some("review") => review(&args[1..]),
         Some("rebase") => rebase(&args[1..]),
+        Some("ci") => ci(&args[1..]),
+        Some("retry-ci") => retry_ci(&args[1..]),
         Some("launch") => launch(&args[1..]),
         Some("ticket") => ticket(&args[1..]),
         Some("arm") => arm(&args[1..]),
@@ -73,6 +75,8 @@ fn run() -> Result<()> {
                  fleetc transcript --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] [--open]   (resolve a cog's transcript)\n  \
                  fleetc review   --iid <N>         (an MR's fresh review surface: open-thread count + floating notes)\n  \
                  fleetc rebase   --iid <N>         (server-side rebase an MR)\n  \
+                 fleetc ci       --iid <N>         (the MR's CI: status + each failed job's log tail, as JSON)\n  \
+                 fleetc retry-ci --iid <N>         (re-run the MR's failed CI jobs)\n  \
                  fleetc arm      <KEY-N>          (arm the ticket's MR to merge once green; refused while held or blocked)\n  \
                  fleetc ticket   <KEY-N>                (a ticket's full text: type, status, links, description)\n  \
                  fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (prints the new key)\n  \
@@ -562,6 +566,24 @@ fn review(args: &[String]) -> Result<()> {
     }
     println!("{body}");
     Ok(())
+}
+
+/// `fleetc ci --iid <N>` — the MR's CI as JSON: `{status, failed: [{name, url, log_tail}]}`, failed
+/// child pipelines included — what fleet-repair classifies.
+fn ci(args: &[String]) -> Result<()> {
+    let iid = require_iid(args, "ci")?;
+    let (code, body) = wire::get_json(&socket(), &format!("/ci?iid={iid}"))?;
+    if code != 200 {
+        bail!("fleetd ({code}): {body}");
+    }
+    println!("{body}");
+    Ok(())
+}
+
+/// `fleetc retry-ci --iid <N>` — re-run the MR's failed CI jobs (a transient failure's fix).
+fn retry_ci(args: &[String]) -> Result<()> {
+    let iid = require_iid(args, "retry-ci")?;
+    post_and_print(&format!("/retry-ci?iid={iid}"), &serde_json::json!({}))
 }
 
 /// `fleetc rebase --iid <N>` — server-side rebase the MR via the factory's forge (`GlabForge::rebase`).

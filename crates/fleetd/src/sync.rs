@@ -121,6 +121,12 @@ mod tests {
         fn open_mr(&self, _: &domain::MrDraft) -> Result<String> {
             Ok("https://x/1".into())
         }
+        fn ci(&self, _: i64) -> Result<domain::CiReport> {
+            unimplemented!()
+        }
+        fn retry_ci(&self, _: i64) -> Result<()> {
+            Ok(())
+        }
         fn request_review(&self, _: &domain::TicketKey) -> Result<Vec<String>> {
             Ok(vec![])
         }

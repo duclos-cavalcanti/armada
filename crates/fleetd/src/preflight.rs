@@ -32,6 +32,13 @@ fn headline(err: &str) -> String {
         .to_string()
 }
 
+/// The last `lines` lines of a CLI log, ANSI colour stripped — a failed CI job's tail.
+pub(crate) fn log_tail(log: &str, lines: usize) -> String {
+    let clean = strip_ansi(log);
+    let all: Vec<&str> = clean.lines().collect();
+    all[all.len().saturating_sub(lines)..].join("\n")
+}
+
 /// Drop ANSI colour escapes (`ESC [ … letter`) so CLI output reads cleanly in the checklist.
 fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

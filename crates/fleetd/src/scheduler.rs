@@ -44,6 +44,8 @@ type PacketReply = std::sync::mpsc::Sender<std::result::Result<Packet, String>>;
 type ConvoyReply = std::sync::mpsc::Sender<std::result::Result<ConvoyView, String>>;
 /// An MR-review read's reply — the fresh open-thread count + floating notes.
 type ReviewReply = std::sync::mpsc::Sender<std::result::Result<domain::ReviewState, String>>;
+/// A CI read's reply — status + failed jobs with log tails.
+type CiReply = std::sync::mpsc::Sender<std::result::Result<domain::CiReport, String>>;
 /// A ticket read's reply — its full text.
 type TicketReply = std::sync::mpsc::Sender<std::result::Result<domain::TicketDetail, String>>;
 /// A launch's reply — the new MR's URL.
@@ -69,6 +71,8 @@ pub enum Command {
     GetConvoyView { convoy: ConvoyKey, reply: ConvoyReply }, // a read: the captain's convoy slice
     GetReview { iid: i64, reply: ReviewReply }, // a read: an MR's fresh review surface (forge)
     Rebase { iid: i64, reply: Reply },          // an action: server-side rebase an MR (forge)
+    GetCi { iid: i64, reply: CiReply },         // a read: an MR's CI status + failed jobs (forge)
+    RetryCi { iid: i64, reply: Reply },         // an action: re-run an MR's failed CI jobs (forge)
     Launch { launch: Launch, reply: UrlReply }, // an action: open a ticket's MR (forge)
     Arm { ticket: TicketKey, reply: Reply }, // an action: arm the ticket's MR, unless held/blocked (forge)
     GetTicket { ticket: TicketKey, reply: TicketReply }, // a read: a ticket's full text (tracker)
@@ -217,6 +221,12 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         Command::Rebase { iid, reply } => {
             let res = forge.rebase(iid).map_err(|e| e.to_string());
             let _ = reply.send(res);
+        }
+        Command::GetCi { iid, reply } => {
+            let _ = reply.send(forge.ci(iid).map_err(|e| format!("{e:#}")));
+        }
+        Command::RetryCi { iid, reply } => {
+            let _ = reply.send(forge.retry_ci(iid).map_err(|e| format!("{e:#}")));
         }
         Command::Launch { launch: l, reply } => {
             let res = launch(ledger, forge, l).map_err(|e| format!("{e:#}"));
@@ -603,6 +613,12 @@ mod tests {
                 anyhow::bail!("drafts are not available on this repo");
             }
             self.drafted.borrow_mut().push((iid, draft));
+            Ok(())
+        }
+        fn ci(&self, _: i64) -> Result<domain::CiReport> {
+            unimplemented!()
+        }
+        fn retry_ci(&self, _: i64) -> Result<()> {
             Ok(())
         }
         fn open_mr(&self, d: &MrDraft) -> Result<String> {

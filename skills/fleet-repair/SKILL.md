@@ -1,116 +1,68 @@
 ---
-description: Classify a broken GitLab pipeline on the current branch and attempt a good-faith fix (retry/lint/build/test/infra); escalate if unclassifiable or out of scope
+description: Classify a broken CI run on the ticket's MR and attempt a good-faith fix (retry / lint / build / test / config); escalate if unclassifiable or out of scope. Forge-neutral — reads CI through `fleetc ci`.
 argument-hint:
 ---
 
 # Skill: fleet-repair
 
-You are attempting a good-faith fix for a broken GitLab pipeline on the current
-branch's MR. The skill discovers the MR and its latest pipeline from the current
-branch; if the pipeline is healthy (`success` / `running` / pending / etc.), the
-skill no-ops and exits 0. If `failed` or `canceled`, the skill investigates via
-`/ci-failures`, classifies the failure, and either commits + pushes a
-category-appropriate fix or escalates.
+You are attempting a good-faith fix for broken CI on the ticket's MR. If CI is healthy
+(passing or still running), the skill no-ops. If it failed, you read each failed job's
+log, classify the failure, and either push a fix, re-run a transient failure, or
+escalate.
 
-**Preconditions** (caller's responsibility): clean working tree, worktree
-checked out on the MR's branch, local tree mirrors origin.
+**Preconditions** (the caller's): a clean working tree on the MR's branch, mirroring
+origin.
 
-This skill ends with **either** a committed + pushed fix (the new pipeline that
-push triggers will be observed by the caller's next tick), **or** no-op exit 0
-when the pipeline is already healthy, **or** an escalation when the failure
-isn't classifiable or a fix would exceed ticket scope.
+**Ends with** a pushed fix (the next CI run is the caller's next look), a re-run, a no-op
+when CI is healthy, or an escalation when the failure isn't classifiable or a fix would
+exceed the ticket. Land CI green without widening scope; when unsure, escalate rather
+than improvise.
 
-**Persona:** You are a Senior Staff engineer with Rust, CDK, and CI familiarity.
-Your goal is to land a fix that turns the failing pipeline green without
-expanding scope beyond the ticket. If uncertain, escalate rather than improvise.
-
----
-
-## Lifecycle at a glance
-
-- **Discover and gate** — find the current branch's MR + latest pipeline; no-op
-  if healthy
-- **Investigate** — invoke `/ci-failures` to surface failing jobs and traces
-- **Gather context** — ticket ACs (Jira), MR description, current code state
-- **Classify and fix** — match the failure to a category, apply the action,
-  commit + push; or escalate if unclassifiable / out-of-scope
-
----
-
-## Step 0 — Discover and gate
+## Step 0 — Read CI and gate
 
 ```bash
 set -euo pipefail
-
-# Find the ticket's open MR (fleetd's packet). Empty = no open MR → nothing to fix.
 MR_IID=$(fleetc packet "$FLEET_TICKET" | jq -r '.ship.iid // empty')
 [ -n "$MR_IID" ] || { echo "no open MR for $FLEET_TICKET" >&2; exit 1; }
-
-# Fetch the latest pipeline for the MR. The ${MR_IID} suffix keeps concurrent
-# cogs from clobbering each other's tempfile in the shared /tmp.
-glab api "projects/:fullpath/merge_requests/${MR_IID}/pipelines" > "/tmp/fleet-repair-pipelines-${MR_IID}.json"
-PIPELINE_STATUS=$(python3 -c 'import json,sys; ps=json.load(sys.stdin); print(ps[0]["status"] if ps else "none")' < "/tmp/fleet-repair-pipelines-${MR_IID}.json")
-PIPELINE_ID=$(python3 -c 'import json,sys; ps=json.load(sys.stdin); print(ps[0]["id"] if ps else "")' < "/tmp/fleet-repair-pipelines-${MR_IID}.json")
-
-# Gate: only proceed on broken pipelines; no-op gracefully on healthy ones.
-case "$PIPELINE_STATUS" in
-  failed|canceled) ;;  # fall through to fix
-  success|running|pending|created|preparing|manual|scheduled)
-    echo "MR !${MR_IID} latest pipeline (${PIPELINE_ID}) is ${PIPELINE_STATUS} — nothing to fix"
-    exit 0
-    ;;
-  none) echo "no pipeline yet for MR !${MR_IID}"; exit 1 ;;
-  *) echo "unexpected pipeline status: $PIPELINE_STATUS"; exit 1 ;;
+CI=$(fleetc ci --iid "$MR_IID")          # {status, failed: [{name, url, log_tail}]}
+STATUS=$(printf '%s' "$CI" | jq -r '.status // "none"')
+case "$STATUS" in
+  failed|canceled) ;;                                    # fall through to the fix
+  success|running|manual) echo "CI on !$MR_IID is $STATUS — nothing to fix"; exit 0 ;;
+  none) echo "no CI yet on !$MR_IID"; exit 1 ;;
+  *) echo "unexpected CI status: $STATUS"; exit 1 ;;
 esac
+printf '%s' "$CI" | jq -r '.failed[] | "== \(.name)  \(.url)\n\(.log_tail)\n"'
 ```
 
-Then invoke `/ci-failures` with `$PIPELINE_ID` via the Skill tool. Capture:
-
-- Failing jobs (names, stages)
-- Failure traces (compiler/test output, exit codes)
-- Any classification cues `/ci-failures` surfaces
-
----
+`fleetc ci` already descended into failed child pipelines (where the forge has them):
+every failed job is listed, each with the tail of its log.
 
 ## Step 1 — Gather context
 
-Three inputs inform the fix:
+- **The ticket** — `fleetc ticket "$FLEET_TICKET"`: the acceptance criteria bound what a
+  fix may change.
+- **The code** — the local tree, and the project's own conventions (`CLAUDE.md`, its
+  `docs/`) for the area that failed.
 
-- **Ticket ACs** — fetch via `mcp__claude_ai_Atlassian_Rovo__getJiraIssue` if not
-  already in conversation. The ticket key is `$FLEET_TICKET` (fleetd injects it into
-  every ticketed cog).
-- **MR description + scope decisions** — `glab api
-  "projects/:fullpath/merge_requests/${MR_IID}"` (the `MR_IID` discovered in
-  Step 0).
-- **Current code state** — the local tree (mirrored by `fleet-rechart`).
+## Step 2 — Classify and act
 
----
+Read each failed job's log tail and name its root cause. **One fix attempt per
+invocation**: the push starts a new CI run, and the caller's next look handles whatever
+it produces.
 
-## Step 2 — Classify and fix
-
-Match the failure to one of the rows below. **One fix attempt per skill
-invocation** — the push triggers a new pipeline; the caller's next tick handles
-whatever state it produces.
-
-| Category | Cue from `/ci-failures` | Action |
+| Category | Cue in the log | Action |
 |---|---|---|
-| **Transient** | Runner death, infra flake, network blip, image-pull timeout, OOM, sccache miss/disk pressure, intermittent test that's been flaky | Branch / merge-result ref → `glab ci retry $PIPELINE_ID`. Train ref (`refs/merge-requests/<iid>/train`) → that endpoint 404s; retry the failing job(s) directly via `glab api --method POST projects/:fullpath/jobs/<job_id>/retry`. No commit either way. |
-| **Lint / format** | `cargo fmt` drift, `cargo clippy -- -D warnings`, `shellcheck`, markdown lint | Run the formatter / lint-fixer against affected files. `git commit -m "fix: <linter> auto-fix"`. Push. |
-| **Build** | Compile error, syntax error, missing dependency, broken import path | Read the failure trace, identify the broken file, fix it (direct edit informed by ticket context). Commit + push. |
-| **Test** | Unit / integration / contract / robustness test failed | Diagnose: *test is wrong* (missing edge case → spawn `tdd-red`) vs *implementation is wrong* (impl gap → spawn `tdd-green`). Commit per phase, push. **If diagnosis is uncertain — the failure trace and ticket context don't make the wrong-side obvious — escalate rather than guess.** |
-| **Infra** | `cdk synth --strict` violation, aspect failure, IAM denial on deploy | Fix the CDK / IAM / aspect issue against `MANIFEST.md` § Ephemeral Invariants. Set up the CDK venv if not already active (`python -m venv .venv && source .venv/bin/activate && pip install -r infra/cdk/requirements.txt`), then validate locally with `cdk synth --strict`. Commit + push. |
-| **Unknown / Major / Out-of-scope** | Failure trace doesn't fit a category above; fix would require architectural decisions; fix would touch files outside the ticket's scope; multi-MR fix needed | **Escalate** — see Failure handling. |
-
-**Self-reflection.** After the fix attempt, post a Jira comment summarising:
-failure category, what was tried, commit SHA pushed (if any), and the new
-pipeline ID once one starts.
-
----
+| **Transient** | A runner died, a network or registry timeout, out of memory, a cache miss, a test known to be flaky | `fleetc retry-ci --iid "$MR_IID"`. No commit. |
+| **Lint / format** | A formatter or linter diff (`cargo fmt`, `clippy -D warnings`, `shellcheck`, …) | Run the formatter / fixer on the affected files, commit (`fix: <linter> auto-fix`), push. |
+| **Build** | A compile or syntax error, a missing dependency, a broken import | Read the error, fix the broken file within the ticket's scope, commit, push. |
+| **Test** | A unit / integration test failed | Decide which side is wrong: the *test* (a missing case, a stale expectation) or the *code* (an implementation gap). Fix that side, commit, push. **If the log and the ticket don't make it obvious which side is wrong, escalate rather than guess.** |
+| **Config** | The CI configuration itself: syntax, a missing stage or job, a wrong dependency between jobs | Fix the config per the project's conventions, commit, push. |
+| **Unknown / out of scope** | The log fits none of the above; the fix needs a design decision, touches files outside the ticket, or spans MRs | **Escalate** (below). |
 
 ## Failure handling
 
-If the failure is unclassifiable, requires architectural decisions, or would
-touch files outside the ticket's scope, write a summary (failure trace +
-classification attempt + why a fix would exceed scope) to **both** the Jira
-ticket *and* your claude-code response, then exit non-zero. The caller
-(the sailor) propagates this upward.
+When the failure is unclassifiable, needs a design decision, or a fix would leave the
+ticket's scope: report the failed job, its log excerpt, your classification attempt, and
+why a fix exceeds scope, in your response. Then exit non-zero; the caller (the sailor)
+escalates.

@@ -355,6 +355,22 @@ pub struct MrDraft {
     pub draft: bool,
 }
 
+/// An MR's CI, as `fleetc ci` reports it: the overall status and each failed job with the tail of
+/// its log — what fleet-repair classifies.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CiReport {
+    pub status: Option<PipelineStatus>,
+    pub failed: Vec<FailedJob>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FailedJob {
+    pub name: String,
+    pub url: String,
+    /// The last lines of the job's log (ANSI colour stripped).
+    pub log_tail: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewState {
     pub open_threads: i64,

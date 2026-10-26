@@ -7,7 +7,7 @@
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use domain::ports::Forge;
-use domain::{Approvals, FloatingNote, ForgeShip, MrDraft, PipelineStatus, ReviewState, ShipState, TicketKey};
+use domain::{Approvals, CiReport, FailedJob, FloatingNote, ForgeShip, MrDraft, PipelineStatus, ReviewState, ShipState, TicketKey};
 use serde_json::Value;
 use std::process::Command;
 
@@ -42,6 +42,23 @@ impl GhForge {
     /// One PR's JSON (the `FIELDS` set).
     fn view(&self, n: i64) -> Result<Value> {
         Ok(serde_json::from_str(&self.gh(&["pr", "view", &n.to_string(), "--json", FIELDS])?)?)
+    }
+
+    /// The PR's checks (`gh pr checks --json name,bucket,link`). gh exits 1 when a check failed and
+    /// 8 while some are pending — both still print the JSON.
+    fn checks(&self, n: i64) -> Result<Vec<Value>> {
+        let out = Command::new("gh")
+            .args(["pr", "checks", &n.to_string(), "--json", "name,bucket,link", "-R", &self.repo])
+            .output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if !out.status.success() && !matches!(out.status.code(), Some(1) | Some(8)) || stdout.trim().is_empty() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            if err.contains("no checks reported") {
+                return Ok(vec![]);
+            }
+            bail!("gh pr checks {n} failed: {}", err.trim());
+        }
+        Ok(serde_json::from_str(&stdout)?)
     }
 
     fn owner_name(&self) -> (&str, &str) {
@@ -151,6 +168,40 @@ impl Forge for GhForge {
             .ok_or_else(|| anyhow!("gh pr create printed no URL: {out}"))
     }
 
+    fn ci(&self, n: i64) -> Result<CiReport> {
+        let checks = self.checks(n)?;
+        let failed = checks.iter().filter(|c| c.get("bucket").and_then(Value::as_str) == Some("fail"));
+        let mut jobs = Vec::new();
+        for c in failed {
+            let link = c.get("link").and_then(Value::as_str).unwrap_or("");
+            let log_tail = match actions_ids(link) {
+                Some((_, job)) => self
+                    .gh(&["run", "view", "--job", &job, "--log-failed"])
+                    .map(|log| crate::preflight::log_tail(&strip_log_prefixes(&log), 80))
+                    .unwrap_or_else(|e| format!("(log unavailable: {e:#})")),
+                None => "(not a GitHub Actions job — open the link)".into(),
+            };
+            jobs.push(FailedJob { name: c.get("name").and_then(Value::as_str).unwrap_or("").to_string(), url: link.to_string(), log_tail });
+        }
+        Ok(CiReport { status: checks_status(&checks), failed: jobs })
+    }
+
+    fn retry_ci(&self, n: i64) -> Result<()> {
+        let mut runs: Vec<String> = self
+            .checks(n)?
+            .iter()
+            .filter(|c| c.get("bucket").and_then(Value::as_str) == Some("fail"))
+            .filter_map(|c| c.get("link").and_then(Value::as_str).and_then(actions_ids).map(|(run, _)| run))
+            .collect();
+        runs.sort();
+        runs.dedup();
+        ensure!(!runs.is_empty(), "#{n}: no failed GitHub Actions run to retry");
+        for run in runs {
+            self.gh(&["run", "rerun", &run, "--failed"])?;
+        }
+        Ok(())
+    }
+
     fn request_review(&self, ticket: &TicketKey) -> Result<Vec<String>> {
         let pr = self
             .armada()?
@@ -239,6 +290,45 @@ fn pipeline_status(checks: &[Value]) -> Option<PipelineStatus> {
     }
 }
 
+/// The checks' buckets → one status: any failure fails it, anything pending keeps it running.
+fn checks_status(checks: &[Value]) -> Option<PipelineStatus> {
+    let bucket = |c: &Value| c.get("bucket").and_then(Value::as_str).unwrap_or("").to_string();
+    let buckets: Vec<String> = checks.iter().map(bucket).collect();
+    if buckets.is_empty() {
+        None
+    } else if buckets.iter().any(|b| b == "fail") {
+        Some(PipelineStatus::Failed)
+    } else if buckets.iter().any(|b| b == "pending") {
+        Some(PipelineStatus::Running)
+    } else if buckets.iter().all(|b| b == "cancel") {
+        Some(PipelineStatus::Canceled)
+    } else {
+        Some(PipelineStatus::Success)
+    }
+}
+
+/// `gh run view --log-failed` prefixes each line with `job<TAB>step<TAB>timestamp `; keep the message.
+fn strip_log_prefixes(log: &str) -> String {
+    log.lines()
+        .map(|l| {
+            let msg = l.rsplit('\t').next().unwrap_or(l);
+            match msg.split_once(' ') {
+                Some((ts, rest)) if ts.len() > 20 && ts.ends_with('Z') && ts.starts_with("20") => rest,
+                _ => msg,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A GitHub Actions check link → (run id, job id): `…/actions/runs/<run>/job/<job>`.
+fn actions_ids(link: &str) -> Option<(String, String)> {
+    let rest = link.split("/actions/runs/").nth(1)?;
+    let (run, job) = rest.split_once("/job/")?;
+    let job: String = job.chars().take_while(char::is_ascii_digit).collect();
+    (!run.is_empty() && !job.is_empty()).then(|| (run.to_string(), job))
+}
+
 /// `mergeStateStatus` → GitLab's `merge_status` vocabulary (what the sailor reads). BLOCKED is
 /// split by its cause: an owed review, else unfinished or failing checks.
 fn merge_status(state: &str, decision: &str, pipeline: Option<PipelineStatus>) -> Option<String> {
@@ -304,6 +394,19 @@ mod tests {
         assert_eq!(s.merge_status.as_deref(), Some("ci_must_pass"));
         assert!(!s.armed && !s.has_conflicts);
         assert_eq!(pr_to_ship(&pr(false, "CLEAN", json!([])), "OTHER").unwrap().ticket, None, "prefix honored");
+    }
+
+    #[test]
+    fn reads_check_buckets_and_actions_links() {
+        let check = |bucket: &str| json!({"name": "test", "bucket": bucket, "link": "https://github.com/me/r/actions/runs/123/job/456"});
+        assert_eq!(checks_status(&[]), None);
+        assert_eq!(checks_status(&[check("pass"), check("fail")]), Some(PipelineStatus::Failed));
+        assert_eq!(checks_status(&[check("pass"), check("pending")]), Some(PipelineStatus::Running));
+        assert_eq!(checks_status(&[check("pass"), check("skipping")]), Some(PipelineStatus::Success));
+        assert_eq!(actions_ids("https://github.com/me/r/actions/runs/123/job/456"), Some(("123".into(), "456".into())));
+        assert_eq!(actions_ids("https://ci.example.com/build/9"), None);
+        let log = "test\tRun cargo test\t2026-10-26T00:36:37.8146721Z     tests::probe_fails_on_purpose\nplain line";
+        assert_eq!(strip_log_prefixes(log), "    tests::probe_fails_on_purpose\nplain line");
     }
 
     #[test]

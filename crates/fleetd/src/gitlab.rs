@@ -9,7 +9,7 @@
 
 use anyhow::{anyhow, ensure, Context, Result};
 use domain::ports::Forge;
-use domain::{Approvals, FloatingNote, ForgeShip, MrDraft, PipelineStatus, ReviewState, ShipState, TicketKey};
+use domain::{Approvals, CiReport, FailedJob, FloatingNote, ForgeShip, MrDraft, PipelineStatus, ReviewState, ShipState, TicketKey};
 use std::process::Command;
 
 pub struct GlabForge {
@@ -59,6 +59,42 @@ impl GlabForge {
         let i = |k: &str| v.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
         let (required, left) = (i("approvals_required"), i("approvals_left"));
         Ok(Approvals { current: (required - left).max(0), required })
+    }
+
+    /// The MR's latest pipeline: (id, status).
+    fn latest_pipeline(&self, iid: i64) -> Result<Option<(i64, String)>> {
+        let json = self.api(&format!("projects/{}/merge_requests/{iid}/pipelines", self.project))?;
+        let pipelines: serde_json::Value = serde_json::from_str(&json)?;
+        Ok(pipelines.as_array().and_then(|a| a.first()).and_then(|p| {
+            Some((p.get("id")?.as_i64()?, p.get("status")?.as_str()?.to_string()))
+        }))
+    }
+
+    /// A pipeline's failed jobs with their log tails, descending into failed child pipelines (the
+    /// parent-child layout hides the real failure one level down) — two levels at most.
+    fn failed_jobs(&self, pid: i64, depth: u8, out: &mut Vec<FailedJob>) -> Result<()> {
+        let jobs: serde_json::Value =
+            serde_json::from_str(&self.api(&format!("projects/{}/pipelines/{pid}/jobs?scope[]=failed&per_page=100", self.project))?)?;
+        for job in jobs.as_array().into_iter().flatten() {
+            let Some(id) = job.get("id").and_then(|i| i.as_i64()) else { continue };
+            let log_tail = self
+                .api(&format!("projects/{}/jobs/{id}/trace", self.project))
+                .map(|log| crate::preflight::log_tail(&log, 80))
+                .unwrap_or_else(|e| format!("(log unavailable: {e:#})"));
+            out.push(FailedJob {
+                name: job.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string(),
+                url: job.get("web_url").and_then(|u| u.as_str()).unwrap_or("").to_string(),
+                log_tail,
+            });
+        }
+        if depth < 2 {
+            let bridges: serde_json::Value =
+                serde_json::from_str(&self.api(&format!("projects/{}/pipelines/{pid}/bridges", self.project))?)?;
+            for child in failed_children(&bridges) {
+                self.failed_jobs(child, depth + 1, out)?;
+            }
+        }
+        Ok(())
     }
 
     /// Cancel an armed MR's merge-when-pipeline-succeeds (callers check it's armed first).
@@ -224,6 +260,23 @@ impl Forge for GlabForge {
         Ok(())
     }
 
+    fn ci(&self, iid: i64) -> Result<CiReport> {
+        let Some((pid, status)) = self.latest_pipeline(iid)? else {
+            return Ok(CiReport { status: None, failed: vec![] });
+        };
+        let mut failed = Vec::new();
+        self.failed_jobs(pid, 0, &mut failed)?;
+        Ok(CiReport { status: pipeline_status(&status), failed })
+    }
+
+    fn retry_ci(&self, iid: i64) -> Result<()> {
+        let (pid, _) = self.latest_pipeline(iid)?.ok_or_else(|| anyhow!("!{iid}: no pipeline to retry"))?;
+        let path = format!("projects/{}/pipelines/{pid}/retry", self.project);
+        let out = Command::new("glab").args(["api", "--method", "POST", &path]).output()?;
+        ensure!(out.status.success(), "glab pipeline retry failed: {}", String::from_utf8_lossy(&out.stderr));
+        Ok(())
+    }
+
     fn arm_merge(&self, iid: i64) -> Result<()> {
         let repo = self.repo()?;
         let out = Command::new("glab")
@@ -369,6 +422,18 @@ fn mr_to_ship(m: &serde_json::Value, prefix: &str) -> Option<ForgeShip> {
     })
 }
 
+/// The downstream pipelines of a pipeline's failed bridge (trigger) jobs.
+fn failed_children(bridges: &serde_json::Value) -> Vec<i64> {
+    bridges
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|b| b.get("downstream_pipeline"))
+        .filter(|d| d.get("status").and_then(|s| s.as_str()) == Some("failed"))
+        .filter_map(|d| d.get("id").and_then(|i| i.as_i64()))
+        .collect()
+}
+
 /// Map GitLab's pipeline vocabulary onto our five states (vendor→domain stays in the
 /// adapter). In-flight variants collapse to `Running`; `skipped`/unknown → `None`.
 fn pipeline_status(s: &str) -> Option<PipelineStatus> {
@@ -434,6 +499,16 @@ mod tests {
     fn tickets_link_only_by_the_configured_prefix() {
         // Same MRs, another tracker's prefix: nothing links (no cross-project false matches).
         assert!(parse_glab_mrs(SAMPLE, "OTHER").unwrap().iter().all(|s| s.ticket.is_none()));
+    }
+
+    #[test]
+    fn follows_only_failed_child_pipelines() {
+        let bridges = serde_json::json!([
+            {"name": "quality", "downstream_pipeline": {"id": 11, "status": "failed"}},
+            {"name": "security", "downstream_pipeline": {"id": 12, "status": "success"}},
+            {"name": "pending", "downstream_pipeline": null}
+        ]);
+        assert_eq!(failed_children(&bridges), vec![11]);
     }
 
     #[test]
