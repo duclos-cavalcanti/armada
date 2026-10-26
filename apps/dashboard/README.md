@@ -11,9 +11,14 @@ single static binary, no runtime dependencies.
 
 Cycle with `Tab` / `S-Tab`:
 
-- **Fleet** — the live cog roster over the open escalations.
-- **Armada** — the open ships (MRs) fleetd tracks.
-- **Board** — the sprint tickets + convoys.
+- **Fleet** — the line, top-down by how far each ticket has got; each ticket sits in one pane:
+  - **dispatched** — orders waiting for their builder (held ✋ / blocked ⛔ / not yet spawned);
+  - **impl** — builders at work (workers + hands): state, liveness, MR + pipeline, last action;
+  - **merge** — our ships being landed: the sailor's state (dimmed once it's stood down),
+    pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status;
+  - **escalations** — the open escalations.
+- **Ships** — every open MR fleetd tracks, ours + allies; the title shows the lookout.
+- **Board** — the sprint tickets + convoys (a convoy shows its captain while one is live).
 
 ## Keys
 
@@ -22,8 +27,8 @@ Cycle with `Tab` / `S-Tab`:
 | `q` / `Esc` | quit |
 | `r` | refresh now |
 | `Tab` / `S-Tab` | next / previous tab |
-| `↑` / `↓` | move focus between panes |
-| `1` / `2` | focus the Nth pane |
+| `↑` / `↓` | previous / next pane |
+| `1`–`4` | focus the Nth pane |
 | `j` / `k` | move the cursor within the focused pane |
 | `space` | zoom the focused pane (toggle) |
 | `y` / `Y` | yank the focused pane / the whole page |

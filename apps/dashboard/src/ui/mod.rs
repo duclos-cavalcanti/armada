@@ -1,16 +1,17 @@
 //! The render layer — tab strip, per-tab panes, footer. Pure read over `App`
-//! (and its `Fleet` view model); every pane is a list of `Line`s with the focused
-//! row highlighted. Lists are short (the fleet runs few cogs/ships at once), so a
-//! plain `Paragraph` suffices — no scroll state for v1.
+//! (and its `Fleet` view model); every pane is a header + a list of rows with the
+//! focused row highlighted. Lists are short (the fleet runs few cogs/ships at once),
+//! so a plain `Paragraph` suffices — no scroll state.
 
-use crate::source::{CogRow, ShipRow};
-use crate::{App, BoardPane, FleetPane, TabId};
-use domain::{Convoy, Escalation, Event, Ticket, TicketStatus};
+use crate::source::{open_blockers, CogRow, LandingRow, OrderRow, ShipRow};
+use crate::{App, Pane, TabId};
+use domain::{Convoy, Escalation, Event, PipelineStatus, ShipSnapshot, Ticket};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
 use ratatui::Frame;
+use std::collections::HashMap;
 
 /// Top-level renderer: tab strip, the active tab's body, footer.
 pub fn render(f: &mut Frame, app: &App) {
@@ -20,11 +21,7 @@ pub fn render(f: &mut Frame, app: &App) {
         .split(f.area());
 
     render_tab_strip(f, chunks[0], app);
-    match app.tab {
-        TabId::Fleet => render_fleet(f, chunks[1], app),
-        TabId::Armada => render_armada(f, chunks[1], app),
-        TabId::Board => render_board(f, chunks[1], app),
-    }
+    render_body(f, chunks[1], app);
     render_footer(f, chunks[2], app);
 }
 
@@ -38,75 +35,90 @@ fn render_tab_strip(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(tabs, area);
 }
 
-/// Fleet tab: the cog roster over the open escalations (zoom shows just the focused one).
-fn render_fleet(f: &mut Frame, area: Rect, app: &App) {
-    let cogs = (FleetPane::Cogs == app.fleet_pane, cog_rows(&app.fleet.cogs));
-    let esc = (FleetPane::Escalations == app.fleet_pane, escalation_rows(&app.fleet.escalations));
-    if app.zoomed {
-        let (focused, rows, title, cursor) = if cogs.0 {
-            (true, cogs.1, cog_title(app), app.cogs_cursor)
+/// The active tab's panes, stacked top to bottom (zoom shows just the focused one).
+fn render_body(f: &mut Frame, area: Rect, app: &App) {
+    let panes: Vec<Pane> = if app.zoomed { vec![app.pane()] } else { app.tab.panes().to_vec() };
+    let views: Vec<_> = panes.iter().map(|p| pane_view(app, *p)).collect();
+    // Each pane fits its rows (borders + header + rows); the tab's main pane takes the rest.
+    let constraints = panes.iter().zip(&views).map(|(pane, (_, header, rows))| {
+        if app.zoomed || is_main(*pane) {
+            Constraint::Fill(1)
         } else {
-            (true, esc.1, format!(" escalations ({}) ", app.fleet.escalations.len()), app.escalations_cursor)
-        };
-        set_focus(app, area);
-        draw_list(f, area, &title, focused, rows, cursor);
-        return;
-    }
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Ratio(2, 3), Constraint::Ratio(1, 3)])
-        .split(area);
-    if cogs.0 {
-        set_focus(app, rows[0]);
-    }
-    draw_list(f, rows[0], &cog_title(app), cogs.0, cogs.1, app.cogs_cursor);
-    if esc.0 {
-        set_focus(app, rows[1]);
-    }
-    draw_list(
-        f,
-        rows[1],
-        &format!(" escalations ({}) ", app.fleet.escalations.len()),
-        esc.0,
-        esc.1,
-        app.escalations_cursor,
-    );
-}
-
-/// Armada tab: a single pane of open ships (ours + allies).
-fn render_armada(f: &mut Frame, area: Rect, app: &App) {
-    set_focus(app, area);
-    let title = format!(" armada · {} ships ", app.fleet.armada.len());
-    draw_list(f, area, &title, true, ship_rows(&app.fleet.armada), app.ships_cursor);
-}
-
-/// Board tab: the sprint tickets over the active convoys.
-fn render_board(f: &mut Frame, area: Rect, app: &App) {
-    let tickets_focused = BoardPane::Tickets == app.board_pane;
-    let tickets = ticket_rows(&app.fleet.board, &app.fleet.held_reasons);
-    let convoys = convoy_rows(&app.fleet.convoys);
-    let tickets_title = format!(" board · {} tickets ", app.fleet.board.len());
-    let convoys_title = format!(" convoys ({}) ", app.fleet.convoys.len());
-    if app.zoomed {
-        set_focus(app, area);
-        if tickets_focused {
-            draw_list(f, area, &tickets_title, true, tickets, app.tickets_cursor);
-        } else {
-            draw_list(f, area, &convoys_title, true, convoys, app.convoys_cursor);
+            Constraint::Length((2 + header.is_some() as usize + rows.len().max(1)) as u16)
         }
-        return;
+    });
+    let areas = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
+    for ((pane, (title, header, rows)), area) in panes.into_iter().zip(views).zip(areas.iter()) {
+        let focused = pane == app.pane();
+        if focused {
+            app.focused_area.set(Some(*area));
+        }
+        draw_pane(f, *area, &title, focused, header, rows, app.cursor(pane));
     }
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Ratio(2, 3), Constraint::Ratio(1, 3)])
-        .split(area);
-    if tickets_focused {
-        set_focus(app, rows[0]);
-    } else {
-        set_focus(app, rows[1]);
+}
+
+/// The pane that takes a tab's spare height — the one with the most rows to show.
+fn is_main(pane: Pane) -> bool {
+    matches!(pane, Pane::Merge | Pane::Ships | Pane::Tickets)
+}
+
+/// A pane's title, column header (if any), and rows.
+fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<'static>>) {
+    let f = &app.fleet;
+    match pane {
+        Pane::Dispatched => (
+            format!(" dispatched · {} waiting ", f.dispatched.len()),
+            Some(header(&[("Ticket", 12), ("Crew", 7), ("Merge", 7), ("Status", 12), ("Age", 6), ("Waiting on", 0)])),
+            f.dispatched.iter().map(order_row).collect(),
+        ),
+        Pane::Impl => (
+            format!(" impl · {} building ", f.builders.len()),
+            Some(header(&[
+                ("Ticket", 12),
+                ("Crew", 7),
+                ("State", 13),
+                ("Live", 7),
+                ("MR", 7),
+                ("Pipeline", 9),
+                ("Age", 6),
+                ("Last action", 0),
+            ])),
+            f.builders.iter().map(|c| builder_row(c, f.ship_of(c.session.ticket.as_ref()))).collect(),
+        ),
+        Pane::Merge => (
+            format!(" merge · {} landing ", f.landing.len()),
+            Some(header(&[
+                ("Ticket", 12),
+                ("Sailor", 15),
+                ("Live", 7),
+                ("MR", 7),
+                ("Pipeline", 9),
+                ("Appr", 5),
+                ("Armed", 6),
+                ("Thr", 4),
+                ("Blocked on", 14),
+                ("Age", 6),
+                ("Merge status", 0),
+            ])),
+            f.landing.iter().map(landing_row).collect(),
+        ),
+        Pane::Escalations => (
+            format!(" escalations · {} open ", f.escalations.len()),
+            None,
+            escalation_rows(&f.escalations),
+        ),
+        Pane::Ships => (ships_title(app), None, ship_rows(&f.armada)),
+        Pane::Tickets => (
+            format!(" board · {} tickets ", f.board.len()),
+            None,
+            ticket_rows(&f.board, &f.held_reasons),
+        ),
+        Pane::Convoys => (
+            format!(" convoys · {} active ", f.convoys.len()),
+            None,
+            f.convoys.iter().map(|c| convoy_row(c, f.captain_of(&c.key))).collect(),
+        ),
     }
-    draw_list(f, rows[0], &tickets_title, tickets_focused, tickets, app.tickets_cursor);
-    draw_list(f, rows[1], &convoys_title, !tickets_focused, convoys, app.convoys_cursor);
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
@@ -123,57 +135,130 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         None => tick_summary(&app.fleet.tick),
     };
     let body = format!(
-        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/1/2 pane · j/k row · y/Y yank",
+        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/1-4 pane · j/k row · y/Y yank",
         flash, zoom, status,
     );
     f.render_widget(Paragraph::new(Line::from(body)).style(dim), area);
 }
 
-// ── pane row builders ───────────────────────────────────────────────────────────
+// ── the line, by phase ───────────────────────────────────────────────────────────
 
-fn cog_title(app: &App) -> String {
-    format!(" cogs · {} live ", app.fleet.cogs.len())
+fn order_row(o: &OrderRow) -> Line<'static> {
+    let crew = if o.order.auto_impl { "worker" } else { "hand" };
+    let merge = if o.order.auto_merge { "auto" } else { "manual" };
+    let status = o.status.map(|s| s.as_str().to_string()).unwrap_or_else(|| "—".into());
+    let mut waiting = Vec::new();
+    if let Some(reason) = &o.held {
+        waiting.push(format!("✋ {}", short(reason, 40)));
+    }
+    if !o.blockers.is_empty() {
+        waiting.push(format!("⛔ {}", o.blockers.join(", ")));
+    }
+    let waiting = if waiting.is_empty() { "—".to_string() } else { waiting.join("  ") };
+    let waiting_style = if waiting == "—" { dim() } else { Style::default().fg(Color::Yellow) };
+    cells(vec![
+        (o.order.ticket.0.clone(), 12, Style::default()),
+        (crew.into(), 7, Style::default()),
+        (merge.into(), 7, Style::default()),
+        (status, 12, Style::default()),
+        (fmt_age(o.age_secs), 6, dim()),
+        (waiting, 0, waiting_style),
+    ])
 }
 
-fn cog_rows(cogs: &[CogRow]) -> Vec<Line<'static>> {
-    cogs.iter()
-        .map(|c| {
-            let s = &c.session;
-            let subject = s
-                .ticket
-                .as_ref()
-                .map(|t| t.0.clone())
-                .or_else(|| s.convoy.as_ref().map(|c| c.0.clone()))
-                .unwrap_or_else(|| "—".into());
-            let state = c.state.clone().unwrap_or_else(|| "·".into());
-            let live = c.liveness.as_deref().map(|l| l.to_lowercase()).unwrap_or_else(|| "—".into());
-            let anchor = if s.anchored_at.is_some() { " ⚓" } else { "" };
-            Line::from(format!(
-                "{:<8} {:<14} {:<11} {:<7} {:>6}{}",
-                s.kind.as_str(),
-                subject,
-                state,
-                live,
-                fmt_age(c.age_secs),
-                anchor,
-            ))
-        })
-        .collect()
+fn builder_row(c: &CogRow, ship: Option<&ShipRow>) -> Line<'static> {
+    let s = &c.session;
+    let state = c.state.clone().unwrap_or_else(|| "·".into());
+    let anchor = if s.anchored_at.is_some() { "⚓ " } else { "" };
+    let (mr, pipe) = match ship {
+        Some(r) => (format!("!{}", r.ship.iid), pipeline(r.snapshot.as_ref())),
+        None => ("—".into(), ("—".into(), dim())),
+    };
+    cells(vec![
+        (s.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| "—".into()), 12, Style::default()),
+        (s.kind.as_str().into(), 7, Style::default()),
+        (state.clone(), 13, state_style(&state)),
+        live_cell(c.liveness.as_deref()),
+        (mr, 7, Style::default()),
+        (pipe.0, 9, pipe.1),
+        (fmt_age(c.age_secs), 6, dim()),
+        (format!("{anchor}{}", c.last_action.as_deref().unwrap_or("—")), 0, Style::default()),
+    ])
+}
+
+fn landing_row(r: &LandingRow) -> Line<'static> {
+    let snap = r.snapshot.as_ref();
+    let (sailor, sailor_style, age) = match &r.sailor {
+        Some(s) => {
+            let state = s.state.clone().unwrap_or_else(|| "·".into());
+            // An ended sailor's last word stays visible, dimmed: the ship is at rest.
+            let style = if r.live { state_style(&state) } else { dim() };
+            (state, style, s.age_secs)
+        }
+        None => ("—".into(), dim(), None),
+    };
+    let live = if r.live { live_cell(r.sailor.as_ref().and_then(|s| s.liveness.as_deref())) } else { ("—".into(), 7, dim()) };
+    let pipe = pipeline(snap);
+    let (appr, appr_style) = match snap {
+        Some(s) => {
+            let ok = s.approvals.current >= s.approvals.required;
+            (format!("{}/{}", s.approvals.current, s.approvals.required), if ok { green() } else { yellow() })
+        }
+        None => ("—".into(), dim()),
+    };
+    let (armed, armed_style) = match snap {
+        Some(s) if s.on_merge_train => ("train".into(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Some(s) if s.armed => ("armed".into(), green()),
+        _ => ("—".into(), dim()),
+    };
+    let (threads, threads_style) = match snap {
+        Some(s) => (s.open_threads.to_string(), if s.open_threads > 0 { yellow() } else { green() }),
+        None => ("—".into(), dim()),
+    };
+    let (blocked, blocked_style) =
+        if r.blocked_on.is_empty() { ("—".into(), dim()) } else { (r.blocked_on.join(","), yellow()) };
+    let merge_status = match snap {
+        Some(s) if s.has_conflicts => "conflict".to_string(),
+        Some(s) => s.merge_status.clone().unwrap_or_else(|| "—".into()),
+        None => "—".into(),
+    };
+    cells(vec![
+        (r.ship.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_default(), 12, Style::default()),
+        (sailor, 15, sailor_style),
+        live,
+        (format!("!{}", r.ship.iid), 7, Style::default()),
+        (pipe.0, 9, pipe.1),
+        (appr, 5, appr_style),
+        (armed, 6, armed_style),
+        (threads, 4, threads_style),
+        (blocked, 14, blocked_style),
+        (fmt_age(age), 6, dim()),
+        (merge_status, 0, Style::default()),
+    ])
 }
 
 fn escalation_rows(es: &[Escalation]) -> Vec<Line<'static>> {
     es.iter()
         .map(|e| {
             let ship = e.ship_iid.map(|i| format!("!{}", i)).unwrap_or_default();
-            Line::from(format!(
-                "{:<12} {:<8} {:<6} {}",
-                e.ticket.0,
-                e.raised_by.as_str(),
-                ship,
-                short(&e.summary, 60),
-            ))
+            Line::from(format!("{:<12} {:<8} {:<6} {}", e.ticket.0, e.raised_by.as_str(), ship, short(&e.summary, 60)))
         })
         .collect()
+}
+
+// ── ships · board ────────────────────────────────────────────────────────────────
+
+/// The Ships pane title carries the lookout — the singleton that reviews these ships.
+fn ships_title(app: &App) -> String {
+    let lookout = match app.fleet.lookout() {
+        Some(l) => format!(
+            "lookout {} {}",
+            l.liveness.as_deref().map(str::to_lowercase).unwrap_or_else(|| "live".into()),
+            fmt_age(l.age_secs)
+        ),
+        None => "lookout off watch".into(),
+    };
+    format!(" ships · {} open · {} ", app.fleet.armada.len(), lookout)
 }
 
 fn ship_rows(ships: &[ShipRow]) -> Vec<Line<'static>> {
@@ -200,12 +285,7 @@ fn ship_rows(ships: &[ShipRow]) -> Vec<Line<'static>> {
 }
 
 /// One line per ticket; a held one shows `✋ <reason>`, one waiting on open blockers `⛔ <keys>`.
-fn ticket_rows(board: &[Ticket], held_reasons: &std::collections::HashMap<String, String>) -> Vec<Line<'static>> {
-    let done: std::collections::HashSet<&str> = board
-        .iter()
-        .filter(|t| matches!(t.status, Some(TicketStatus::Done) | Some(TicketStatus::Cancelled)))
-        .map(|t| t.key.0.as_str())
-        .collect();
+fn ticket_rows(board: &[Ticket], held_reasons: &HashMap<String, String>) -> Vec<Line<'static>> {
     board
         .iter()
         .map(|t| {
@@ -216,7 +296,7 @@ fn ticket_rows(board: &[Ticket], held_reasons: &std::collections::HashMap<String
                 let reason = held_reasons.get(&t.key.0).map(String::as_str).unwrap_or("");
                 gate += &format!(" ✋ {}", short(reason, 40));
             }
-            let waiting: Vec<&str> = t.blocked_by.iter().map(|b| b.0.as_str()).filter(|b| !done.contains(b)).collect();
+            let waiting = open_blockers(t, board);
             if !waiting.is_empty() {
                 gate += &format!(" ⛔ {}", waiting.join(", "));
             }
@@ -232,14 +312,17 @@ fn ticket_rows(board: &[Ticket], held_reasons: &std::collections::HashMap<String
         .collect()
 }
 
-fn convoy_rows(convoys: &[Convoy]) -> Vec<Line<'static>> {
-    convoys
-        .iter()
-        .map(|c| {
-            let anchor = if c.anchored_at.is_some() { " ⚓" } else { "" };
-            Line::from(format!("{:<12} {}{}", c.key.0, short(c.title.as_deref().unwrap_or(""), 50), anchor))
-        })
-        .collect()
+/// A convoy row carries its captain (the cog that dispatches it), when one is live.
+fn convoy_row(c: &Convoy, captain: Option<&CogRow>) -> Line<'static> {
+    let anchor = if c.anchored_at.is_some() { " ⚓" } else { "" };
+    let captain = match captain {
+        Some(cap) => format!(
+            "  ⚑ captain {}",
+            cap.liveness.as_deref().map(str::to_lowercase).unwrap_or_else(|| "live".into())
+        ),
+        None => String::new(),
+    };
+    Line::from(format!("{:<12} {}{}{}", c.key.0, short(c.title.as_deref().unwrap_or(""), 50), anchor, captain))
 }
 
 /// A one-line summary of fleetd's last reconcile tick, for the footer.
@@ -259,26 +342,86 @@ fn tick_summary(tick: &Option<Event>) -> String {
 
 // ── shared helpers ───────────────────────────────────────────────────────────────
 
-/// Record the focused pane's rect so `y` can yank it.
-fn set_focus(app: &App, area: Rect) {
-    app.focused_area.set(Some(area));
-}
-
-/// Draw a bordered list pane, highlighting the cursor row when focused.
-fn draw_list(f: &mut Frame, area: Rect, title: &str, focused: bool, rows: Vec<Line<'static>>, cursor: usize) {
+/// Draw a bordered pane: an optional column header, then the rows, the cursor row
+/// highlighted when focused.
+fn draw_pane(
+    f: &mut Frame,
+    area: Rect,
+    title: &str,
+    focused: bool,
+    header: Option<Line<'static>>,
+    rows: Vec<Line<'static>>,
+    cursor: usize,
+) {
     let block = Block::default().borders(Borders::ALL).title(title.to_string()).border_style(border_style(focused));
-    let styled: Vec<Line> = rows
+    let highlight = Style::default().fg(Color::Black).bg(Color::Cyan);
+    let rows = rows
         .into_iter()
         .enumerate()
-        .map(|(i, line)| {
-            if focused && i == cursor {
-                line.style(Style::default().fg(Color::Black).bg(Color::Cyan))
-            } else {
-                line
-            }
+        .map(|(i, line)| if focused && i == cursor { line.patch_style(highlight) } else { line });
+    let lines: Vec<Line> = header.into_iter().chain(rows).collect();
+    f.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// A row of fixed-width cells; width `0` = the last, free-running column.
+fn cells(cols: Vec<(String, usize, Style)>) -> Line<'static> {
+    let spans: Vec<Span> = cols
+        .into_iter()
+        .map(|(text, width, style)| match width {
+            0 => Span::styled(text, style),
+            w => Span::styled(format!("{:<w$} ", short(&text, w)), style),
         })
         .collect();
-    f.render_widget(Paragraph::new(styled).block(block), area);
+    Line::from(spans)
+}
+
+fn header(cols: &[(&str, usize)]) -> Line<'static> {
+    let style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD);
+    cells(cols.iter().map(|(name, w)| (name.to_string(), *w, style)).collect())
+}
+
+/// The liveness cell: fleetd's tmux-probe freshness (`—` when fleetd isn't reachable).
+fn live_cell(liveness: Option<&str>) -> (String, usize, Style) {
+    let live = liveness.map(str::to_lowercase).unwrap_or_else(|| "—".into());
+    let style = match live.as_str() {
+        "active" => green(),
+        "quiet" => yellow(),
+        "dead" => Style::default().fg(Color::Red),
+        _ => dim(),
+    };
+    (live, 7, style)
+}
+
+fn pipeline(snap: Option<&ShipSnapshot>) -> (String, Style) {
+    match snap.and_then(|s| s.pipeline) {
+        Some(PipelineStatus::Success) => ("success".into(), green()),
+        Some(PipelineStatus::Failed) => ("failed".into(), Style::default().fg(Color::Red)),
+        Some(PipelineStatus::Running) => ("running".into(), yellow()),
+        Some(p) => (format!("{:?}", p).to_lowercase(), dim()),
+        None => ("—".into(), dim()),
+    }
+}
+
+/// A cog's self-reported state: red when it needs you, magenta when you hold it.
+fn state_style(state: &str) -> Style {
+    match state {
+        "escalated" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        "anchored" => Style::default().fg(Color::Magenta),
+        "concluded" | "merged" => green(),
+        "awaiting_merge" => Style::default().fg(Color::Cyan),
+        "sleeping" | "·" => dim(),
+        _ => Style::default(),
+    }
+}
+
+fn dim() -> Style {
+    Style::default().fg(Color::DarkGray)
+}
+fn green() -> Style {
+    Style::default().fg(Color::Green)
+}
+fn yellow() -> Style {
+    Style::default().fg(Color::Yellow)
 }
 
 fn border_style(focused: bool) -> Style {

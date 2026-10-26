@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use crate::source::Fleet;
 
 /// A live TUI over the fleet. Reads fleetd's ledger READ-ONLY and renders the
-/// cog roster, the armada, and the sprint board — refreshing once a second.
+/// line by phase, the open ships, and the sprint board — refreshing once a second.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -27,54 +27,67 @@ struct Cli {
     dir: Option<PathBuf>,
 }
 
-/// Top-level tabs, cycled by `Tab` / `S-Tab`. Fleet (the cogs + escalations),
-/// Armada (open ships), Board (tickets + convoys).
+/// Top-level tabs, cycled by `Tab` / `S-Tab`. Fleet (the line, top-down by phase),
+/// Ships (every open MR, ours + allies), Board (tickets + convoys).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TabId {
     Fleet,
-    Armada,
+    Ships,
     Board,
 }
 
 impl TabId {
-    pub fn cycle_next(self) -> Self {
-        match self {
-            TabId::Fleet => TabId::Armada,
-            TabId::Armada => TabId::Board,
-            TabId::Board => TabId::Fleet,
-        }
-    }
-    pub fn cycle_prev(self) -> Self {
-        match self {
-            TabId::Fleet => TabId::Board,
-            TabId::Armada => TabId::Fleet,
-            TabId::Board => TabId::Armada,
-        }
+    pub fn all() -> [TabId; 3] {
+        [TabId::Fleet, TabId::Ships, TabId::Board]
     }
     pub fn label(self) -> &'static str {
         match self {
             TabId::Fleet => "Fleet",
-            TabId::Armada => "Armada",
+            TabId::Ships => "Ships",
             TabId::Board => "Board",
         }
     }
-    pub fn all() -> [TabId; 3] {
-        [TabId::Fleet, TabId::Armada, TabId::Board]
+    fn step(self, delta: isize) -> Self {
+        let all = Self::all();
+        all[(self as isize + delta).rem_euclid(all.len() as isize) as usize]
+    }
+    /// The tab's panes, top to bottom — `1`..`4` focus them, `↑`/`↓` cycle them.
+    pub fn panes(self) -> &'static [Pane] {
+        match self {
+            TabId::Fleet => &[Pane::Dispatched, Pane::Impl, Pane::Merge, Pane::Escalations],
+            TabId::Ships => &[Pane::Ships],
+            TabId::Board => &[Pane::Tickets, Pane::Convoys],
+        }
     }
 }
 
-/// The Fleet tab's two panes: the cog roster (top) + open escalations (below).
+/// Every pane on every tab. Fleet reads the line top-down: dispatched orders → builders at
+/// work (impl phase) → ships being landed (merge phase) → open escalations.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum FleetPane {
-    Cogs,
+pub enum Pane {
+    Dispatched,
+    Impl,
+    Merge,
     Escalations,
-}
-
-/// The Board tab's two panes: the sprint tickets (top) + the active convoys (below).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum BoardPane {
+    Ships,
     Tickets,
     Convoys,
+}
+
+impl Pane {
+    const COUNT: usize = 7;
+    /// The `tab/pane` coordinate the action handler keys on.
+    fn coordinate(self) -> &'static str {
+        match self {
+            Pane::Dispatched => "fleet/dispatched",
+            Pane::Impl => "fleet/impl",
+            Pane::Merge => "fleet/merge",
+            Pane::Escalations => "fleet/escalations",
+            Pane::Ships => "ships/list",
+            Pane::Tickets => "board/tickets",
+            Pane::Convoys => "board/convoys",
+        }
+    }
 }
 
 /// What a yank captures: the focused pane's interior (`y`) or the whole page (`Y`).
@@ -86,20 +99,16 @@ pub enum YankScope {
 
 pub struct App {
     pub tab: TabId,
-    /// Which pane holds focus on each multi-pane tab (Armada is single-pane).
-    pub fleet_pane: FleetPane,
-    pub board_pane: BoardPane,
+    /// The focused pane on each tab (indexed by `TabId`).
+    focus: [Pane; 3],
+    /// The row cursor of each pane (indexed by `Pane`).
+    cursors: [usize; Pane::COUNT],
     /// The focused pane's rect, recorded on every draw so `y` can yank its region.
     pub focused_area: std::cell::Cell<Option<ratatui::layout::Rect>>,
     /// Transient footer notice (e.g. yank feedback); shown for ~3s.
     pub flash: Option<(String, Instant)>,
     /// Set by `y`/`Y`; the run loop captures the region on the next draw.
     pub yank_requested: Option<YankScope>,
-    pub cogs_cursor: usize,
-    pub escalations_cursor: usize,
-    pub ships_cursor: usize,
-    pub tickets_cursor: usize,
-    pub convoys_cursor: usize,
     /// Zoom: the focused pane fills the body; `space` toggles it.
     pub zoomed: bool,
     pub project: wire::Project,
@@ -112,16 +121,11 @@ impl App {
     fn new(project: wire::Project) -> Self {
         Self {
             tab: TabId::Fleet,
-            fleet_pane: FleetPane::Cogs,
-            board_pane: BoardPane::Tickets,
+            focus: TabId::all().map(|t| t.panes()[0]),
+            cursors: [0; Pane::COUNT],
             focused_area: std::cell::Cell::new(None),
             flash: None,
             yank_requested: None,
-            cogs_cursor: 0,
-            escalations_cursor: 0,
-            ships_cursor: 0,
-            tickets_cursor: 0,
-            convoys_cursor: 0,
             zoomed: false,
             fleet: Fleet::load(&project),
             project,
@@ -130,134 +134,113 @@ impl App {
         }
     }
 
-    /// The focused view's `(coordinate, row-fields)` for the action handler.
-    /// `coordinate` is the `tab/pane` path; the fields are the focused row's
-    /// action-relevant values, passed as distinct argv entries. `None` when the
+    /// The focused pane on the current tab.
+    pub fn pane(&self) -> Pane {
+        self.focus[self.tab as usize]
+    }
+
+    pub fn cursor(&self, pane: Pane) -> usize {
+        self.cursors[pane as usize]
+    }
+
+    fn len(&self, pane: Pane) -> usize {
+        let f = &self.fleet;
+        match pane {
+            Pane::Dispatched => f.dispatched.len(),
+            Pane::Impl => f.builders.len(),
+            Pane::Merge => f.landing.len(),
+            Pane::Escalations => f.escalations.len(),
+            Pane::Ships => f.armada.len(),
+            Pane::Tickets => f.board.len(),
+            Pane::Convoys => f.convoys.len(),
+        }
+    }
+
+    /// The focused row's `(coordinate, fields)` for the action handler — the fields are
+    /// the row's action-relevant values, passed as distinct argv entries. `None` when the
     /// focused list is empty.
     ///
-    /// Field schema per coordinate (the handler reads these positionally):
-    ///   fleet/cogs         kind  ticket  convoy  tmux_session  state
-    ///   fleet/escalations  ticket  raised_by  kind  ship_iid
-    ///   armada/ships       iid  ticket  pilot  url
+    /// Field schema per coordinate (the handler reads these positionally; empty = n/a):
+    ///   fleet/dispatched   ticket  crew(worker|hand)
+    ///   fleet/impl         ticket  kind  tmux_session  state  mr_iid
+    ///   fleet/merge        ticket  mr_iid  url  sailor_tmux(live only)  sailor_state
+    ///   fleet/escalations  ticket  raised_by  ship_iid
+    ///   ships/list         iid  ticket  pilot  url
     ///   board/tickets      key  status  convoy
-    ///   board/convoys      key  title
+    ///   board/convoys      key  title  captain_tmux(live only)
     fn focused_action(&self) -> Option<(String, Vec<String>)> {
-        match self.tab {
-            TabId::Fleet => match self.fleet_pane {
-                FleetPane::Cogs => self.fleet.cogs.get(self.cogs_cursor).map(|c| {
-                    let s = &c.session;
-                    let args = vec![
-                        s.kind.as_str().to_string(),
-                        s.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_default(),
-                        s.convoy.as_ref().map(|c| c.0.clone()).unwrap_or_default(),
-                        s.tmux_session.clone(),
-                        c.state.clone().unwrap_or_default(),
-                    ];
-                    ("fleet/cogs".to_string(), args)
-                }),
-                FleetPane::Escalations => {
-                    self.fleet.escalations.get(self.escalations_cursor).map(|e| {
-                        let args = vec![
-                            e.ticket.0.clone(),
-                            e.raised_by.as_str().to_string(),
-                            e.ship_iid.map(|i| i.to_string()).unwrap_or_default(),
-                        ];
-                        ("fleet/escalations".to_string(), args)
-                    })
-                }
-            },
-            TabId::Armada => self.fleet.armada.get(self.ships_cursor).map(|r| {
-                let args = vec![
-                    r.ship.iid.to_string(),
-                    r.ship.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_default(),
-                    r.ship.pilot.clone(),
-                    r.ship.url.clone(),
-                ];
-                ("armada/ships".to_string(), args)
+        let pane = self.pane();
+        let i = self.cursor(pane);
+        let f = &self.fleet;
+        let key = |k: Option<&domain::TicketKey>| k.map(|k| k.0.clone()).unwrap_or_default();
+        let fields = match pane {
+            Pane::Dispatched => f.dispatched.get(i).map(|o| {
+                let crew = if o.order.auto_impl { "worker" } else { "hand" };
+                vec![o.order.ticket.0.clone(), crew.into()]
             }),
-            TabId::Board => match self.board_pane {
-                BoardPane::Tickets => self.fleet.board.get(self.tickets_cursor).map(|t| {
-                    let args = vec![
-                        t.key.0.clone(),
-                        t.status.map(|s| s.as_str().to_string()).unwrap_or_default(),
-                        t.convoy.as_ref().map(|c| c.0.clone()).unwrap_or_default(),
-                    ];
-                    ("board/tickets".to_string(), args)
-                }),
-                BoardPane::Convoys => self.fleet.convoys.get(self.convoys_cursor).map(|c| {
-                    let args = vec![c.key.0.clone(), c.title.clone().unwrap_or_default()];
-                    ("board/convoys".to_string(), args)
-                }),
-            },
-        }
-    }
-
-    /// Length of the currently-focused list (for cursor clamping).
-    fn active_list_len(&self) -> usize {
-        match (self.tab, self.fleet_pane, self.board_pane) {
-            (TabId::Fleet, FleetPane::Cogs, _) => self.fleet.cogs.len(),
-            (TabId::Fleet, FleetPane::Escalations, _) => self.fleet.escalations.len(),
-            (TabId::Armada, _, _) => self.fleet.armada.len(),
-            (TabId::Board, _, BoardPane::Tickets) => self.fleet.board.len(),
-            (TabId::Board, _, BoardPane::Convoys) => self.fleet.convoys.len(),
-        }
-    }
-
-    fn active_cursor_mut(&mut self) -> &mut usize {
-        match (self.tab, self.fleet_pane, self.board_pane) {
-            (TabId::Fleet, FleetPane::Cogs, _) => &mut self.cogs_cursor,
-            (TabId::Fleet, FleetPane::Escalations, _) => &mut self.escalations_cursor,
-            (TabId::Armada, _, _) => &mut self.ships_cursor,
-            (TabId::Board, _, BoardPane::Tickets) => &mut self.tickets_cursor,
-            (TabId::Board, _, BoardPane::Convoys) => &mut self.convoys_cursor,
-        }
+            Pane::Impl => f.builders.get(i).map(|c| {
+                let iid = f.ship_of(c.session.ticket.as_ref()).map(|s| s.ship.iid.to_string());
+                vec![
+                    key(c.session.ticket.as_ref()),
+                    c.session.kind.as_str().into(),
+                    c.session.tmux_session.clone(),
+                    c.state.clone().unwrap_or_default(),
+                    iid.unwrap_or_default(),
+                ]
+            }),
+            Pane::Merge => f.landing.get(i).map(|r| {
+                let tmux = r.sailor.as_ref().filter(|_| r.live).map(|s| s.session.tmux_session.clone());
+                vec![
+                    key(r.ship.ticket.as_ref()),
+                    r.ship.iid.to_string(),
+                    r.ship.url.clone(),
+                    tmux.unwrap_or_default(),
+                    r.sailor.as_ref().and_then(|s| s.state.clone()).unwrap_or_default(),
+                ]
+            }),
+            Pane::Escalations => f.escalations.get(i).map(|e| {
+                vec![e.ticket.0.clone(), e.raised_by.as_str().into(), e.ship_iid.map(|n| n.to_string()).unwrap_or_default()]
+            }),
+            Pane::Ships => f.armada.get(i).map(|r| {
+                vec![r.ship.iid.to_string(), key(r.ship.ticket.as_ref()), r.ship.pilot.clone(), r.ship.url.clone()]
+            }),
+            Pane::Tickets => f.board.get(i).map(|t| {
+                vec![
+                    t.key.0.clone(),
+                    t.status.map(|s| s.as_str().to_string()).unwrap_or_default(),
+                    t.convoy.as_ref().map(|c| c.0.clone()).unwrap_or_default(),
+                ]
+            }),
+            Pane::Convoys => f.convoys.get(i).map(|c| {
+                let captain = f.captain_of(&c.key).map(|s| s.session.tmux_session.clone());
+                vec![c.key.0.clone(), c.title.clone().unwrap_or_default(), captain.unwrap_or_default()]
+            }),
+        }?;
+        Some((pane.coordinate().to_string(), fields))
     }
 
     fn move_active_cursor(&mut self, delta: isize) {
-        let n = self.active_list_len();
+        let pane = self.pane();
+        let n = self.len(pane);
         if n == 0 {
             return;
         }
-        let c = self.active_cursor_mut();
+        let c = &mut self.cursors[pane as usize];
         *c = (*c as isize + delta).clamp(0, (n - 1) as isize) as usize;
     }
 
-    /// Focus the pane at visual position `n` (top = 0) on a multi-pane tab.
+    /// Focus the pane at visual position `n` (top = 0) on the current tab.
     fn focus_nth_pane(&mut self, n: usize) {
-        match self.tab {
-            TabId::Fleet => {
-                self.fleet_pane = [FleetPane::Cogs, FleetPane::Escalations]
-                    .get(n)
-                    .copied()
-                    .unwrap_or(self.fleet_pane);
-            }
-            TabId::Board => {
-                self.board_pane = [BoardPane::Tickets, BoardPane::Convoys]
-                    .get(n)
-                    .copied()
-                    .unwrap_or(self.board_pane);
-            }
-            TabId::Armada => {}
+        if let Some(&p) = self.tab.panes().get(n) {
+            self.focus[self.tab as usize] = p;
         }
     }
 
-    /// Toggle focus to the other pane on a two-pane tab (`↑`/`↓`).
-    fn toggle_pane(&mut self) {
-        match self.tab {
-            TabId::Fleet => {
-                self.fleet_pane = match self.fleet_pane {
-                    FleetPane::Cogs => FleetPane::Escalations,
-                    FleetPane::Escalations => FleetPane::Cogs,
-                }
-            }
-            TabId::Board => {
-                self.board_pane = match self.board_pane {
-                    BoardPane::Tickets => BoardPane::Convoys,
-                    BoardPane::Convoys => BoardPane::Tickets,
-                }
-            }
-            TabId::Armada => {}
-        }
+    /// Move focus to the next (`+1`) / previous (`-1`) pane on the current tab, wrapping.
+    fn step_pane(&mut self, delta: isize) {
+        let panes = self.tab.panes();
+        let at = panes.iter().position(|p| *p == self.pane()).unwrap_or(0) as isize;
+        self.focus[self.tab as usize] = panes[(at + delta).rem_euclid(panes.len() as isize) as usize];
     }
 
     fn handle_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -287,23 +270,23 @@ impl App {
                 return;
             }
             KeyCode::Tab => {
-                self.tab = self.tab.cycle_next();
+                self.tab = self.tab.step(1);
                 return;
             }
             KeyCode::BackTab => {
-                self.tab = self.tab.cycle_prev();
+                self.tab = self.tab.step(-1);
                 return;
             }
-            KeyCode::Up | KeyCode::Down => {
-                self.toggle_pane();
+            KeyCode::Up => {
+                self.step_pane(-1);
                 return;
             }
-            KeyCode::Char('1') => {
-                self.focus_nth_pane(0);
+            KeyCode::Down => {
+                self.step_pane(1);
                 return;
             }
-            KeyCode::Char('2') => {
-                self.focus_nth_pane(1);
+            KeyCode::Char(c @ '1'..='4') => {
+                self.focus_nth_pane(c as usize - '1' as usize);
                 return;
             }
             KeyCode::Char('j') => {
@@ -334,11 +317,12 @@ impl App {
         if force || self.last_refresh.elapsed() >= Duration::from_secs(1) {
             self.fleet = Fleet::load(&self.project);
             self.last_refresh = Instant::now();
-            clamp(&mut self.cogs_cursor, self.fleet.cogs.len());
-            clamp(&mut self.escalations_cursor, self.fleet.escalations.len());
-            clamp(&mut self.ships_cursor, self.fleet.armada.len());
-            clamp(&mut self.tickets_cursor, self.fleet.board.len());
-            clamp(&mut self.convoys_cursor, self.fleet.convoys.len());
+            for tab in TabId::all() {
+                for &pane in tab.panes() {
+                    let n = self.len(pane);
+                    clamp(&mut self.cursors[pane as usize], n);
+                }
+            }
         }
     }
 }
