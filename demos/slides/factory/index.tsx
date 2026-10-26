@@ -45,7 +45,7 @@ const Cover: Page = () => (
   <div style={stage}>
     <div style={{ position: 'absolute', left: 120, top: 400 }}>
       <div style={{ fontSize: 128, fontWeight: 700, fontFamily: 'var(--osd-font-display)', letterSpacing: '-0.02em' }}>Managed Custody</div>
-      <div style={{ fontSize: 56, fontWeight: 600, color: '#4aa3ff', marginTop: 8 }}>Software Factory</div>
+      <div style={{ fontSize: 56, fontWeight: 600, color: '#4aa3ff', marginTop: 8 }}>{'Agentic Software Factory - '}<span style={{ fontStyle: 'italic' }}>Armada</span></div>
       <div style={{ fontSize: 28, color: '#9aa0a6', marginTop: 28 }}>Daniel Duclos-Cavalcanti — SWE II</div>
     </div>
   </div>
