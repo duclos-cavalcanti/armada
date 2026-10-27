@@ -813,8 +813,8 @@ mod tests {
         fn rebase(&self, _: i64) -> Result<()> {
             Ok(())
         }
-        fn block_on(&self, _: i64, _: i64) -> Result<()> {
-            Ok(())
+        fn sync_blocks(&self, _: i64, _: &[i64]) -> Result<usize> {
+            Ok(0)
         }
         fn arm_merge(&self, iid: i64) -> Result<()> {
             self.armed.borrow_mut().push(iid);

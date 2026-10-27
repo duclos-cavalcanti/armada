@@ -155,7 +155,7 @@ pub trait Forge {
     /// Preflight: verify this adapter can work — its CLI is installed, authenticated, and reaches
     /// the configured target. `Ok` carries a one-line confirmation for the checklist.
     fn preflight(&self) -> Result<String>;
-    /// Can this forge stack MRs — declare one MR blocked by another (`block_on`)? When false the
+    /// Can this forge stack MRs — declare one MR blocked by another (`sync_blocks`)? When false the
     /// fleet never dispatches a stacked child: it waits for its parent to merge instead.
     fn stacks(&self) -> bool;
     /// Every open MR (ours + allies = the armada), each as a `ForgeShip` DTO.
@@ -168,10 +168,11 @@ pub trait Forge {
     /// Reply on one review thread, and resolve it when `resolve` (the ask is addressed).
     fn reply(&self, iid: i64, thread: &str, body: &str, resolve: bool) -> Result<()>;
     fn rebase(&self, iid: i64) -> Result<()>;
-    /// Declare a GitLab MR dependency: `child` is blocked by `parent` (GitLab then gates the
-    /// child's merge + merge-train until the parent merges). Idempotent — an already-declared
-    /// edge is a success no-op. The reconcile BLOCK pass converges these from the ticket graph.
-    fn block_on(&self, child_iid: i64, parent_iid: i64) -> Result<()>;
+    /// Keep `child`'s MR dependencies in step: drop any on an MR that closed unmerged (the forge
+    /// would gate the child on it forever), then declare each of `parents` not yet declared (the
+    /// child then can't merge until they do). Other live dependencies stay. Idempotent; says how
+    /// many it changed. Reconcile tends these from the ticket graph.
+    fn sync_blocks(&self, child_iid: i64, parents: &[i64]) -> Result<usize>;
     fn arm_merge(&self, iid: i64) -> Result<()>;
     /// Cancel an armed auto-merge, so the MR won't merge on its own. Idempotent — an unarmed MR is
     /// a success no-op. A hold calls it: an armed MR lives on the forge, beyond the fleet's gates.

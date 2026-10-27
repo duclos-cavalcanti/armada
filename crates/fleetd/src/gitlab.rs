@@ -196,41 +196,27 @@ impl Forge for GlabForge {
         Ok(())
     }
 
-    fn block_on(&self, child_iid: i64, parent_iid: i64) -> Result<()> {
-        // Idempotent: skip if `parent` is already a declared blocker of `child`.
-        let blocks = self.api(&format!("projects/{}/merge_requests/{child_iid}/blocks", self.project))?;
-        let already = serde_json::from_str::<serde_json::Value>(&blocks)
-            .ok()
-            .and_then(|v| {
-                v.as_array().map(|a| {
-                    a.iter().any(|b| {
-                        b.get("blocking_merge_request").and_then(|m| m.get("iid")).and_then(|i| i.as_i64())
-                            == Some(parent_iid)
-                    })
-                })
-            })
-            .unwrap_or(false);
-        if already {
-            return Ok(());
+    fn sync_blocks(&self, child_iid: i64, parents: &[i64]) -> Result<usize> {
+        let blocks = format!("projects/{}/merge_requests/{child_iid}/blocks", self.project);
+        let (dead, declared) = read_blocks(&serde_json::from_str(&self.api(&blocks)?)?);
+        let mut changed = 0;
+        for id in dead {
+            let out = Command::new("glab").args(["api", "--method", "DELETE", &format!("{blocks}/{id}")]).output()?;
+            ensure!(out.status.success(), "unblock !{child_iid} failed: {}", crate::preflight::one_line(&out.stderr));
+            changed += 1;
         }
-        // The /blocks API takes the parent's GLOBAL id, not its iid.
-        let parent = self.api(&format!("projects/{}/merge_requests/{parent_iid}", self.project))?;
-        let gid = serde_json::from_str::<serde_json::Value>(&parent)?
-            .get("id")
-            .and_then(|i| i.as_i64())
-            .ok_or_else(|| anyhow!("block_on: parent MR !{parent_iid} has no global id"))?;
-        let out = Command::new("glab")
-            .args([
-                "api",
-                "--method",
-                "POST",
-                &format!("projects/{}/merge_requests/{child_iid}/blocks", self.project),
-                "-f",
-                &format!("blocking_merge_request_id={gid}"),
-            ])
-            .output()?;
-        ensure!(out.status.success(), "block_on failed: {}", crate::preflight::one_line(&out.stderr));
-        Ok(())
+        for &parent in parents.iter().filter(|p| !declared.contains(p)) {
+            // The /blocks API takes the parent's GLOBAL id, not its iid.
+            let mr: serde_json::Value =
+                serde_json::from_str(&self.api(&format!("projects/{}/merge_requests/{parent}", self.project))?)?;
+            let gid = mr.get("id").and_then(|i| i.as_i64()).ok_or_else(|| anyhow!("MR !{parent} has no global id"))?;
+            let out = Command::new("glab")
+                .args(["api", "--method", "POST", &blocks, "-f", &format!("blocking_merge_request_id={gid}")])
+                .output()?;
+            ensure!(out.status.success(), "block !{child_iid} on !{parent} failed: {}", crate::preflight::one_line(&out.stderr));
+            changed += 1;
+        }
+        Ok(changed)
     }
 
     fn disarm(&self, iid: i64) -> Result<()> {
@@ -433,6 +419,21 @@ fn nbool(n: &serde_json::Value, key: &str) -> bool {
     n.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
+/// An MR's `/blocks` split in two: the block ids whose blocking MR closed unmerged (dead — GitLab
+/// keeps gating on them), and the iids of the blocking MRs still declared.
+fn read_blocks(blocks: &serde_json::Value) -> (Vec<i64>, Vec<i64>) {
+    let (mut dead, mut declared) = (Vec::new(), Vec::new());
+    for b in blocks.as_array().into_iter().flatten() {
+        let Some(parent) = b.get("blocking_merge_request") else { continue };
+        if parent.get("state").and_then(|s| s.as_str()) == Some("closed") {
+            dead.extend(b.get("id").and_then(|i| i.as_i64()));
+        } else {
+            declared.extend(parent.get("iid").and_then(|i| i.as_i64()));
+        }
+    }
+    (dead, declared)
+}
+
 /// Armed: set to merge on its own once the pipeline passes (GitLab's auto-merge).
 fn is_armed(mr: &serde_json::Value) -> bool {
     mr.get("merge_when_pipeline_succeeds").and_then(|x| x.as_bool()).unwrap_or(false)
@@ -539,6 +540,17 @@ mod tests {
        "target_branch":"master","web_url":"https://x/2300","draft":true,"state":"opened",
        "sha":"abc","has_conflicts":true,"author":{"username":"me"}}
     ]"#;
+
+    #[test]
+    fn read_blocks_splits_closed_blockers_from_live_ones() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"[{"id":11,"blocking_merge_request":{"iid":2360,"state":"closed"}},
+                {"id":12,"blocking_merge_request":{"iid":2361,"state":"opened"}},
+                {"id":13,"blocking_merge_request":{"iid":2300,"state":"merged"}}]"#,
+        )
+        .unwrap();
+        assert_eq!(read_blocks(&v), (vec![11], vec![2361, 2300]));
+    }
 
     #[test]
     fn parses_core_fields() {

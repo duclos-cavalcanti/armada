@@ -1,7 +1,7 @@
 //! The `gh` Forge driver — GitHub through its CLI (which holds the auth). A pull request is a ship.
 //!
 //! Two GitHub facts shape it: there are no MR dependencies, so this forge doesn't stack
-//! (`stacks() = false`, and `block_on` is refused); and GitHub requests reviewers itself (CODEOWNERS,
+//! (`stacks() = false`, and `sync_blocks` is refused); and GitHub requests reviewers itself (CODEOWNERS,
 //! when a PR turns ready), so `request_review` only marks the PR ready. GitHub's merge-readiness
 //! (`mergeStateStatus`) is translated into GitLab's `merge_status` words the sailor already reads.
 
@@ -143,8 +143,8 @@ impl Forge for GhForge {
         self.gh(&["pr", "update-branch", &n.to_string(), "--rebase"]).map(drop) // no-op when up to date
     }
 
-    fn block_on(&self, child: i64, parent: i64) -> Result<()> {
-        bail!("GitHub has no MR dependencies: can't block #{child} on #{parent} (this forge doesn't stack)")
+    fn sync_blocks(&self, child: i64, _: &[i64]) -> Result<usize> {
+        bail!("GitHub has no MR dependencies: can't block #{child} (this forge doesn't stack)")
     }
 
     fn arm_merge(&self, n: i64) -> Result<()> {
@@ -548,7 +548,7 @@ mod tests {
         assert_eq!(f.request_review(&ticket).unwrap(), Vec::<String>::new());
         assert!(!draft(&f), "request_review marks it ready");
         f.set_draft(n, true).unwrap(); // leave the fixture as found
-        assert!(f.block_on(n, 1).is_err(), "GitHub can't stack");
+        assert!(f.sync_blocks(n, &[1]).is_err(), "GitHub can't stack");
 
         let branch = env("FLEET_GH_SMOKE_BRANCH");
         let d = MrDraft { source: branch.clone(), target: "main".into(), title: format!("{branch}: smoke"), description: "Opened by the smoke test.".into(), draft: true };

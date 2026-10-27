@@ -52,7 +52,6 @@ pub enum Action {
     LaunchSailor { ticket: String },           // open ship changed since last sweep → launch a sailor
     LaunchLookout { iid: i64 },                // an allied ship changed since last review → launch the lookout on it
     StandDownLookout,                          // the singleton lookout finished its review → end its session
-    Block { child_iid: i64, parent_iid: i64 }, // mirror a ticket is-blocked-by edge onto a GitLab MR dependency
 }
 
 /// Compute the reconcile plan from ledger state + the live cogs (session + derived
@@ -64,7 +63,7 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
     // DISPATCH — iterate the order queue (intent). Spawn a CLEAN (all blockers terminal) ticket OR
     // a STACKED one — a child whose single in-flight blocker has an open ship to fork from. STACKED
     // starts early off the parent's branch (the producer cut the worktree there) instead of waiting
-    // for the parent to merge; the block_on pass + the parent-targeted MR handle order + rebase-loop.
+    // for the parent to merge; `tend_blocks` + the parent-targeted MR handle order + rebase-loop.
     let armada = ledger.armada()?;
     for order in ledger.queue()? {
         let ticket = match TicketRepo::get(ledger, &order.ticket)? {
@@ -275,56 +274,6 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
         }
     }
 
-    // BLOCK — mirror the Jira is-blocked-by graph onto GitLab MR dependencies, but ONLY declare a
-    // dependency on a ship WE own: the blocked (child) ticket must have an order (we dispatched it).
-    // The blocker (parent) may be anyone's — our MR can legitimately wait on an ally's — but the fleet
-    // never rewrites an *ally's* merge gate off our reading of the shared Jira graph. For such a ticket,
-    // if the child isn't already blocked (its synced `merge_status` != `merge_request_blocked` — the
-    // idempotency signal; `block_on` double-checks) and the blocker has an open ship, declare the block.
-    // Covers both the known-at-dispatch case and a dependency added after the MRs are up. Skip a
-    // cycle-closing edge (parent already blocked by the child) — GitLab accepts a cycle then deadlocks.
-    let open_ship = |ticket: &TicketKey| -> Option<i64> {
-        armada
-            .iter()
-            .find(|s| s.ticket.as_ref() == Some(ticket) && s.ended_at.is_none())
-            .map(|s| s.iid)
-    };
-    for ticket in TicketRepo::board(ledger)? {
-        if !stacks || ticket.blocked_by.is_empty() {
-            continue; // a forge without MR dependencies gets none declared
-        }
-        let Some(child_iid) = open_ship(&ticket.key) else { continue };
-        if OrderRepo::get(ledger, &ticket.key)?.is_none() {
-            continue; // not ours — we only set a dependency on an MR we dispatched (the blocker may be an ally's)
-        }
-        let child_ship = armada.iter().find(|s| s.iid == child_iid);
-        let already_blocked = match child_ship {
-            Some(s) => ShipRepo::snapshot(ledger, &s.id)?
-                .and_then(|snap| snap.merge_status)
-                .as_deref()
-                == Some("merge_request_blocked"),
-            None => false,
-        };
-        if already_blocked {
-            continue; // a block is live (single-blocker idempotency; multi-blocker is the ship_blocks follow-up)
-        }
-        for blocker in &ticket.blocked_by {
-            let Some(parent_iid) = open_ship(blocker) else { continue };
-            // Cycle guard: refuse if the parent is itself blocked by the child (would deadlock).
-            let parent_blocked_by_child = TicketRepo::get(ledger, blocker)?
-                .map(|p| p.blocked_by.contains(&ticket.key))
-                .unwrap_or(false);
-            if parent_blocked_by_child {
-                tracing::warn!(
-                    "block {child_iid}←{parent_iid}: skipped — {} and {} block each other (grooming cycle)",
-                    ticket.key.0, blocker.0
-                );
-                continue;
-            }
-            actions.push(Action::Block { child_iid, parent_iid });
-        }
-    }
-
     // De-dup identical actions (e.g. a merged ship + terminal ticket both → one Reap).
     let mut seen: Vec<Action> = Vec::new();
     actions.retain(|a| {
@@ -336,6 +285,54 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
         }
     });
     Ok(actions)
+}
+
+/// The MR dependencies to keep in step, per child MR: each of OUR open ships (we dispatched its
+/// ticket) whose ticket has blockers, or whose MR the forge reports blocked, with the open ships of
+/// its blockers. The blocker may be anyone's — our MR can wait on an ally's — but the fleet never
+/// rewrites an ally's merge gate off its reading of the shared ticket graph. A cycle-closing edge
+/// (the parent is blocked by the child) is skipped: GitLab accepts a cycle, then deadlocks. A child
+/// left with no parent is still listed, so a blocker that closed unmerged is dropped. Pure.
+pub(crate) fn wanted_blocks(ledger: &Ledger) -> Result<Vec<(i64, Vec<i64>)>> {
+    let armada = ledger.armada()?;
+    let open_ship = |ticket: &TicketKey| armada.iter().find(|s| s.ticket.as_ref() == Some(ticket));
+    let mut wanted = Vec::new();
+    for ticket in TicketRepo::board(ledger)? {
+        let Some(child) = open_ship(&ticket.key) else { continue };
+        if OrderRepo::get(ledger, &ticket.key)?.is_none() {
+            continue; // not ours
+        }
+        let gated = ShipRepo::snapshot(ledger, &child.id)?.and_then(|s| s.merge_status).as_deref()
+            == Some("merge_request_blocked");
+        if ticket.blocked_by.is_empty() && !gated {
+            continue;
+        }
+        let mut parents = Vec::new();
+        for blocker in &ticket.blocked_by {
+            let Some(parent) = open_ship(blocker) else { continue };
+            if TicketRepo::get(ledger, blocker)?.is_some_and(|p| p.blocked_by.contains(&ticket.key)) {
+                tracing::warn!("block !{}←!{}: skipped — {} and {} block each other", child.iid, parent.iid, ticket.key.0, blocker.0);
+                continue;
+            }
+            parents.push(parent.iid);
+        }
+        wanted.push((child.iid, parents));
+    }
+    Ok(wanted)
+}
+
+/// Keep our MRs' dependencies in step with the ticket graph (`wanted_blocks`) through the forge.
+/// Not a planned action: only the forge knows what's declared, so this asks it each tick and is
+/// quiet when nothing changed. Best-effort per MR — a failure retries next tick.
+fn tend_blocks<F: Forge + ?Sized>(ledger: &Ledger, forge: &F) -> Result<()> {
+    for (child, parents) in wanted_blocks(ledger)? {
+        match forge.sync_blocks(child, &parents) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!("blocks of !{child}: {n} changed — now blocked by {parents:?}"),
+            Err(e) => tracing::warn!("blocks of !{child} not tended: {e:#}"),
+        }
+    }
+    Ok(())
 }
 
 /// Ready = To Do, not held, and every blocker is terminal (Done/Cancelled). The absorbed
@@ -459,6 +456,9 @@ pub fn tick<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
             Err(e) => failed.push(serde_json::json!({ "action": action, "error": format!("{e:#}") })),
         }
     }
+    if forge.stacks() {
+        tend_blocks(ledger, forge)?;
+    }
     ledger.append(
         &now_rfc3339(),
         EventKind::TickRan,
@@ -490,7 +490,6 @@ fn execute<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
         Action::LaunchSailor { ticket } => launch_sailor(ledger, forge, host, ticket),
         Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, project, *iid),
         Action::StandDownLookout => stand_down_lookout(ledger, host),
-        Action::Block { child_iid, parent_iid } => forge.block_on(*child_iid, *parent_iid),
     }
 }
 
@@ -1448,9 +1447,9 @@ mod tests {
     }
 
     #[test]
-    fn a_forge_that_cant_stack_never_stacks_or_blocks() {
+    fn a_forge_that_cant_stack_never_stacks() {
         // GitHub has no MR dependencies: a child of an in-flight parent is BLOCKED (it waits for
-        // the merge, then dispatches off the default branch), and no Block is ever declared.
+        // the merge, then dispatches off the default branch).
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         ship(&db, 101, "PROJ-1", ShipState::Open);
@@ -1459,10 +1458,6 @@ mod tests {
         let t2 = TicketRepo::get(&db, &TicketKey("PROJ-2".into())).unwrap().unwrap();
         assert_eq!(classify(&db, &t2, &db.armada().unwrap(), false).unwrap(), Some(Classification::Blocked));
         assert!(!plan(&db, &[], false).unwrap().iter().any(|a| matches!(a, Action::Spawn { .. })));
-
-        ship(&db, 102, "PROJ-2", ShipState::Open); // the child's MR is up too
-        assert!(plan(&db, &[], true).unwrap().contains(&Action::Block { child_iid: 102, parent_iid: 101 }));
-        assert!(!plan(&db, &[], false).unwrap().iter().any(|a| matches!(a, Action::Block { .. })));
     }
 
     #[test]
@@ -1694,10 +1689,11 @@ mod tests {
     struct FakeForge {
         snapshot: RefCell<Option<ForgeShip>>,
         review_requested: RefCell<Vec<String>>, // tickets request_review was called for
+        blocks: RefCell<Vec<(i64, Vec<i64>)>>,  // the sync_blocks calls
     }
     impl FakeForge {
         fn new() -> Self {
-            Self { snapshot: RefCell::new(None), review_requested: RefCell::new(vec![]) }
+            Self { snapshot: RefCell::new(None), review_requested: RefCell::new(vec![]), blocks: RefCell::new(vec![]) }
         }
     }
     impl Forge for FakeForge {
@@ -1719,8 +1715,9 @@ mod tests {
         fn rebase(&self, _iid: i64) -> Result<()> {
             Ok(())
         }
-        fn block_on(&self, _: i64, _: i64) -> Result<()> {
-            Ok(())
+        fn sync_blocks(&self, child: i64, parents: &[i64]) -> Result<usize> {
+            self.blocks.borrow_mut().push((child, parents.to_vec()));
+            Ok(0)
         }
         fn arm_merge(&self, _iid: i64) -> Result<()> {
             Ok(())
@@ -2443,60 +2440,49 @@ mod tests {
         assert_eq!(classify(&db, &t11, &armada(&db), true).unwrap(), Some(Classification::Stacked));
     }
 
-    // ── block pass (mirror ticket is-blocked-by onto GitLab MR dependencies) ──────────
+    // ── blocks (keep our MRs' dependencies in step with the ticket graph) ─────────────
 
     #[test]
-    fn block_pass_declares_a_dependency_for_a_blocked_edge_with_two_open_ships() {
+    fn blocks_wanted_for_our_child_on_its_blockers_open_ship() {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]); // parent
         ticket(&db, "PROJ-2", TicketStatus::InProgress, false, vec!["PROJ-1"]); // child blocked_by parent
         order_wt(&db, "PROJ-2", true, Some("/wt")); // the child is OURS (dispatched); the blocker PROJ-1 need not be
         ship(&db, 101, "PROJ-1", ShipState::Open);
         ship(&db, 102, "PROJ-2", ShipState::Open);
-        let actions = plan(&db, &[], true).unwrap();
-        assert!(
-            actions.contains(&Action::Block { child_iid: 102, parent_iid: 101 }),
-            "declare child !102 blocked-by parent !101; got {actions:?}"
-        );
+        assert_eq!(wanted_blocks(&db).unwrap(), vec![(102, vec![101])]);
     }
 
     #[test]
-    fn block_pass_skips_a_child_we_dont_own() {
+    fn blocks_never_wanted_on_a_child_we_dont_own() {
         // An ally's MR (no order — we didn't dispatch it) is never given a dependency, even with a
         // blocked_by edge + both ships open. The fleet only sets a merge gate on an MR it owns.
         let db = db();
-        ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]); // blocker (any owner)
+        ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         ticket(&db, "PROJ-2", TicketStatus::InProgress, false, vec!["PROJ-1"]); // allied child — NO order
         ship(&db, 101, "PROJ-1", ShipState::Open);
         ship(&db, 102, "PROJ-2", ShipState::Open);
-        assert!(
-            !plan(&db, &[], true).unwrap().iter().any(|a| matches!(a, Action::Block { .. })),
-            "no dependency written on a child we don't own"
-        );
+        assert!(wanted_blocks(&db).unwrap().is_empty());
     }
 
     #[test]
-    fn block_pass_skips_when_the_child_is_already_blocked() {
+    fn a_gated_child_with_no_blocker_left_is_still_tended() {
+        // Its blocker's MR closed and the edge moved on: the forge still gates it, so it's listed
+        // with no parent — sync_blocks then drops the dead dependency.
         let db = db();
-        ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
-        ticket(&db, "PROJ-2", TicketStatus::InProgress, false, vec!["PROJ-1"]);
-        order_wt(&db, "PROJ-2", true, Some("/wt")); // child ours, so the only skip-reason tested is already-blocked
-        ship(&db, 101, "PROJ-1", ShipState::Open);
+        ticket(&db, "PROJ-2", TicketStatus::InProgress, false, vec![]);
+        order_wt(&db, "PROJ-2", true, Some("/wt"));
         ship(&db, 102, "PROJ-2", ShipState::Open);
-        // Mark the child already blocked (GitLab's synced merge_status) — the idempotency signal.
+        assert!(wanted_blocks(&db).unwrap().is_empty(), "no edge, not gated → nothing to tend");
         let child = db.armada().unwrap().into_iter().find(|s| s.iid == 102).unwrap();
         let mut snap = ShipRepo::snapshot(&db, &child.id).unwrap().unwrap();
         snap.merge_status = Some("merge_request_blocked".into());
         db.sync_snapshot(&snap).unwrap();
-        let actions = plan(&db, &[], true).unwrap();
-        assert!(
-            !actions.iter().any(|a| matches!(a, Action::Block { .. })),
-            "an already-blocked child isn't re-declared; got {actions:?}"
-        );
+        assert_eq!(wanted_blocks(&db).unwrap(), vec![(102, vec![])]);
     }
 
     #[test]
-    fn block_pass_refuses_a_cycle_closing_edge() {
+    fn blocks_skip_a_cycle_closing_edge() {
         let db = db();
         // Both tickets first (no edges), then the mutual edges — a 2-cycle can't be built with
         // inline blocked_by (each would reference the other before it exists → FK violation).
@@ -2508,11 +2494,22 @@ mod tests {
         order_wt(&db, "PROJ-2", true, Some("/wt"));
         ship(&db, 101, "PROJ-1", ShipState::Open);
         ship(&db, 102, "PROJ-2", ShipState::Open);
-        let actions = plan(&db, &[], true).unwrap();
-        assert!(
-            !actions.iter().any(|a| matches!(a, Action::Block { .. })),
-            "a 2-cycle declares neither block; got {actions:?}"
-        );
+        assert_eq!(wanted_blocks(&db).unwrap(), vec![(101, vec![]), (102, vec![])], "a 2-cycle declares neither");
+    }
+
+    #[test]
+    fn a_live_tick_tends_blocks_a_dry_run_doesnt() {
+        let db = db();
+        ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
+        ticket(&db, "PROJ-2", TicketStatus::InProgress, false, vec!["PROJ-1"]);
+        order_wt(&db, "PROJ-2", true, Some("/wt"));
+        ship(&db, 101, "PROJ-1", ShipState::Open);
+        ship(&db, 102, "PROJ-2", ShipState::Open);
+        let (tracker, host, forge) = (FakeTracker::new(), FakeHost::new(), FakeForge::new());
+        tick(&db, &tracker, &host, &forge, &[], "/project", true).unwrap();
+        assert!(forge.blocks.borrow().is_empty(), "a dry run touches no forge");
+        tick(&db, &tracker, &host, &forge, &[], "/project", false).unwrap();
+        assert_eq!(*forge.blocks.borrow(), vec![(102, vec![101])]);
     }
 
     // ── stand-down (the cold-cog session close) ──────────────────────────────────────
