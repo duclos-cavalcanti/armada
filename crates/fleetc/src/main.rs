@@ -62,6 +62,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc settings [list | set <key> <value>]   (live config levers; no restart)\n  \
      fleetc project                   (the project checkout's path, from fleet.toml)\n  \
      fleetc cost     [--since <RFC3339>]\n  \
+     fleetc ledger   [<sql>]           (read the project's ledger: one query as a table, or a sqlite3 shell; read-only)\n  \
      fleetc export   <file>            (snapshot the project's ledger into <file>; safe while fleetd runs)\n  \
      fleetc import   <file>            (restore a ledger snapshot; fleetd must be stopped)";
 
@@ -107,6 +108,7 @@ fn run() -> Result<()> {
         Some("reply") => reply(&args[1..]),
         Some("ship") => ship(&args[1..]),
         Some("export") => export(&args[1..]),
+        Some("ledger") => read_ledger(&args[1..]),
         Some("import") => import(&args[1..]),
         Some("review-post") => review_post(&args[1..]),
         Some("retry-ci") => retry_ci(&args[1..]),
@@ -695,6 +697,24 @@ fn reply(args: &[String]) -> Result<()> {
 /// sessions, events) into `<file>`: a consistent, standalone copy (`VACUUM INTO`), taken read-only
 /// beside a running fleetd. Name it as you like, e.g. with `$(date -u +%Y%m%dT%H%M%SZ)`.
 /// Telemetry (the spend log) isn't state and isn't exported.
+/// `fleetc ledger [<sql>]` — read the project's ledger through `sqlite3 -readonly -box`: the query
+/// printed as a table, or with none, an interactive shell (`.tables`, `.schema <t>`). Read-only:
+/// fleetd stays the single writer. Exits with sqlite3's own status.
+fn read_ledger(args: &[String]) -> Result<()> {
+    let ledger = project_dir().ledger();
+    anyhow::ensure!(std::path::Path::new(&ledger).exists(), "no ledger yet: {ledger} doesn't exist (start fleetd once)");
+    let mut sqlite = std::process::Command::new("sqlite3");
+    sqlite.args(["-readonly", "-box", &ledger]);
+    if !args.is_empty() {
+        sqlite.arg(args.join(" "));
+    }
+    let status = sqlite.status().map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => anyhow!("sqlite3 isn't on PATH (needs 3.33+ for -box)"),
+        _ => anyhow!("sqlite3: {e}"),
+    })?;
+    std::process::exit(status.code().unwrap_or(1));
+}
+
 fn export(args: &[String]) -> Result<()> {
     let [file] = args else { bail!("usage: fleetc export <file>") };
     let ledger = project_dir().ledger();
