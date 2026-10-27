@@ -9,6 +9,10 @@
 # `make` with no target prints the help summary.
 
 .DEFAULT_GOAL := help
+
+# fleetc onto PATH, built in the workspace's own target/ (shared cache: unchanged, it's instant).
+# `run` reinstalls it too, so the fleetc cogs (and you) call always matches the fleetd just built.
+INSTALL_FLEETC := cargo install -q --path crates/fleetc --force --target-dir target
 .PHONY: help install uninstall .project preflight run stop dashboard admiral export
 
 help:                            ## Show this help
@@ -16,7 +20,7 @@ help:                            ## Show this help
 
 install:                         ## Install the kit (Brewfile + stow) and fleetc onto PATH
 	./install.sh
-	cargo install --path crates/fleetc --force
+	$(INSTALL_FLEETC)
 
 uninstall:                       ## Uninstall the kit and remove fleetc
 	-cargo uninstall fleetc
@@ -28,9 +32,10 @@ uninstall:                       ## Uninstall the kit and remove fleetc
 preflight: .project              ## Check the project's setup: runtime state, checkout, forge + tracker CLIs, tmux + claude
 	cargo run -q -p fleetd -- -C projects/$(FLEET_PROJECT) preflight
 
-run: .project                    ## Start the project's fleetd in the background (unless it's up), then open its dashboard
+run: .project                    ## Build fleetd + reinstall fleetc, start fleetd in the background (unless it's up), open its dashboard
 	@pids=$$(pgrep -x fleetd | paste -sd, -); if [ -n "$$pids" ] && ps -o args= -p "$$pids" | grep -v '/fleetd -C projects/$(FLEET_PROJECT)$$'; then echo "↑ another project's fleetd is up — make stop FLEET_PROJECT=<it> first"; exit 1; fi
 	@cargo build -q -p fleetd
+	@$(INSTALL_FLEETC)
 	@nohup target/debug/fleetd -C projects/$(FLEET_PROJECT) </dev/null >/dev/null 2>&1 &
 	@$(MAKE) --no-print-directory dashboard
 
@@ -40,7 +45,7 @@ export: .project                 ## Snapshot the project's ledger to projects/<n
 stop: .project                   ## Stop the project's fleet daemon
 	@pkill -f '/fleetd -C projects/$(FLEET_PROJECT)$$' && echo "fleetd stopped ($(FLEET_PROJECT))" || echo "fleetd not running ($(FLEET_PROJECT))"
 
-dashboard: .project              ## Build + run the TUI dashboard over project P (cargo run --release)
+dashboard: .project              ## Build + run the TUI dashboard over the project (cargo run --release)
 	cargo run --release -p dashboard -- -C projects/$(FLEET_PROJECT)
 
 admiral: .project                ## Talk to the project's admiral (its product expert; reads the kit, never edits it)
