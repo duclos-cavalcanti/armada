@@ -13,11 +13,11 @@ Cycle with `Tab` / `S-Tab`:
 
 - **Fleet** — the line, top-down: the open convoys, what waits to enter the line, every order,
   then the builders and the ships being landed:
-  - **Convoys** — the open convoys: the captain (live / off), whether its tmux is up, how many
-    tickets are still open; `enter` switches to the live captain (none up: opens the convoy's ticket);
+  - **Convoys** — the open convoys: the captain's liveness (or off), how many tickets are still
+    open; `enter` switches to the captain;
   - **Proposals** — what waits on you before it can enter the line: open proposals (`a` accept,
     `d` drop) and convoy tickets a captain held as not Ready (`✋ <reason>`; fix the ticket, then
-    `u` unhold). `enter` reads a proposal or opens a held ticket;
+    `u` unhold). `enter` reads a proposal, `t` opens a held ticket;
   - **Dispatch** — every order the fleet is working, with its phase (waiting / implementation /
     merge) and what it waits on (held ✋ / blocked ⛔);
   - **Implementation** — builders at work (workers + hands): state, liveness, MR + pipeline, last action;
@@ -41,7 +41,13 @@ Cycle with `Tab` / `S-Tab`:
 | `j` / `k` | move the cursor within the focused pane |
 | `space` | zoom the focused pane (toggle) |
 | `y` / `Y` | yank the focused pane / the whole page |
+| `enter` | switch to the row's tmux session (its cog) |
+| `m` | open the row's MR |
+| `t` | open the row's ticket |
 | any other | run `handler.sh <tab/pane> <key> <row fields…>` on the focused row |
+
+The keys are fixed, never "smart": `enter` on a row whose session is down (or has none) opens
+nothing else — it fails. A failed action shows in red in the footer for a few seconds.
 
 ## Layout
 

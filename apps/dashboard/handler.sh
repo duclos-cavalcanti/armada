@@ -8,31 +8,35 @@
 #
 # This script owns the ENTIRE (coordinate, key) → action mapping. Adding or
 # changing an action is a one-arm edit here; the dashboard binary never changes.
-# An unhandled (coordinate, key) pair is a silent no-op.
+# An unhandled (coordinate, key) pair is a silent no-op. A failure exits non-zero with one line
+# on stderr — the dashboard shows it, in red, in its footer.
+#
+# The keys are fixed, never "smart": enter switches to the row's tmux session (or fails),
+# m opens the MR, t opens the ticket.
 #
 # Row-field contract per coordinate (coord + key are stripped, so $1 is the first
 # field — these positions match the dashboard's `focused_action()`):
 #   fleet/dispatched   $1=ticket  $2=crew(worker|hand)
 #   fleet/impl         $1=ticket  $2=kind  $3=tmux_session  $4=state  $5=mr_iid
-#   fleet/merge        $1=ticket  $2=mr_iid  $3=url  $4=sailor_tmux(only when up)  $5=sailor_state
+#   fleet/merge        $1=ticket  $2=mr_iid  $3=url  $4=sailor_tmux  $5=sailor_state
 #   ships/list         $1=iid  $2=ticket  $3=pilot  $4=url
 #   board/tickets      $1=key  $2=status  $3=convoy
-#   convoys            $1=key  $2=title  $3=captain_tmux(only when up)     (Fleet + Board)
+#   convoys            $1=key  $2=title  $3=captain_tmux     (Fleet + Board)
 #   proposals          $1=kind(proposal|held)  $2=ref(proposal id | ticket key)   (Fleet + Board)
 #
 # Forge- and tracker-neutral: links come from the fleet itself (`fleetc -C "$FLEET_PROJECT_DIR"`,
 # the project folder the dashboard passes in), never from hardcoded hosts.
 set -euo pipefail
 
-# Switch the current tmux client to a cog's session (requires running inside tmux),
-# or report to stderr and fail if the session isn't alive.
+# Fail with one line on stderr — the dashboard shows it in red.
+fail() { echo "$*" >&2; return 1; }
+
+# Switch the current tmux client to a cog's session: `launch_tmux <session> <what's missing>`.
+# Fails if the row has no session, or it isn't alive.
 launch_tmux() {
-    local session="$1"
-    if ! tmux has-session -t "=$session" 2>/dev/null; then
-        echo "no $session tmux session (dead or not yet spawned)" >&2
-        return 1
-    fi
-    tmux switch-client -t "=$session"
+    [ -n "$1" ] || fail "$2"
+    tmux has-session -t "=$1" 2>/dev/null || fail "no tmux session $1 (dead or not yet spawned)"
+    tmux switch-client -t "=$1"
 }
 
 launch_browser() { open "$1"; }
@@ -58,46 +62,38 @@ main() {
 
     case "$coord/$key" in
         # ---- Convoys (Fleet + Board) -------------------------------------
-        # enter switches to the convoy's live captain, or — none up — opens the convoy's ticket.
-        convoys/enter)
-            if [ -n "${3:-}" ]; then launch_tmux "${3}"; else launch_ticket "${1:-}"; fi
-            ;;
+        convoys/enter) launch_tmux "${3:-}" "convoy ${1:-} has no captain" ;;
         convoys/t) launch_ticket "${1:-}" ;;
 
         # ---- Proposals (Fleet + Board): proposals + held convoy tickets ----
-        # enter reads a proposal / opens a held ticket; a/d settle a proposal; u unholds a ticket.
-        proposals/enter)
-            if [ "${1:-}" = proposal ]; then read_proposal "${2:-}"; else launch_ticket "${2:-}"; fi
-            ;;
-        proposals/t) [ "${1:-}" = held ] && launch_ticket "${2:-}" ;;
-        proposals/a) [ "${1:-}" = proposal ] && settle_proposal accept "${2:-}" ;;
-        proposals/d) [ "${1:-}" = proposal ] && settle_proposal drop "${2:-}" ;;
-        proposals/u) [ "${1:-}" = held ] && confirm_fleet "unhold ${2:-}?" unhold "${2:-}" ;;
+        # enter reads a proposal; a/d settle it; t opens a held ticket, u unholds it.
+        proposals/enter) [ "${1:-}" = proposal ] || fail "a held ticket: t opens it, u unholds it"; read_proposal "${2:-}" ;;
+        proposals/t) [ "${1:-}" = held ] || fail "a proposal isn't a ticket yet: enter reads it"; launch_ticket "${2:-}" ;;
+        proposals/a) [ "${1:-}" = proposal ] || fail "only a proposal is accepted"; settle_proposal accept "${2:-}" ;;
+        proposals/d) [ "${1:-}" = proposal ] || fail "only a proposal is dropped"; settle_proposal drop "${2:-}" ;;
+        proposals/u) [ "${1:-}" = held ] || fail "only a held ticket is unheld"; confirm_fleet "unhold ${2:-}?" unhold "${2:-}" ;;
 
         # ---- Fleet · dispatched / impl / merge (the line, by phase) --------
-        # t opens the ticket everywhere; enter attaches the cog at work; m opens the MR.
-        fleet/dispatched/enter | fleet/dispatched/t) launch_ticket "${1:-}" ;;
-        fleet/impl/enter) launch_tmux "${3:-}" ;;
+        fleet/dispatched/t) launch_ticket "${1:-}" ;;
+        fleet/impl/enter) launch_tmux "${3:-}" "${1:-} has no ${2:-cog} session" ;;
         fleet/impl/t) launch_ticket "${1:-}" ;;
-        fleet/impl/m) [ -n "${5:-}" ] && launch_mr "${5}" || echo "${1:-} has no MR yet" >&2 ;;
-        # enter attaches the live sailor, or — none at work — opens the MR.
-        fleet/merge/enter)
-            if [ -n "${4:-}" ]; then launch_tmux "${4}"; else launch_browser "${3:-}"; fi
-            ;;
+        fleet/impl/m) [ -n "${5:-}" ] || fail "${1:-} has no MR yet"; launch_mr "${5}" ;;
+        fleet/merge/enter) launch_tmux "${4:-}" "${1:-} has no sailor" ;;
         fleet/merge/t) launch_ticket "${1:-}" ;;
         fleet/merge/m) launch_browser "${3:-}" ;;
 
         # ---- Ships --------------------------------------------------------
-        # enter opens the MR — by its url ($4) if present, else by iid ($1); l attaches the lookout.
-        ships/list/enter)
-            if [ -n "${4:-}" ]; then launch_browser "${4}"; else launch_mr "${1:-}"; fi
-            ;;
-        ships/list/t) [ -n "${2:-}" ] && launch_ticket "${2:-}" || echo "allied ship has no ticket" >&2 ;;
-        ships/list/l) launch_tmux lookout ;;
+        # m opens the MR — by its url ($4) if present, else by iid ($1); l attaches the lookout.
+        ships/list/m) if [ -n "${4:-}" ]; then launch_browser "${4}"; else launch_mr "${1:-}"; fi ;;
+        ships/list/t) [ -n "${2:-}" ] || fail "an allied ship has no ticket"; launch_ticket "${2:-}" ;;
+        ships/list/l) launch_tmux lookout "no lookout" ;;
 
         # ---- Board · tickets -----------------------------------------------
-        board/tickets/enter | board/tickets/t) launch_ticket "${1:-}" ;;
+        board/tickets/t) launch_ticket "${1:-}" ;;
 
+        # enter / m on a row with no session / MR.
+        */enter) fail "no tmux session on this row — t ticket · m MR" ;;
+        */m) fail "no MR on this row" ;;
         *) : ;; # unhandled (coordinate, key) — no-op
     esac
 }

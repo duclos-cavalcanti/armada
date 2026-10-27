@@ -109,13 +109,13 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             ticket_rows(&f.board, &f.held_reasons),
         ),
         Pane::Convoys => (
-            format!(" Convoys · {} open · enter captain ", f.convoys.len()),
+            format!(" Convoys · {} open · enter captain · t ticket ", f.convoys.len()),
             Some(header(&[("Convoy", 12), ("Captain", 8), ("Open", 6), ("Title", 0)])),
             f.convoys.iter().map(|c| convoy_row(c, f)).collect(),
         ),
         Pane::Proposals => (
             format!(
-                " Proposals · {} open · {} held · enter read · a accept · d drop · u unhold ",
+                " Proposals · {} open · {} held · enter read · a accept · d drop · t ticket · u unhold ",
                 f.proposals.len(),
                 f.held.len()
             ),
@@ -148,11 +148,14 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         None => tick_summary(&app.fleet.tick),
     };
     let status = if app.fleet.fleetd_up { status } else { format!("fleetd down (see Log) · {status}") };
+    let error = app.error.as_ref().filter(|(_, at)| at.elapsed().as_secs() < 5).map(|(msg, _)| format!(" ✗ {msg} "));
     let body = format!(
-        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-5 pane · j/k row · y/Y yank",
+        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-5 pane · j/k row · y/Y yank · enter tmux · m MR · t ticket",
         flash, zoom, status,
     );
-    f.render_widget(Paragraph::new(Line::from(body)).style(dim), area);
+    let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+    let line = Line::from(error.map(|e| Span::styled(e, red)).into_iter().chain([Span::styled(body, dim)]).collect::<Vec<_>>());
+    f.render_widget(Paragraph::new(line), area);
 }
 
 // ── the line, by phase ───────────────────────────────────────────────────────────

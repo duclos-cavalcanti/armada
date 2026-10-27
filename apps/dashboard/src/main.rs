@@ -116,6 +116,10 @@ pub struct App {
     pub focused_area: std::cell::Cell<Option<ratatui::layout::Rect>>,
     /// Transient footer notice (e.g. yank feedback); shown for ~3s.
     pub flash: Option<(String, Instant)>,
+    /// The last action that failed (the handler's stderr); shown in red for ~5s.
+    pub error: Option<(String, Instant)>,
+    /// Where the action handler's failures arrive from its background thread.
+    errors: (std::sync::mpsc::Sender<String>, std::sync::mpsc::Receiver<String>),
     /// Set by `y`/`Y`; the run loop captures the region on the next draw.
     pub yank_requested: Option<YankScope>,
     /// Zoom: the focused pane fills the body; `space` toggles it.
@@ -134,6 +138,8 @@ impl App {
             cursors: [0; Pane::COUNT],
             focused_area: std::cell::Cell::new(None),
             flash: None,
+            error: None,
+            errors: std::sync::mpsc::channel(),
             yank_requested: None,
             zoomed: false,
             fleet: Fleet::load(&project),
@@ -173,10 +179,10 @@ impl App {
     /// Field schema per coordinate (the handler reads these positionally; empty = n/a):
     ///   fleet/dispatched   ticket  crew(worker|hand)
     ///   fleet/impl         ticket  kind  tmux_session  state  mr_iid
-    ///   fleet/merge        ticket  mr_iid  url  sailor_tmux(only when up)  sailor_state
+    ///   fleet/merge        ticket  mr_iid  url  sailor_tmux  sailor_state
     ///   ships/list         iid  ticket  pilot  url
     ///   board/tickets      key  status  convoy
-    ///   convoys            key  title  captain_tmux(only when up)
+    ///   convoys            key  title  captain_tmux
     ///   proposals          kind(proposal|held)  ref(proposal id | ticket key)
     fn focused_action(&self) -> Option<(String, Vec<String>)> {
         let pane = self.pane();
@@ -199,7 +205,7 @@ impl App {
                 ]
             }),
             Pane::Merge => f.landing.get(i).map(|r| {
-                let tmux = r.sailor.as_ref().filter(|s| f.is_up(s)).map(|s| s.session.tmux_session.clone());
+                let tmux = r.sailor.as_ref().map(|s| s.session.tmux_session.clone());
                 vec![
                     key(r.ship.ticket.as_ref()),
                     r.ship.iid.to_string(),
@@ -219,7 +225,7 @@ impl App {
                 ]
             }),
             Pane::Convoys => f.convoys.get(i).map(|c| {
-                let captain = f.captain_of(&c.key).filter(|s| f.is_up(s)).map(|s| s.session.tmux_session.clone());
+                let captain = f.captain_of(&c.key).map(|s| s.session.tmux_session.clone());
                 vec![c.key.0.clone(), c.title.clone().unwrap_or_default(), captain.unwrap_or_default()]
             }),
             Pane::Proposals => match f.proposals.get(i) {
@@ -331,7 +337,7 @@ impl App {
         let Some((coordinate, fields)) = self.focused_action() else {
             return;
         };
-        action::spawn(&self.project.root, &coordinate, &key_name, fields);
+        action::spawn(&self.project.root, &coordinate, &key_name, fields, self.errors.0.clone());
     }
 
     fn refresh(&mut self, force: bool) {
@@ -445,6 +451,9 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, project: wire
             }
         }
 
+        if let Ok(e) = app.errors.1.try_recv() {
+            app.error = Some((e, Instant::now()));
+        }
         app.refresh(false);
 
         if app.quit {

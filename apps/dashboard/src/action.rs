@@ -79,19 +79,30 @@ pub fn is_reserved(code: KeyCode, mods: KeyModifiers) -> bool {
 /// Invoke the handler in a detached background thread as
 ///   handler.sh <coordinate> <key> <field>...
 /// — a direct exec (no `sh -c`), so row fields are distinct argv entries and need
-/// no shell quoting. Fire-and-forget: stdout/stderr go to /dev/null (they'd
-/// corrupt the TUI's alternate screen); an unhandled (coordinate, key) is the
-/// handler's no-op.
-pub fn spawn(project: &std::path::Path, coordinate: &str, key: &str, fields: Vec<String>) {
+/// no shell quoting. Its output never reaches the terminal (it'd corrupt the TUI's
+/// alternate screen): on a failure, the last line of its stderr goes to `errors`
+/// for the footer. An unhandled (coordinate, key) is the handler's no-op.
+pub fn spawn(
+    project: &std::path::Path,
+    coordinate: &str,
+    key: &str,
+    fields: Vec<String>,
+    errors: std::sync::mpsc::Sender<String>,
+) {
     let (project, coordinate, key) = (project.to_path_buf(), coordinate.to_string(), key.to_string());
     std::thread::spawn(move || {
-        let _ = std::process::Command::new(HANDLER)
+        let out = std::process::Command::new(HANDLER)
             .env("FLEET_PROJECT_DIR", &project) // the handler reaches the fleet with `fleetc -C`
             .arg(&coordinate)
             .arg(&key)
             .args(&fields)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+            .stdin(std::process::Stdio::null())
+            .output();
+        let failure = match out {
+            Ok(o) if o.status.success() => return,
+            Ok(o) => String::from_utf8_lossy(&o.stderr).lines().rfind(|l| !l.trim().is_empty()).map(str::to_string),
+            Err(e) => Some(format!("handler: {e}")),
+        };
+        let _ = errors.send(failure.unwrap_or_else(|| format!("{coordinate} {key} failed")));
     });
 }
