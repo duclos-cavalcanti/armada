@@ -26,8 +26,62 @@ fn socket() -> String {
     project_dir().socket()
 }
 
+/// fleetc's usage: a header, then one line per verb form (`fleetc <verb> …`).
+const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project: the cwd's, or -C's — nearest folder with a fleet.toml)\n  \
+     fleetc status   --cog <worker|sailor|hand> --ticket <KEY-N> --state <state> [--last-action <text>]\n  \
+     fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--hold] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
+     fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
+     fleetc convoy   <open|close> <KEY> [--title <text>]\n  \
+     fleetc convoy   <add|remove> <KEY> <KEY-N>   (a ticket joins the convoy — its only one — or an added one leaves)\n  \
+     fleetc anchor   --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (graceful stop & hold)\n  \
+     fleetc weigh    --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (resume)\n  \
+     fleetc sink     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (scuttle — hard teardown)\n  \
+     fleetc send     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] <message>   (message into the cog's pane)\n  \
+     fleetc hold     <KEY-N> [--reason <why>]  (hold off the frontier; disarms + drafts its open MR)\n  \
+     fleetc decommission <KEY-N> --reason <why> [--yes]   (withdraw it for good: close its MR, cancel it with the reason, reap its cogs + worktree)\n  \
+     fleetc unhold   <KEY-N>          (release back onto the frontier; readies its MR)\n  \
+     fleetc packet   <KEY-N>          (the cog's work-packet: order + ship + ticket)\n  \
+     fleetc context  --convoy <KEY> [--format table]   (a captain's convoy slice)\n  \
+     fleetc plan                       (fleetd's latest reconcile plan — the parity lens)\n  \
+     fleetc transcript --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] [--open]   (resolve a cog's transcript)\n  \
+     fleetc review   --iid <N>         (an MR's fresh review surface: open threads + floating notes)\n  \
+     fleetc reply    --iid <N> --thread <id> --body <text|-> [--resolve]   (answer a review thread)\n  \
+     fleetc ship     --iid <N>         (one MR, ours or an ally's: ship + snapshot + fetch ref, as JSON)\n  \
+     fleetc review-post --iid <N> --body <text|-> [--approve]   (post one review comment; approve if clean)\n  \
+     fleetc rebase   --iid <N>         (server-side rebase an MR)\n  \
+     fleetc ci       --iid <N>         (the MR's CI: status + each failed job's log excerpt, as JSON)\n  \
+     fleetc retry-ci --iid <N>         (re-run the MR's failed CI jobs)\n  \
+     fleetc arm      <KEY-N>          (arm the ticket's MR to merge once green; refused while held or blocked)\n  \
+     fleetc ticket   <KEY-N> [--where]      (a ticket's full text; --where: its URL or file path)\n  \
+     fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (prints the new key)\n  \
+     fleetc ticket   block <KEY-N> --by <KEY-N>   (record an 'is blocked by' edge)\n  \
+     fleetc propose  --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (a cog: propose a new ticket; prints its id)\n  \
+     fleetc propose  --existing <KEY-N> --why <text> [--convoy <KEY>]   (a cog: propose taking on an existing ticket)\n  \
+     fleetc proposal [<id> | accept <id> [--convoy <KEY>] | drop <id>]   (the open proposals; one in full; accept — a new ticket is filed, into --convoy; drop)\n  \
+     fleetc launch   --title <t> --body <text> [--ticket <KEY-N>] [--target <branch>] [--draft] [--worktree <path>]   (open the MR for the worktree's branch; prints its URL)\n  \
+     fleetc settings [list | set <key> <value>]   (live config levers; no restart)\n  \
+     fleetc project                   (the project checkout's path, from fleet.toml)\n  \
+     fleetc cost     [--since <RFC3339>]\n  \
+     fleetc export   <file>            (snapshot the project's ledger into <file>; safe while fleetd runs)\n  \
+     fleetc import   <file>            (restore a ledger snapshot; fleetd must be stopped)";
+
+/// One verb's usage — every form of it, under the header — for `fleetc <verb> --help`.
+fn verb_usage(verb: &str) -> Option<String> {
+    let mut lines = USAGE.lines();
+    let header = lines.next()?;
+    let forms: Vec<&str> = lines.filter(|l| l.split_whitespace().nth(1) == Some(verb)).collect();
+    (!forms.is_empty()).then(|| format!("{header}\n{}", forms.join("\n")))
+}
+
 fn run() -> Result<()> {
     let (dir, args) = wire::split_dir_flag(std::env::args().skip(1).collect())?;
+    // `--help` / `-h` anywhere after a verb: its usage (no project needed).
+    if let Some(usage) = args.split_first().and_then(|(verb, rest)| {
+        rest.iter().any(|a| a == "--help" || a == "-h").then(|| verb_usage(verb).unwrap_or_else(|| USAGE.into()))
+    }) {
+        println!("{usage}");
+        return Ok(());
+    }
     if !args.is_empty() {
         PROJECT.set(wire::Project::find(dir.as_deref())?).expect("set once");
     }
@@ -65,45 +119,7 @@ fn run() -> Result<()> {
         Some("project") => project(),
         Some("cost") => cost(&args[1..]),
         _ => {
-            eprintln!(
-                "usage: fleetc [-C <project-dir>] <verb> …   (the project: the cwd's, or -C's — nearest folder with a fleet.toml)\n  \
-                 fleetc status   --cog <worker|sailor|hand> --ticket <KEY-N> --state <state> [--last-action <text>]\n  \
-                 fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--hold] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
-                 fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
-                 fleetc convoy   <open|close> <KEY> [--title <text>]\n  \
-                 fleetc convoy   <add|remove> <KEY> <KEY-N>   (a ticket joins the convoy — its only one — or an added one leaves)\n  \
-                 fleetc anchor   --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (graceful stop & hold)\n  \
-                 fleetc weigh    --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (resume)\n  \
-                 fleetc sink     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (scuttle — hard teardown)\n  \
-                 fleetc send     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] <message>   (message into the cog's pane)\n  \
-                 fleetc hold     <KEY-N> [--reason <why>]  (hold off the frontier; disarms + drafts its open MR)\n  \
-                 fleetc decommission <KEY-N> --reason <why> [--yes]   (withdraw it for good: close its MR, cancel it with the reason, reap its cogs + worktree)\n  \
-                 fleetc unhold   <KEY-N>          (release back onto the frontier; readies its MR)\n  \
-                 fleetc packet   <KEY-N>          (the cog's work-packet: order + ship + ticket)\n  \
-                 fleetc context  --convoy <KEY> [--format table]   (a captain's convoy slice)\n  \
-                 fleetc plan                       (fleetd's latest reconcile plan — the parity lens)\n  \
-                 fleetc transcript --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] [--open]   (resolve a cog's transcript)\n  \
-                 fleetc review   --iid <N>         (an MR's fresh review surface: open threads + floating notes)\n  \
-                 fleetc reply    --iid <N> --thread <id> --body <text|-> [--resolve]   (answer a review thread)\n  \
-                 fleetc ship     --iid <N>         (one MR, ours or an ally's: ship + snapshot + fetch ref, as JSON)\n  \
-                 fleetc review-post --iid <N> --body <text|-> [--approve]   (post one review comment; approve if clean)\n  \
-                 fleetc rebase   --iid <N>         (server-side rebase an MR)\n  \
-                 fleetc ci       --iid <N>         (the MR's CI: status + each failed job's log tail, as JSON)\n  \
-                 fleetc retry-ci --iid <N>         (re-run the MR's failed CI jobs)\n  \
-                 fleetc arm      <KEY-N>          (arm the ticket's MR to merge once green; refused while held or blocked)\n  \
-                 fleetc ticket   <KEY-N> [--where]      (a ticket's full text; --where: its URL or file path)\n  \
-                 fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (prints the new key)\n  \
-                 fleetc ticket   block <KEY-N> --by <KEY-N>   (record an 'is blocked by' edge)\n  \
-                 fleetc propose  --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (a cog: propose a new ticket; prints its id)\n  \
-                 fleetc propose  --existing <KEY-N> --why <text> [--convoy <KEY>]   (a cog: propose taking on an existing ticket)\n  \
-                 fleetc proposal [<id> | accept <id> [--convoy <KEY>] | drop <id>]   (the open proposals; one in full; accept — a new ticket is filed, into --convoy; drop)\n  \
-                 fleetc launch   --title <t> --body <text> [--ticket <KEY-N>] [--target <branch>] [--draft] [--worktree <path>]   (open the MR for the worktree's branch; prints its URL)\n  \
-                 fleetc settings [list | set <key> <value>]   (live config levers; no restart)\n  \
-                 fleetc project                   (the project checkout's path, from fleet.toml)\n  \
-                 fleetc cost     [--since <RFC3339>]\n  \
-                 fleetc export   <file>            (snapshot the project's ledger into <file>; safe while fleetd runs)\n  \
-                 fleetc import   <file>            (restore a ledger snapshot; fleetd must be stopped)"
-            );
+            eprintln!("{USAGE}");
             std::process::exit(2);
         }
     }
@@ -1176,6 +1192,16 @@ fn cost(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verb_usage_is_every_form_of_that_verb() {
+        let ci = verb_usage("ci").unwrap();
+        assert!(ci.starts_with("usage: fleetc") && ci.contains("fleetc ci       --iid <N>"), "{ci}");
+        assert_eq!(ci.lines().count(), 2, "the header + its one form");
+        assert_eq!(verb_usage("convoy").unwrap().lines().count(), 3, "both convoy forms");
+        assert!(!verb_usage("ticket").unwrap().contains("fleetc propose"), "only that verb");
+        assert_eq!(verb_usage("nope"), None);
+    }
 
     #[test]
     fn a_proposal_renders_its_provenance_then_its_body() {
