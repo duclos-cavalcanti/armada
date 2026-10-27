@@ -3,8 +3,8 @@
 //! to `ForgeShip`.
 //!
 //! The armada LIST is cheap (core facts only); the single-MR `snapshot` is ENRICHED
-//! — it adds `pipeline` + `open_threads` (from the MR detail) and `approvals` (a
-//! separate endpoint). `armed` is on both (`merge_when_pipeline_succeeds`); `on_merge_train`
+//! — it adds `pipeline` (from the MR detail), the exact `open_threads` (the discussions, as
+//! `review_state` counts them) and `approvals` (a separate endpoint). `armed` is on both (`merge_when_pipeline_succeeds`); `on_merge_train`
 //! stays defaulted (a separate endpoint, never needed at decision time).
 
 use anyhow::{anyhow, ensure, Context, Result};
@@ -145,6 +145,7 @@ impl Forge for GlabForge {
         let v: serde_json::Value = serde_json::from_str(&json)?;
         let mut ship = mr_to_ship(&v, &self.ticket_prefix).context("could not map MR JSON to a ship")?;
         ship.approvals = self.approvals(iid)?; // separate endpoint, not on the MR body
+        ship.open_threads = self.review_state(iid)?.open_threads; // exact, not the list's 0/1
         Ok(ship)
     }
 
@@ -475,7 +476,7 @@ fn mr_to_ship(m: &serde_json::Value, prefix: &str) -> Option<ForgeShip> {
             .and_then(|p| p.get("status"))
             .and_then(|s| s.as_str())
             .and_then(pipeline_status),
-        // coarse: blocking threads unresolved → 1, else 0 (exact count is decision-time).
+        // coarse: blocking threads unresolved → 1, else 0 (`snapshot` counts them exactly).
         open_threads: match m.get("blocking_discussions_resolved").and_then(|v| v.as_bool()) {
             Some(false) => 1,
             _ => 0,
