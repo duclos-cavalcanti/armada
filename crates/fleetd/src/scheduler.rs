@@ -18,7 +18,7 @@ use domain::ports::{
 };
 use domain::{
     CogState, ConvoyKey, ConvoyTicketView, ConvoyView, CrewKind, EntityKind, EventKind,
-    LivenessThresholds, MrDraft, Order, Packet, Proposal, ProposalId, Proposed, Report, Session, ShipState, TicketKey,
+    LivenessThresholds, MrDraft, Order, Packet, Proposal, ProposalId, Proposed, Report, Session, Ship, ShipState, TicketKey,
     TicketStatus,
 };
 use ledger::Ledger;
@@ -458,7 +458,17 @@ fn arm(ledger: &Ledger, forge: &dyn Forge, key: &TicketKey) -> Result<()> {
         .into_iter()
         .find(|s| s.ticket.as_ref() == Some(key) && s.ended_at.is_none())
         .ok_or_else(|| anyhow!("{}: no open MR to arm", key.0))?;
-    forge.arm_merge(ship.iid)
+    forge.arm_merge(ship.iid)?;
+    refresh(ledger, forge, &ship);
+    Ok(())
+}
+
+/// Re-read a ship the fleet just changed on the forge (armed, disarmed, drafted), so the ledger — and
+/// the dashboard — show it now, not at the next sync. Best-effort: the sync catches up regardless.
+fn refresh(ledger: &Ledger, forge: &dyn Forge, ship: &Ship) {
+    if let Err(e) = reconcile::fresh_snapshot(ledger, forge, ship) {
+        tracing::warn!("!{} not refreshed: {e:#}", ship.iid);
+    }
 }
 
 /// Hold or release a ticket. An armed MR merges on the forge's own say, past every fleet gate, so a
@@ -483,6 +493,7 @@ fn set_held(ledger: &Ledger, forge: &dyn Forge, ticket: &TicketKey, held: bool, 
     } else {
         forge.set_draft(iid, false).with_context(|| format!("released, but couldn't mark !{iid} ready"))?;
     }
+    refresh(ledger, forge, &ship);
     Ok(())
 }
 
@@ -774,7 +785,7 @@ mod tests {
         no_drafts: bool, // a forge plan without drafts
         closed: std::cell::RefCell<Vec<i64>>,
         noted: std::cell::RefCell<Vec<(i64, String)>>,
-        state: Option<ShipState>, // what `snapshot` reports (None: never polled in that test)
+        state: Option<ShipState>, // what `snapshot` reports (None: Open)
     }
     impl Forge for FakeForge {
         fn preflight(&self) -> Result<String> {
@@ -787,7 +798,7 @@ mod tests {
             Ok(vec![])
         }
         fn snapshot(&self, iid: i64) -> Result<ForgeShip> {
-            let state = self.state.expect("this test doesn't poll the forge");
+            let state = self.state.unwrap_or(ShipState::Open);
             Ok(ForgeShip {
                 iid,
                 url: "u".into(),
@@ -1108,6 +1119,8 @@ mod tests {
         TicketRepo::set_held(&db, &key, false, None, "t").unwrap();
         arm(&db, &forge, &key).unwrap();
         assert_eq!(*forge.armed.borrow(), vec![7], "armed only once clear");
+        let snap = ShipRepo::snapshot(&db, &db.armada().unwrap()[0].id).unwrap().unwrap();
+        assert!(snap.armed, "the ledger shows the arm at once, not at the next sync");
     }
 
     #[test]

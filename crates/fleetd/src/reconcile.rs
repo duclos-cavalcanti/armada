@@ -894,7 +894,7 @@ fn ship_fingerprint(s: &ShipSnapshot) -> String {
 
 /// Fresh-poll one ship (by iid) so a cog's packet carries current state; fall back to the last sync
 /// on a poll failure. Shared by the sailor + lookout launches.
-fn fresh_snapshot<F: Forge + ?Sized>(ledger: &Ledger, forge: &F, ship: &Ship) -> Result<ShipSnapshot> {
+pub(crate) fn fresh_snapshot<F: Forge + ?Sized>(ledger: &Ledger, forge: &F, ship: &Ship) -> Result<ShipSnapshot> {
     match forge.snapshot(ship.iid) {
         Ok(fs) => {
             let snap = ShipSnapshot {
