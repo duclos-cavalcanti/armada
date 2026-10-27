@@ -78,7 +78,6 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 ("Crew", 7),
                 ("State", 13),
                 ("Live", 7),
-                ("Tmux", 5),
                 ("MR", 7),
                 ("Pipeline", 9),
                 ("Age", 6),
@@ -92,7 +91,6 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 ("Ticket", 12),
                 ("Sailor", 15),
                 ("Live", 7),
-                ("Tmux", 5),
                 ("MR", 7),
                 ("Pipeline", 9),
                 ("Appr", 5),
@@ -112,7 +110,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
         ),
         Pane::Convoys => (
             format!(" Convoys · {} open · enter captain ", f.convoys.len()),
-            Some(header(&[("Convoy", 12), ("Captain", 8), ("Tmux", 5), ("Open", 6), ("Title", 0)])),
+            Some(header(&[("Convoy", 12), ("Captain", 8), ("Open", 6), ("Title", 0)])),
             f.convoys.iter().map(|c| convoy_row(c, f)).collect(),
         ),
         Pane::Proposals => (
@@ -200,8 +198,7 @@ fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>) -> Line<'static> {
         (s.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| "—".into()), 12, Style::default()),
         (s.kind.as_str().into(), 7, Style::default()),
         (state.clone(), 13, state_style(&state)),
-        live_cell(c.liveness.as_deref()),
-        tmux_cell(up),
+        live_cell(c.liveness.as_deref(), up),
         (mr, 7, Style::default()),
         (pipe.0, 9, pipe.1),
         (fmt_age(c.age_secs), 6, dim()),
@@ -220,7 +217,7 @@ fn landing_row(r: &LandingRow, up: bool) -> Line<'static> {
         }
         None => ("—".into(), dim(), None),
     };
-    let live = if r.live { live_cell(r.sailor.as_ref().and_then(|s| s.liveness.as_deref())) } else { ("—".into(), 7, dim()) };
+    let live = if r.live { live_cell(r.sailor.as_ref().and_then(|s| s.liveness.as_deref()), up) } else { ("—".into(), 7, dim()) };
     let pipe = pipeline(snap);
     let (appr, appr_style) = match snap {
         Some(s) => {
@@ -249,7 +246,6 @@ fn landing_row(r: &LandingRow, up: bool) -> Line<'static> {
         (r.ship.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_default(), 12, Style::default()),
         (sailor, 15, sailor_style),
         live,
-        tmux_cell(up),
         (format!("!{}", r.ship.iid), 7, Style::default()),
         (pipe.0, 9, pipe.1),
         (appr, 5, appr_style),
@@ -335,15 +331,14 @@ fn convoy_row(c: &Convoy, f: &crate::source::Fleet) -> Line<'static> {
         .iter()
         .filter(|t| !matches!(t.status, Some(domain::TicketStatus::Done) | Some(domain::TicketStatus::Cancelled)))
         .count();
-    let (live, up) = match f.captain_of(&c.key) {
-        Some(cap) => (live_cell(cap.liveness.as_deref()), f.is_up(cap)),
-        None => (("off".into(), 7, dim()), false),
+    let live = match f.captain_of(&c.key) {
+        Some(cap) => live_cell(cap.liveness.as_deref(), f.is_up(cap)),
+        None => ("off".into(), 7, dim()),
     };
     let anchor = if c.anchored_at.is_some() { "⚓ " } else { "" };
     cells(vec![
         (c.key.0.clone(), 12, Style::default()),
         (live.0, 8, live.2),
-        tmux_cell(up),
         (format!("{open}/{}", members.len()), 6, Style::default()),
         (format!("{anchor}{}", c.title.as_deref().unwrap_or("")), 0, Style::default()),
     ])
@@ -461,25 +456,21 @@ fn header(cols: &[(&str, usize)]) -> Line<'static> {
     cells(cols.iter().map(|(name, w)| (name.to_string(), *w, style)).collect())
 }
 
-/// The liveness cell: fleetd's tmux-probe freshness (`—` when fleetd isn't reachable).
-fn live_cell(liveness: Option<&str>) -> (String, usize, Style) {
-    let live = liveness.map(str::to_lowercase).unwrap_or_else(|| "—".into());
+/// The liveness cell: fleetd's read of the cog's tmux (active / quiet / idle / dead) — or, with
+/// fleetd unreachable, the dashboard's own probe (`up` / `dead`). `enter` lands only on a live one.
+fn live_cell(liveness: Option<&str>, up: bool) -> (String, usize, Style) {
+    let live = match liveness {
+        Some(l) => l.to_lowercase(),
+        None if up => "up".into(),
+        None => "dead".into(),
+    };
     let style = match live.as_str() {
-        "active" => green(),
+        "active" | "up" => green(),
         "quiet" => yellow(),
         "dead" => Style::default().fg(Color::Red),
         _ => dim(),
     };
     (live, 7, style)
-}
-
-/// Is the cog's tmux session up — does `enter` land on it?
-fn tmux_cell(up: bool) -> (String, usize, Style) {
-    if up {
-        ("up".into(), 5, green())
-    } else {
-        ("—".into(), 5, dim())
-    }
 }
 
 fn pipeline(snap: Option<&ShipSnapshot>) -> (String, Style) {
