@@ -24,7 +24,7 @@ than improvise.
 set -euo pipefail
 MR_IID=$(fleetc packet "$FLEET_TICKET" | jq -r '.ship.iid // empty')
 [ -n "$MR_IID" ] || { echo "no open MR for $FLEET_TICKET" >&2; exit 1; }
-CI=$(fleetc ci --iid "$MR_IID")          # {status, failed: [{name, url, log_tail}]}
+CI=$(fleetc ci --iid "$MR_IID")          # {status, failed: [{name, url, log_excerpt}]}
 STATUS=$(printf '%s' "$CI" | jq -r '.status // "none"')
 case "$STATUS" in
   failed|canceled) ;;                                    # fall through to the fix
@@ -32,11 +32,12 @@ case "$STATUS" in
   none) echo "no CI yet on !$MR_IID"; exit 1 ;;
   *) echo "unexpected CI status: $STATUS"; exit 1 ;;
 esac
-printf '%s' "$CI" | jq -r '.failed[] | "== \(.name)  \(.url)\n\(.log_tail)\n"'
+printf '%s' "$CI" | jq -r '.failed[] | "== \(.name)  \(.url)\n\(.log_excerpt)\n"'
 ```
 
 `fleetc ci` already descended into failed child pipelines (where the forge has them):
-every failed job is listed, each with the tail of its log.
+every failed job is listed, each with an excerpt of its log: the lines that read as a failure
+(a job often runs on past its failure), then its tail. Not enough? Open the job's `url`.
 
 ## Step 1 — Gather context
 

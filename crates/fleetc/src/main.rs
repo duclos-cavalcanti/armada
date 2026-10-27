@@ -766,7 +766,7 @@ fn review_post(args: &[String]) -> Result<()> {
     post_and_print("/review-post", &wire::ReviewPostCmd { iid: iid.ok_or_else(|| anyhow!("--iid required"))?, body, approve })
 }
 
-/// `fleetc ci --iid <N>` — the MR's CI as JSON: `{status, failed: [{name, url, log_tail}]}`, failed
+/// `fleetc ci --iid <N>` — the MR's CI as JSON: `{status, failed: [{name, url, log_excerpt}]}`, failed
 /// child pipelines included — what fleet-repair classifies.
 fn ci(args: &[String]) -> Result<()> {
     let iid = require_iid(args, "ci")?;

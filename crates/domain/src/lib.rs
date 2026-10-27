@@ -396,8 +396,8 @@ pub struct CiReport {
 pub struct FailedJob {
     pub name: String,
     pub url: String,
-    /// The last lines of the job's log (ANSI colour stripped).
-    pub log_tail: String,
+    /// What diagnoses the job: its log's failure lines, then its tail (ANSI colour stripped).
+    pub log_excerpt: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

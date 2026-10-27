@@ -38,11 +38,39 @@ pub(crate) fn one_line(stderr: &[u8]) -> String {
     strip_ansi(&String::from_utf8_lossy(stderr)).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The last `lines` lines of a CLI log, ANSI colour stripped — a failed CI job's tail.
-pub(crate) fn log_tail(log: &str, lines: usize) -> String {
+/// A failed CI job's log, cut to what diagnoses it (ANSI colour stripped): the lines that read
+/// as a failure, then the tail. A job often runs on past its failure — more suites, a summary,
+/// cleanup — so the tail alone can be all green. Failure lines inside the tail aren't repeated.
+pub(crate) fn log_excerpt(log: &str) -> String {
+    const TAIL: usize = 60;
+    const FAILURES: usize = 40;
     let clean = strip_ansi(log);
     let all: Vec<&str> = clean.lines().collect();
-    all[all.len().saturating_sub(lines)..].join("\n")
+    let cut = all.len().saturating_sub(TAIL);
+    let failures: Vec<&str> = all[..cut].iter().copied().filter(|l| reads_as_failure(l)).take(FAILURES).collect();
+    let tail = all[cut..].join("\n");
+    if failures.is_empty() {
+        tail
+    } else {
+        format!("{}\n…\n{tail}", failures.join("\n"))
+    }
+}
+
+/// A log line that reports a failure — test runners' and compilers' own words, matched narrowly
+/// (a test merely *named* `…_error` passing is not one).
+fn reads_as_failure(line: &str) -> bool {
+    let l = line.trim_start();
+    let n_failed = l.split_whitespace().collect::<Vec<_>>().windows(2).any(|w| {
+        w[1].trim_end_matches(',') == "failed" && w[0].chars().all(|c| c.is_ascii_digit())
+    });
+    n_failed
+        || l.starts_with("FAILED")
+        || l.contains(" FAILED")
+        || l.starts_with("error:")
+        || l.starts_with("error[")
+        || l.starts_with("ERROR")
+        || l.contains("panicked at")
+        || l.starts_with("Traceback (most recent call last)")
 }
 
 /// Drop ANSI colour escapes (`ESC [ … letter`) so CLI output reads cleanly in the checklist.
@@ -119,6 +147,25 @@ fn render(checks: &[(&str, Result<String>)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_excerpt_keeps_a_failure_the_tail_ran_past() {
+        // A job that fails a suite, then runs green suites to the end (a real job's shape).
+        let mut log: Vec<String> = (0..200).map(|i| format!("test_{i}_marshalling_error PASSED")).collect();
+        log.push("scripts/test_mint.py::test_ttl FAILED [ 71%]".into());
+        log.push("\x1b[31m=== 1 failed, 75 passed in 14.21s ===\x1b[0m".into());
+        log.extend((0..180).map(|i| format!("later_{i} PASSED")));
+        log.push("ERROR: Job failed: command terminated with exit code 1".into());
+        let x = log_excerpt(&log.join("\n"));
+        assert!(x.starts_with("scripts/test_mint.py::test_ttl FAILED"), "{x}");
+        assert!(x.contains("=== 1 failed, 75 passed"), "ANSI stripped, the count kept");
+        assert!(!x.contains("marshalling_error PASSED"), "a test named …_error isn't a failure");
+        assert!(x.ends_with("ERROR: Job failed: command terminated with exit code 1"), "the tail follows");
+        assert_eq!(x.matches("ERROR: Job failed").count(), 1, "a failure in the tail isn't repeated");
+
+        let short = "a\nb FAILED\nc";
+        assert_eq!(log_excerpt(short), short, "a log that fits the tail is just the tail");
+    }
 
     #[test]
     fn report_lists_every_check_and_fails_on_any_cross() {

@@ -77,14 +77,14 @@ impl GlabForge {
             serde_json::from_str(&self.api(&format!("projects/{}/pipelines/{pid}/jobs?scope[]=failed&per_page=100", self.project))?)?;
         for job in jobs.as_array().into_iter().flatten() {
             let Some(id) = job.get("id").and_then(|i| i.as_i64()) else { continue };
-            let log_tail = self
+            let log_excerpt = self
                 .api(&format!("projects/{}/jobs/{id}/trace", self.project))
-                .map(|log| crate::preflight::log_tail(&log, 80))
+                .map(|log| crate::preflight::log_excerpt(&log))
                 .unwrap_or_else(|e| format!("(log unavailable: {e:#})"));
             out.push(FailedJob {
                 name: job.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string(),
                 url: job.get("web_url").and_then(|u| u.as_str()).unwrap_or("").to_string(),
-                log_tail,
+                log_excerpt,
             });
         }
         if depth < 2 {

@@ -205,14 +205,14 @@ impl Forge for GhForge {
         let mut jobs = Vec::new();
         for c in failed {
             let link = c.get("link").and_then(Value::as_str).unwrap_or("");
-            let log_tail = match actions_ids(link) {
+            let log_excerpt = match actions_ids(link) {
                 Some((_, job)) => self
                     .gh(&["run", "view", "--job", &job, "--log-failed"])
-                    .map(|log| crate::preflight::log_tail(&strip_log_prefixes(&log), 80))
+                    .map(|log| crate::preflight::log_excerpt(&strip_log_prefixes(&log)))
                     .unwrap_or_else(|e| format!("(log unavailable: {e:#})")),
                 None => "(not a GitHub Actions job — open the link)".into(),
             };
-            jobs.push(FailedJob { name: c.get("name").and_then(Value::as_str).unwrap_or("").to_string(), url: link.to_string(), log_tail });
+            jobs.push(FailedJob { name: c.get("name").and_then(Value::as_str).unwrap_or("").to_string(), url: link.to_string(), log_excerpt });
         }
         Ok(CiReport { status: checks_status(&checks), failed: jobs })
     }
