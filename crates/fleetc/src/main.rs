@@ -62,7 +62,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc settings [list | set <key> <value>]   (live config levers; no restart)\n  \
      fleetc project                   (the project checkout's path, from fleet.toml)\n  \
      fleetc cost     [--since <RFC3339>]\n  \
-     fleetc ledger   [<sql>]           (read the project's ledger: one query as a table, or a sqlite3 shell; read-only)\n  \
+     fleetc ledger   [<sql> | --full]  (read the project's ledger: one query as a table, every table, or a sqlite3 shell; read-only)\n  \
      fleetc export   <file>            (snapshot the project's ledger into <file>; safe while fleetd runs)\n  \
      fleetc import   <file>            (restore a ledger snapshot; fleetd must be stopped)";
 
@@ -697,22 +697,58 @@ fn reply(args: &[String]) -> Result<()> {
 /// sessions, events) into `<file>`: a consistent, standalone copy (`VACUUM INTO`), taken read-only
 /// beside a running fleetd. Name it as you like, e.g. with `$(date -u +%Y%m%dT%H%M%SZ)`.
 /// Telemetry (the spend log) isn't state and isn't exported.
-/// `fleetc ledger [<sql>]` — read the project's ledger through `sqlite3 -readonly -box`: the query
-/// printed as a table, or with none, an interactive shell (`.tables`, `.schema <t>`). Read-only:
-/// fleetd stays the single writer. Exits with sqlite3's own status.
+/// `fleetc ledger [<sql> | --full]` — read the project's ledger through `sqlite3 -readonly -box`:
+/// the query printed as a table; `--full`, every table (the event log: its newest rows); with
+/// neither, an interactive shell (`.tables`, `.schema <t>`). Read-only: fleetd stays the single
+/// writer. Exits with sqlite3's own status.
 fn read_ledger(args: &[String]) -> Result<()> {
     let ledger = project_dir().ledger();
     anyhow::ensure!(std::path::Path::new(&ledger).exists(), "no ledger yet: {ledger} doesn't exist (start fleetd once)");
-    let mut sqlite = std::process::Command::new("sqlite3");
-    sqlite.args(["-readonly", "-box", &ledger]);
-    if !args.is_empty() {
-        sqlite.arg(args.join(" "));
-    }
-    let status = sqlite.status().map_err(|e| match e.kind() {
+    let sqlite = || {
+        let mut c = std::process::Command::new("sqlite3");
+        c.args(["-readonly", "-box", &ledger]);
+        c
+    };
+    let spawned = |e: std::io::Error| match e.kind() {
         std::io::ErrorKind::NotFound => anyhow!("sqlite3 isn't on PATH (needs 3.33+ for -box)"),
         _ => anyhow!("sqlite3: {e}"),
-    })?;
+    };
+    let status = match args {
+        [flag] if flag == "--full" => {
+            let names = sqlite().arg("-list").arg(TABLES).output().map_err(spawned)?;
+            anyhow::ensure!(names.status.success(), "sqlite3: {}", String::from_utf8_lossy(&names.stderr).trim());
+            let script = full_dump(&String::from_utf8_lossy(&names.stdout));
+            let mut child = sqlite().stdin(std::process::Stdio::piped()).spawn().map_err(spawned)?;
+            use std::io::Write as _;
+            child.stdin.take().expect("piped stdin").write_all(script.as_bytes())?;
+            child.wait()?
+        }
+        [] => sqlite().status().map_err(spawned)?,
+        _ => sqlite().arg(args.join(" ")).status().map_err(spawned)?,
+    };
     std::process::exit(status.code().unwrap_or(1));
+}
+
+/// The ledger's tables, by name (sqlite's own bookkeeping left out).
+const TABLES: &str = "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name";
+/// How much of the event log `--full` shows — it's thousands of rows; the rest is one query away.
+const EVENTS_SHOWN: usize = 50;
+
+/// The sqlite3 script `ledger --full` runs: each table under a `── name · N rows` heading, long
+/// cells wrapped; the event log newest first, cut to `EVENTS_SHOWN`.
+fn full_dump(tables: &str) -> String {
+    let mut script = String::new();
+    for t in tables.lines().map(str::trim).filter(|t| !t.is_empty()) {
+        let (rows, note) = if t == "events" {
+            (format!("SELECT * FROM events ORDER BY seq DESC LIMIT {EVENTS_SHOWN};"), format!(" (newest {EVENTS_SHOWN})"))
+        } else {
+            (format!("SELECT * FROM \"{t}\";"), String::new())
+        };
+        script.push_str(&format!(
+            ".mode list\nSELECT char(10) || '── {t} · ' || count(*) || ' rows{note}' FROM \"{t}\";\n.mode box --wrap 60\n{rows}\n"
+        ));
+    }
+    script
 }
 
 fn export(args: &[String]) -> Result<()> {
@@ -1212,6 +1248,15 @@ fn cost(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_dump_heads_every_table_and_cuts_the_event_log() {
+        let script = full_dump("events\ntickets\n");
+        assert!(script.contains("'── tickets · ' || count(*) || ' rows' FROM \"tickets\""), "{script}");
+        assert!(script.contains("SELECT * FROM \"tickets\";"));
+        assert!(script.contains("ORDER BY seq DESC LIMIT 50;") && script.contains("rows (newest 50)"));
+        assert_eq!(script.matches(".mode box --wrap 60").count(), 2);
+    }
 
     #[test]
     fn verb_usage_is_every_form_of_that_verb() {
