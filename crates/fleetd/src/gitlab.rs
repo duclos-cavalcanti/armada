@@ -4,8 +4,8 @@
 //!
 //! The armada LIST is cheap (core facts only); the single-MR `snapshot` is ENRICHED
 //! — it adds `pipeline` + `open_threads` (from the MR detail) and `approvals` (a
-//! separate endpoint). `armed` / `on_merge_train` stay defaulted: per #51 they're
-//! GraphQL + re-polled at decision time, never bulk-stored-trusted.
+//! separate endpoint). `armed` is on both (`merge_when_pipeline_succeeds`); `on_merge_train`
+//! stays defaulted (a separate endpoint, never needed at decision time).
 
 use anyhow::{anyhow, ensure, Context, Result};
 use domain::ports::Forge;
@@ -177,7 +177,7 @@ impl Forge for GlabForge {
             .api(&format!("projects/{}/merge_requests/{iid}", self.project))
             .and_then(|j| Ok(serde_json::from_str::<serde_json::Value>(&j)?))
         {
-            let armed = v.get("merge_when_pipeline_succeeds").and_then(|x| x.as_bool()).unwrap_or(false);
+            let armed = is_armed(&v);
             let conflicted = v.get("has_conflicts").and_then(|x| x.as_bool()).unwrap_or(false)
                 || v.get("detailed_merge_status").and_then(|x| x.as_str()) == Some("conflict");
             if armed && conflicted {
@@ -236,7 +236,7 @@ impl Forge for GlabForge {
     fn disarm(&self, iid: i64) -> Result<()> {
         let mr: serde_json::Value =
             serde_json::from_str(&self.api(&format!("projects/{}/merge_requests/{iid}", self.project))?)?;
-        if !mr.get("merge_when_pipeline_succeeds").and_then(|x| x.as_bool()).unwrap_or(false) {
+        if !is_armed(&mr) {
             return Ok(()); // not armed — GitLab would 406 the cancel
         }
         self.cancel_auto_merge(iid)
@@ -433,6 +433,11 @@ fn nbool(n: &serde_json::Value, key: &str) -> bool {
     n.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
+/// Armed: set to merge on its own once the pipeline passes (GitLab's auto-merge).
+fn is_armed(mr: &serde_json::Value) -> bool {
+    mr.get("merge_when_pipeline_succeeds").and_then(|x| x.as_bool()).unwrap_or(false)
+}
+
 fn parse_glab_mrs(json: &str, prefix: &str) -> Result<Vec<ForgeShip>> {
     let v: serde_json::Value = serde_json::from_str(json)?;
     let arr = v.as_array().context("expected a JSON array of MRs from glab")?;
@@ -476,10 +481,9 @@ fn mr_to_ship(m: &serde_json::Value, prefix: &str) -> Option<ForgeShip> {
         },
         // GitLab's authoritative merge-readiness — the sailor's land-decision signal.
         merge_status: m.get("detailed_merge_status").and_then(|v| v.as_str()).map(String::from),
-        // `approvals` filled by `snapshot` (separate endpoint); `armed`/`on_merge_train`
-        // are GraphQL + decision-time per #51 — never bulk-stored here.
+        // `approvals` filled by `snapshot` (separate endpoint).
         approvals: Approvals { current: 0, required: 0 },
-        armed: false,
+        armed: is_armed(m),
         on_merge_train: false,
     })
 }
@@ -530,7 +534,7 @@ mod tests {
       {"iid":2331,"title":"PROJ-6187: Remove reliance","source_branch":"feature/PROJ-6187-remove",
        "target_branch":"master","web_url":"https://x/2331","draft":false,"state":"opened",
        "sha":"61b2a8","detailed_merge_status":"ci_must_pass","has_conflicts":false,
-       "author":{"username":"Jack.Shannon"}},
+       "merge_when_pipeline_succeeds":true,"author":{"username":"Jack.Shannon"}},
       {"iid":2300,"title":"chore: no ticket here","source_branch":"chore/cleanup",
        "target_branch":"master","web_url":"https://x/2300","draft":true,"state":"opened",
        "sha":"abc","has_conflicts":true,"author":{"username":"me"}}
@@ -550,11 +554,13 @@ mod tests {
         assert_eq!(a.head_sha, "61b2a8");
         assert!(!a.has_conflicts);
         assert_eq!(a.merge_status.as_deref(), Some("ci_must_pass")); // detailed_merge_status captured
+        assert!(a.armed); // merge_when_pipeline_succeeds
 
         let b = &ships[1];
         assert_eq!(b.ticket, None); // no ticket key in branch/title
         assert_eq!(b.state, ShipState::Draft); // draft=true
         assert!(b.has_conflicts);
+        assert!(!b.armed); // absent → not armed
     }
 
     #[test]
