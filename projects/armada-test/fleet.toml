@@ -9,7 +9,7 @@
 #   ├── <worktrees>/ ticket worktrees, beside the checkout (fleet-berth)
 #   └── .fleet/      runtime state: ledger, socket, telemetry (fleetd creates it)
 #
-# Run it: make preflight P=armada-test, then make run P=armada-test.
+# Run it: make preflight FLEET_PROJECT=armada-test, then make run FLEET_PROJECT=armada-test.
 
 # --- cadences (seconds) — live levers: `fleetc settings set <key> <value>` ---
 poll_secs      = 5

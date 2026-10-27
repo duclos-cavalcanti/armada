@@ -20,7 +20,7 @@
 #   convoys            $1=key  $2=title  $3=captain_tmux(only when up)     (Fleet + Board)
 #   proposals          $1=kind(proposal|held)  $2=ref(proposal id | ticket key)   (Fleet + Board)
 #
-# Forge- and tracker-neutral: links come from the fleet itself (`fleetc -C "$FLEET_PROJECT"`,
+# Forge- and tracker-neutral: links come from the fleet itself (`fleetc -C "$FLEET_PROJECT_DIR"`,
 # the project folder the dashboard passes in), never from hardcoded hosts.
 set -euo pipefail
 
@@ -36,13 +36,13 @@ launch_tmux() {
 }
 
 launch_browser() { open "$1"; }
-fleet()          { fleetc -C "${FLEET_PROJECT:?the dashboard sets FLEET_PROJECT}" "$@"; }
+fleet()          { fleetc -C "${FLEET_PROJECT_DIR:?the dashboard sets FLEET_PROJECT_DIR}" "$@"; }
 # A ticket opens where its tracker keeps it: a URL (Jira) or a file (ticket files).
 launch_ticket()  { local where; where="$(fleet ticket "$1" --where)" && open "$where"; }
 # An MR opens at the URL the forge reported for it.
 launch_mr()      { local url; url="$(fleet ship --iid "$1" | jq -r '.ship.url')" && launch_browser "$url"; }
 # The fleetc command line for `fleet "$@"`, shell-quoted — for tmux to run.
-fleet_cmd()      { printf '%q ' fleetc -C "${FLEET_PROJECT:?}" "$@"; }
+fleet_cmd()      { printf '%q ' fleetc -C "${FLEET_PROJECT_DIR:?}" "$@"; }
 # Read a proposal in full, in a tmux popup over the dashboard.
 read_proposal()  { tmux display-popup -E -w 90% -h 80% "$(fleet_cmd proposal "$1") | less"; }
 # Run `fleet "$@"` once the operator answers y in the tmux status line: `confirm_fleet <prompt> <args>…`.

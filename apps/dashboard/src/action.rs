@@ -86,7 +86,7 @@ pub fn spawn(project: &std::path::Path, coordinate: &str, key: &str, fields: Vec
     let (project, coordinate, key) = (project.to_path_buf(), coordinate.to_string(), key.to_string());
     std::thread::spawn(move || {
         let _ = std::process::Command::new(HANDLER)
-            .env("FLEET_PROJECT", &project) // the handler reaches the fleet with `fleetc -C`
+            .env("FLEET_PROJECT_DIR", &project) // the handler reaches the fleet with `fleetc -C`
             .arg(&coordinate)
             .arg(&key)
             .args(&fields)

@@ -83,14 +83,14 @@ whether to version it is the operator's call.
 ## Step 3 — Preflight until green
 
 ```bash
-make preflight P=$NAME
+make preflight FLEET_PROJECT=$NAME
 ```
 
 Every line must be ✓. For a ✗, fix it with the operator (a CLI to log into, a repo setting, a
 clone that didn't land) and re-run. Then tell them how to start it:
 
 ```bash
-make run P=$NAME        # in a tmux pane
+make run FLEET_PROJECT=$NAME        # in a tmux pane
 ```
 
 And remind them: if the harness profile's auto-mode context doesn't yet name this repo as

@@ -74,13 +74,15 @@ git checkout .claude/settings.json
 ### 3. Run
 
 ```bash
-make preflight P=<name>   # check the setup (runtime state, checkout, CLI auth, tmux + claude); `make run` gates on it
-make run P=<name>         # start project <name>'s fleetd in the background (unless it's up), then open its dashboard
-make stop P=<name>        # stop that project's fleet daemon
-make dashboard P=<name>   # build + run the TUI dashboard
-make admiral P=<name>     # talk to the project's admiral (its product expert; reads the kit, never edits it)
-make export P=<name>      # snapshot the project's ledger → projects/<name>/exports/<name>-<UTC stamp>.db
+make preflight FLEET_PROJECT=<name>   # check the setup (runtime state, checkout, CLI auth, tmux + claude); `make run` gates on it
+make run FLEET_PROJECT=<name>         # start project <name>'s fleetd in the background (unless it's up), then open its dashboard
+make stop FLEET_PROJECT=<name>        # stop that project's fleet daemon
+make dashboard FLEET_PROJECT=<name>   # build + run the TUI dashboard
+make admiral FLEET_PROJECT=<name>     # talk to the project's admiral (its product expert; reads the kit, never edits it)
+make export FLEET_PROJECT=<name>      # snapshot the project's ledger → projects/<name>/exports/<name>-<UTC stamp>.db
 ```
+
+`export FLEET_PROJECT=<name>` once per shell and the `FLEET_PROJECT=` on each target can go.
 
 `fleetd` self-ticks (poll / sync / reconcile cadences, set in `fleet.toml`);
 `fleetc` is the control surface — run `fleetc` for its verbs.
@@ -90,7 +92,7 @@ in `.fleet/` (ledger, socket, telemetry, `fleetd.log`), its checkout, and its ti
 `fleetc`, the dashboard and every cog find the project as the nearest folder with a `fleet.toml`,
 starting from the current directory, or from `-C <dir>` (`fleetc -C projects/<name> …`). Outside a
 project they refuse to run. One fleet runs at a time. To switch, let the cogs finish (or
-`fleetc sink` them), `make stop`, then `make run P=<other>`. Each project's state stays in its
+`fleetc sink` them), `make stop`, then `make run FLEET_PROJECT=<other>`. Each project's state stays in its
 folder, so you come back to it exactly as you left it.
 
 `.fleet/` is live SQLite; to keep or move a project's state, snapshot its ledger with
