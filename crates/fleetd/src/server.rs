@@ -103,6 +103,8 @@ fn handle(
         (Some("GET"), Some(p)) if p.starts_with("/ticket?") => handle_ticket_view(cmds, p),
         (Some("POST"), Some("/ticket-new")) => handle_ticket_new(&request, cmds),
         (Some("POST"), Some("/ticket-block")) => handle_ticket_block(&request, cmds),
+        (Some("POST"), Some("/ticket-edit")) => handle_ticket_text(&request, cmds, false),
+        (Some("POST"), Some("/ticket-comment")) => handle_ticket_text(&request, cmds, true),
         (Some("POST"), Some("/propose")) => handle_propose(&request, cmds),
         (Some("POST"), Some("/decommission")) => handle_decommission(&request, cmds),
         (Some("POST"), Some("/proposal-accept")) => handle_proposal(&request, cmds, true),
@@ -631,6 +633,36 @@ fn handle_ticket_block(request: &str, cmds: &Sender<Command>) -> String {
     }
 }
 
+/// `POST /ticket-edit` (replace the description) or `/ticket-comment` (`comment`): a ticket's text.
+fn handle_ticket_text(request: &str, cmds: &Sender<Command>, comment: bool) -> String {
+    let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+    let dto: wire::TicketTextCmd = match serde_json::from_str(body) {
+        Ok(d) => d,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
+    };
+    let ticket = match parse_ticket(&dto.ticket) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    if dto.body.trim().is_empty() {
+        return http_response("400 Bad Request", "text/plain", "an empty body");
+    }
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    let cmd = if comment {
+        Command::CommentTicket { ticket, body: dto.body, reply: reply_tx }
+    } else {
+        Command::EditTicket { ticket, description: dto.body, reply: reply_tx }
+    };
+    if cmds.send(cmd).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(())) => http_response("200 OK", "text/plain", "ok"),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
 /// `POST /launch` — launch a ship: open the MR for the worktree's branch, reply with its URL.
 fn handle_launch(request: &str, cmds: &Sender<Command>, deployment: &Deployment) -> String {
     let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
@@ -938,7 +970,9 @@ mod tests {
                     | Command::Decommission { reply, .. }
                     | Command::RemoveFromConvoy { reply, .. }
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }
+                    Command::BlockTicket { reply, .. }
+                    | Command::EditTicket { reply, .. }
+                    | Command::CommentTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Reply { reply, .. } => { let _ = reply.send(Ok(())); }
@@ -999,7 +1033,9 @@ mod tests {
                     | Command::Decommission { reply, .. }
                     | Command::RemoveFromConvoy { reply, .. }
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::BlockTicket { reply, .. } => { let _ = reply.send(Ok(())); }
+                    Command::BlockTicket { reply, .. }
+                    | Command::EditTicket { reply, .. }
+                    | Command::CommentTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Reply { reply, .. } => { let _ = reply.send(Ok(())); }

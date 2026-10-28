@@ -94,8 +94,10 @@ exception: on an approved MR, `/fleet-parley` defers nits to a proposed follow-u
   design direction, CI infra that retry won't fix) → report it and **stay alive**
   so the operator can chat you in your pane:
   `fleetc status --cog sailor --state escalated --last-action "<why>"`,
-  then stop and wait. When the operator unblocks you, resume the sweep. (Here you do
-  NOT report `sleeping` — that would reap you; escalated holds you alive.)
+  then stop and wait. When the operator unblocks you, resume the sweep. A ruling that
+  amends the ticket you carry out with `fleetc ticket edit --body -` (it replaces the
+  description whole, so start from `fleetc ticket`). (Here you do NOT report `sleeping` —
+  that would reap you; escalated holds you alive.)
 - **Awaiting merge** — the MR is clean but `order.auto_merge` is false → report it
   and **stay alive** for the operator's go:
   `fleetc status --cog sailor --state awaiting_merge --last-action "ready to merge"`,

@@ -55,6 +55,8 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc ticket   [<KEY-N>] [--where]    (a ticket's full text; --where: its URL or file path)\n  \
      fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (prints the new key)\n  \
      fleetc ticket   block <KEY-N> --by <KEY-N>   (record an 'is blocked by' edge)\n  \
+     fleetc ticket   edit [<KEY-N>] --body <text|->   (replace the description, whole: read it first)\n  \
+     fleetc ticket   comment [<KEY-N>] --body <text|->   (comment on the ticket)\n  \
      fleetc propose  --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (a cog: file a new ticket labelled fleet-proposed; prints its id + key)\n  \
      fleetc propose  --existing <KEY-N> --why <text> [--convoy <KEY>]   (a cog: propose taking on an existing ticket)\n  \
      fleetc proposal [<id> | accept <id> [--convoy <KEY>] | drop <id>]   (the open proposals; one in full; accept — official, into --convoy; drop — a proposed ticket is cancelled)\n  \
@@ -715,11 +717,7 @@ fn reply(args: &[String]) -> Result<()> {
             other => bail!("unknown flag: {other}"),
         }
     }
-    let mut body = body.ok_or_else(|| anyhow!("--body required"))?;
-    if body == "-" {
-        body.clear();
-        std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
-    }
+    let body = body_text(body.ok_or_else(|| anyhow!("--body required"))?)?;
     post_and_print("/reply", &wire::ReplyCmd {
         iid: iid_or_own(iid, "reply")?,
         thread: thread.ok_or_else(|| anyhow!("--thread required"))?,
@@ -865,11 +863,7 @@ fn review_post(args: &[String]) -> Result<()> {
             other => bail!("unknown flag: {other}"),
         }
     }
-    let mut body = body.ok_or_else(|| anyhow!("--body required"))?;
-    if body == "-" {
-        body.clear();
-        std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
-    }
+    let body = body_text(body.ok_or_else(|| anyhow!("--body required"))?)?;
     post_and_print("/review-post", &wire::ReviewPostCmd { iid: iid_or_own(iid, "review-post")?, body, approve })
 }
 
@@ -942,12 +936,13 @@ fn arm(args: &[String]) -> Result<()> {
     post_and_print("/arm", &wire::ArmCmd { ticket })
 }
 
-/// `fleetc ticket <KEY-N> | new … | block …` — read or write tickets through the project's tracker
-/// (Jira, the filesystem, …): one verb, whichever adapter fleet.toml picks.
+/// `fleetc ticket <KEY-N> | new … | block … | edit … | comment …` — read or write tickets through
+/// the project's tracker (Jira, the filesystem, …): one verb, whichever adapter fleet.toml picks.
 fn ticket(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("new") => ticket_new(&args[1..]),
         Some("block") => ticket_block(&args[1..]),
+        Some(sub @ ("edit" | "comment")) => ticket_text(sub, &args[1..]),
         Some(key) if !key.starts_with('-') => match args.get(1).map(String::as_str) {
             Some("--where") => ticket_where(&ticket_key(key, "ticket")?),
             _ => ticket_show(&ticket_key(key, "ticket")?),
@@ -956,7 +951,7 @@ fn ticket(args: &[String]) -> Result<()> {
             let key = ticket_or_own(&[], "ticket")?;
             if args.is_empty() { ticket_show(&key) } else { ticket_where(&key) }
         }
-        _ => bail!("usage: fleetc ticket <KEY-N> | new --title <t> --type <type> … | block <KEY-N> --by <KEY-N>"),
+        _ => bail!("usage: fleetc ticket [<KEY-N>] | new --title <t> --type <type> … | block <KEY-N> --by <KEY-N> | edit|comment [<KEY-N>] --body <text|->"),
     }
 }
 
@@ -1043,14 +1038,10 @@ fn draft_flags(args: &[String], verb: &str) -> Result<wire::TicketNewCmd> {
             other => bail!("unknown flag: {other}"),
         }
     }
-    if body == "-" {
-        body.clear();
-        std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
-    }
     Ok(wire::TicketNewCmd {
         title: title.ok_or_else(|| anyhow!("--title required"))?,
         kind: kind.ok_or_else(|| anyhow!("--type required (story, bug, task, epic, …)"))?,
-        description: body,
+        description: body_text(body)?,
         convoy,
         blocked_by,
     })
@@ -1165,6 +1156,21 @@ fn render_proposal(p: &domain::Proposal) -> String {
     format!("{}\n{body}\n", facts.join(" · "))
 }
 
+/// `fleetc ticket edit|comment [<KEY-N>] --body <text|->` — replace the ticket's description
+/// (`edit`: it goes whole, so read it first) or comment on it (`comment`).
+fn ticket_text(sub: &str, args: &[String]) -> Result<()> {
+    let verb = format!("ticket {sub}");
+    let (key, flags) = match args.split_first() {
+        Some((k, rest)) if !k.starts_with('-') => (ticket_key(k, &verb)?, rest),
+        _ => (ticket_or_own(&[], &verb)?, args),
+    };
+    let body = match flags {
+        [flag, body] if flag == "--body" => body_text(body.clone())?,
+        _ => bail!("usage: fleetc ticket {sub} [<KEY-N>] --body <text|->"),
+    };
+    submit(&format!("/ticket-{sub}"), &wire::TicketTextCmd { ticket: key, body })
+}
+
 /// `fleetc ticket block <KEY-N> --by <KEY-N>` — record that the first ticket is blocked by the second.
 fn ticket_block(args: &[String]) -> Result<()> {
     let key = ticket_key(args.first().ok_or_else(|| anyhow!("ticket block needs a <KEY-N>"))?, "ticket block")?;
@@ -1173,6 +1179,16 @@ fn ticket_block(args: &[String]) -> Result<()> {
         _ => bail!("usage: fleetc ticket block <KEY-N> --by <KEY-N>"),
     };
     submit("/ticket-block", &wire::TicketBlockCmd { ticket: key, by })
+}
+
+/// A `--body` value: as given, or stdin's whole text for `-`.
+fn body_text(body: String) -> Result<String> {
+    if body != "-" {
+        return Ok(body);
+    }
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)?;
+    Ok(text)
 }
 
 /// POST `body` to fleetd and print its reply body (an action whose reply is the result).

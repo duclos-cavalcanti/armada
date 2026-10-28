@@ -225,6 +225,8 @@ pub trait Tracker {
     fn read(&self, key: &TicketKey) -> Result<TicketDetail>;
     /// Create a ticket in To Do from `draft`, with its "is blocked by" edges and labels; returns its key.
     fn create(&self, draft: &TicketDraft) -> Result<TicketKey>;
+    /// Replace the ticket's description with `description` (markdown, as `read` returns it).
+    fn edit(&self, key: &TicketKey, description: &str) -> Result<()>;
     /// Add (`on`) or remove a label on the ticket (idempotent).
     fn label(&self, key: &TicketKey, label: &str, on: bool) -> Result<()>;
     /// Record that `key` is blocked by `by` (idempotent).

@@ -258,6 +258,12 @@ impl Tracker for FsTracker {
         Ok(key)
     }
 
+    fn edit(&self, key: &TicketKey, description: &str) -> Result<()> {
+        let mut t = self.load(key)?;
+        t.body = format!("{}\n", description.trim_end());
+        self.write(key, &t)
+    }
+
     fn label(&self, key: &TicketKey, label: &str, on: bool) -> Result<()> {
         self.update(key, |h| {
             h.labels.retain(|l| l != label);
@@ -343,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn creates_the_next_numbered_ticket_and_blocks_and_labels_it() {
+    fn creates_the_next_numbered_ticket_and_blocks_labels_and_edits_it() {
         let (t, dir) = tracker("create", &[("ARMT-4.md", ARMT_4), ("ARMT-9.md", "a bad file still holds its number")]);
         let draft = TicketDraft {
             title: "Add mul".into(),
@@ -364,6 +370,9 @@ mod tests {
         t.label(&key, "fleet-proposed", false).unwrap();
         t.label(&key, "fleet-proposed", false).unwrap(); // idempotent
         assert!(t.read(&key).unwrap().labels.is_empty());
+        t.edit(&key, "## Outcome\n\nmul and div work.").unwrap();
+        let d = t.read(&key).unwrap();
+        assert_eq!((d.description.as_str(), d.ticket.title.as_str()), ("## Outcome\n\nmul and div work.\n", "Add mul"), "the body only");
         let _ = std::fs::remove_dir_all(dir);
     }
 

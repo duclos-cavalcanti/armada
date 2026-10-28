@@ -75,7 +75,9 @@ voice only the judgment calls it can't see from outside:
   is lost, then
   `fleetc status --cog worker --state escalated --last-action "<why>"`,
   and stop — that report ends your goal. The operator will chat in your tmux pane; when they
-  unblock you, resume and carry the ticket through to `concluded`.
+  unblock you, resume and carry the ticket through to `concluded`. A ruling that amends the
+  ticket you carry out with `fleetc ticket edit --body -` (it replaces the description
+  whole, so start from `fleetc ticket`).
 - **Anchored** — if you receive an `⚓ anchor` message, finish the current step,
   commit + push WIP,
   `fleetc status --cog worker --state anchored`, and stop — that

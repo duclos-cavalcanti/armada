@@ -79,8 +79,8 @@ and tmux:
   Look for the cause in the machinery first: a kit bug is yours to fix, verified as usual.
 - **Steer the work** with the whole `fleetc` surface: dispatch a one-off ticket (no captain or
   convoy needed — a captain only auto-dispatches a convoy), `hold` / `unhold`, `convoy`
-  `open` / `close` / `add` / `remove`, `proposal accept` / `drop`, `ticket block`,
-  `anchor` / `weigh` / `sink` / `send` a cog.
+  `open` / `close` / `add` / `remove`, `proposal accept` / `drop`, `ticket block` / `edit` /
+  `comment`, `anchor` / `weigh` / `sink` / `send` a cog.
 - **File a quick ticket** with `/fleet-commission`, Ready per `/fleet-ready-done`. One that
   needs real product grooming goes to the admiral (`make admiral FLEET_PROJECT=<p>`).
 

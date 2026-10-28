@@ -182,6 +182,14 @@ pub struct TicketBlockCmd {
     pub by: String,
 }
 
+/// A ticket's text: its new description (`POST /ticket-edit`, `fleetc ticket edit` — replaces it
+/// whole) or a comment on it (`POST /ticket-comment`, `fleetc ticket comment`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TicketTextCmd {
+    pub ticket: String,
+    pub body: String,
+}
+
 /// An operator message pushed into a cog's tmux pane (`POST /send`). The target is the same per-cog
 /// addressing as the control verbs (worker/sailor/hand by `ticket`, a captain by `convoy`, the
 /// lookout as the singleton); `message` is typed into the pane and submitted (send-keys + Enter), so

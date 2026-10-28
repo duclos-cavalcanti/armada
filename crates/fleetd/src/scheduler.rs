@@ -84,6 +84,8 @@ pub enum Command {
     GetTicket { ticket: TicketKey, reply: TicketReply }, // a read: a ticket's full text (tracker)
     NewTicket { draft: domain::TicketDraft, reply: UrlReply }, // an action: create a ticket → its key (tracker)
     BlockTicket { ticket: TicketKey, by: TicketKey, reply: Reply }, // an action: add an "is blocked by" edge (tracker)
+    EditTicket { ticket: TicketKey, description: String, reply: Reply }, // an action: replace its description (tracker)
+    CommentTicket { ticket: TicketKey, body: String, reply: Reply }, // an action: comment on it (tracker)
     Propose { from: Option<TicketKey>, proposed: Proposed, reply: UrlReply }, // hold a cog's proposal → its id
     AcceptProposal { id: ProposalId, convoy: Option<ConvoyKey>, reply: UrlReply }, // an action: accept it → its key (a new one is filed)
     DropProposal { id: ProposalId, reply: UrlReply },
@@ -265,6 +267,12 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         }
         Command::BlockTicket { ticket, by, reply } => {
             let _ = reply.send(tracker.block(&ticket, &by).map_err(|e| format!("{e:#}")));
+        }
+        Command::EditTicket { ticket, description, reply } => {
+            let _ = reply.send(tracker.edit(&ticket, &description).map_err(|e| format!("{e:#}")));
+        }
+        Command::CommentTicket { ticket, body, reply } => {
+            let _ = reply.send(tracker.comment(&ticket, &body).map_err(|e| format!("{e:#}")));
         }
         Command::Propose { from, proposed, reply } => {
             let res = propose(ledger, tracker, from, proposed)
@@ -979,6 +987,9 @@ mod tests {
                 self.label(&key, l, true)?;
             }
             Ok(key)
+        }
+        fn edit(&self, _: &TicketKey, _: &str) -> Result<()> {
+            Ok(())
         }
         fn label(&self, key: &TicketKey, label: &str, on: bool) -> Result<()> {
             let mut labels = self.labels.borrow_mut();

@@ -194,6 +194,11 @@ impl Tracker for JiraTracker {
         Ok(key)
     }
 
+    fn edit(&self, key: &TicketKey, description: &str) -> Result<()> {
+        // jira-cli converts the markdown body to Jira's markup, as `create -b` does.
+        self.jira(&["issue", "edit", &key.0, "--no-input", "--body", description]).map(drop)
+    }
+
     fn label(&self, key: &TicketKey, label: &str, on: bool) -> Result<()> {
         let label = if on { label.to_string() } else { format!("-{label}") }; // jira-cli: `-x` removes x
         self.jira(&["issue", "edit", &key.0, "--no-input", "--label", &label]).map(drop)
@@ -245,26 +250,48 @@ fn browse_url(issue: &serde_json::Value) -> Option<String> {
     Some(format!("{host}/browse/{}", issue.get("key")?.as_str()?))
 }
 
-/// Flatten an Atlassian Document Format node to plain text: text nodes as is, a line break after
-/// each block (paragraph, heading, list item, code block), `- ` before list items.
+/// Render an Atlassian Document Format node as markdown — the blocks (headings, paragraphs, lists,
+/// code blocks, quotes) and the inline marks (code, bold, italic, links) — so what `read` returns,
+/// `edit` takes back without losing the formatting.
 fn adf_text(node: &serde_json::Value) -> String {
-    let kind = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
-    if kind == "text" {
-        return node.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
-    }
-    if kind == "hardBreak" {
-        return "\n".into();
-    }
-    let inner: String = node.get("content").and_then(|c| c.as_array()).into_iter().flatten().map(adf_text).collect();
-    match kind {
+    let str_at = |ptr: &str| node.pointer(ptr).and_then(|v| v.as_str()).unwrap_or("");
+    let children = || node.get("content").and_then(|c| c.as_array()).into_iter().flatten();
+    let inner = || children().map(adf_text).collect::<String>();
+    match str_at("/type") {
+        "text" => marked(str_at("/text"), node),
+        "hardBreak" => "\n".into(),
+        "inlineCard" => str_at("/attrs/url").into(),
         "heading" => {
             let level = node.pointer("/attrs/level").and_then(|l| l.as_u64()).unwrap_or(2) as usize;
-            format!("{} {inner}\n\n", "#".repeat(level))
+            format!("{} {}\n\n", "#".repeat(level), inner())
         }
-        "paragraph" | "codeBlock" => format!("{inner}\n\n"),
-        "listItem" => format!("- {}\n", inner.trim_end()),
-        "bulletList" | "orderedList" => format!("{inner}\n"),
-        _ => inner,
+        "paragraph" => format!("{}\n\n", inner()),
+        "codeBlock" => format!("```{}\n{}\n```\n\n", str_at("/attrs/language"), inner()),
+        "blockquote" => format!("{}\n", inner().trim_end().lines().map(|l| format!("> {l}\n")).collect::<String>()),
+        "listItem" => format!("- {}\n", inner().trim_end()),
+        "bulletList" => format!("{}\n", inner()),
+        "orderedList" => {
+            let items = children().map(adf_text).enumerate();
+            let items = items.map(|(i, item)| format!("{}. {}", i + 1, item.strip_prefix("- ").unwrap_or(&item)));
+            format!("{}\n", items.collect::<String>())
+        }
+        _ => inner(),
+    }
+}
+
+/// A text node's markdown: its text wrapped in its marks, code innermost.
+fn marked(text: &str, node: &serde_json::Value) -> String {
+    let marks: Vec<&serde_json::Value> = node.get("marks").and_then(|m| m.as_array()).into_iter().flatten().collect();
+    let mark = |kind: &str| marks.iter().find(|m| m.get("type").and_then(|t| t.as_str()) == Some(kind));
+    let mut t = text.to_string();
+    for (kind, wrap) in [("code", "`"), ("em", "*"), ("strong", "**")] {
+        if mark(kind).is_some() {
+            t = format!("{wrap}{t}{wrap}");
+        }
+    }
+    match mark("link").and_then(|m| m.pointer("/attrs/href")).and_then(|h| h.as_str()) {
+        Some(href) => format!("[{t}]({href})"),
+        None => t,
     }
 }
 
@@ -377,16 +404,30 @@ mod tests {
                 "labels": ["fleet-proposed"],
                 "description": {"type": "doc", "content": [
                     {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Outcome"}]},
-                    {"type": "paragraph", "content": [{"type": "text", "text": "neg works."}]},
+                    {"type": "paragraph", "content": [
+                        {"type": "text", "text": "neg", "marks": [{"type": "code"}, {"type": "strong"}]},
+                        {"type": "text", "text": " works, per "},
+                        {"type": "text", "text": "the spec", "marks": [{"type": "link", "attrs": {"href": "https://x.io/s"}}]},
+                        {"type": "text", "text": "."}
+                    ]},
                     {"type": "bulletList", "content": [
                         {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "AC one"}]}]}
-                    ]}
+                    ]},
+                    {"type": "orderedList", "content": [
+                        {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "first"}]}]},
+                        {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "second"}]}]}
+                    ]},
+                    {"type": "codeBlock", "attrs": {"language": "rust"}, "content": [{"type": "text", "text": "let x = 1;"}]},
+                    {"type": "blockquote", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "quoted"}]}]}
                 ]}
             }
         });
         let d = detail_from_issue(&issue).unwrap();
         assert_eq!((d.ticket.key.0.as_str(), d.kind.as_str()), ("PROJ-7", "story"));
-        assert_eq!(d.description, "## Outcome\n\nneg works.\n\n- AC one");
+        assert_eq!(
+            d.description,
+            "## Outcome\n\n**`neg`** works, per [the spec](https://x.io/s).\n\n- AC one\n\n1. first\n2. second\n\n```rust\nlet x = 1;\n```\n\n> quoted"
+        );
         assert_eq!(capitalized("story"), "Story");
         assert_eq!(d.location, "https://example.atlassian.net/browse/PROJ-7");
         assert_eq!(d.labels, vec!["fleet-proposed".to_string()]);

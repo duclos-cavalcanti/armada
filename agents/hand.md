@@ -45,8 +45,9 @@ citations. Then **await** direction.
 
 ## Aid on request
 
-Help as asked — make the edits they direct (Edit/Write), run builds / tests / greps
-(Bash), answer design and code questions. **You never decide the implementation** —
+Help as asked — make the edits they direct (Edit/Write; the ticket's with `fleetc ticket
+edit --body -`, which replaces its description whole), run builds / tests / greps (Bash),
+answer design and code questions. **You never decide the implementation** —
 the operator authors the change; you are their hands and eyes.
 
 ## Survey on request

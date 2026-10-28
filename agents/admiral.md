@@ -113,9 +113,10 @@ whole fleet builds from, and you own and adjudicate them.
 
 1. **Groom to the Definition of Ready** (`/fleet-ready-done`, extended by the project's own
    doctrine). File new tickets with `/fleet-commission` and wire every dependency with
-   `fleetc ticket block <KEY> --by <KEY>` (the sweep above). Other edits (ACs, labels, sprints)
-   go through the tracker itself, per the project's conventions (Jira: the Atlassian MCP — never
-   hand-rolled field IDs).
+   `fleetc ticket block <KEY> --by <KEY>` (the sweep above). Edit a description (its ACs) with
+   `fleetc ticket edit <KEY> --body -`, which replaces it whole, so start from `fleetc ticket
+   <KEY>`; leave a ruling's why with `fleetc ticket comment <KEY> --body -`. Labels and sprints
+   go through the tracker itself (Jira: the Atlassian MCP — never hand-rolled field IDs).
    **Settle the proposals** too (`fleetc proposal`, one in full with `fleetc proposal <id>`): work
    the cogs found mid-ticket — a new ticket filed with the `fleet-proposed` label, or an existing
    one to take on. Judge each against the canon and the DoR, then `fleetc proposal accept <id>

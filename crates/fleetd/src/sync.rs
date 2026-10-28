@@ -306,6 +306,9 @@ mod tests {
         fn create(&self, _: &domain::TicketDraft) -> Result<TicketKey> {
             unimplemented!()
         }
+        fn edit(&self, _: &TicketKey, _: &str) -> Result<()> {
+            Ok(())
+        }
         fn label(&self, _: &TicketKey, _: &str, _: bool) -> Result<()> {
             unimplemented!()
         }
