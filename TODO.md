@@ -1,8 +1,5 @@
 # Armada TODO
 
-- [ ] **Blocked tickets still get sailor work.** LaunchSailor skips a ship whose ticket has an
-  open blocker, so its failing pipeline and open review threads wait too. Only the merge (arming)
-  should wait on the blocker; the sweep (CI fixes, review replies, rebases) should still run.
 - [ ] **Reviving a sailor shouldn't go through `sink`.** Today an escalated sailor holds its slot
   until `fleetc sink` ends it; the sweep trigger then launches a fresh one. Scuttling as the way to
   revive muddies the verb. Decide the proper path: resume an escalated sailor when its ship's

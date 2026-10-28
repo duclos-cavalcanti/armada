@@ -113,21 +113,18 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
             // Gated to ships the fleet DISPATCHED as AUTO work: an order with `auto_impl` (a worker's
             // ship, landed by a cold-loop sailor) + a worktree to sweep in. A manual order (a hand,
             // operator-driven) or an un-dispatched ship gets NO sailor — the fleet doesn't land work
-            // it didn't commission. Also gated: not held, no live sailor already on it (the lock), and
-            // no open blocker — a ship whose ticket is blocked by a not-yet-Done/Cancelled ticket waits,
-            // unattended, until the blocker lands. This forge-neutral gate is what orders merges on a forge
-            // without MR dependencies (GitHub). It needs no release trigger of its own: the last ungated
-            // sweep already did its work, so a sweep is only owed if the ship changed (`changed`) meanwhile.
+            // it didn't commission. Also gated: not held, and no live sailor already on it (the lock).
+            // An open blocker does NOT gate the sweep — only the merge: `fleetc arm` refuses while the
+            // ticket is blocked (the forge-neutral merge order, for forges without MR dependencies).
+            // The blocked bit rides the fingerprint, so the blocker landing is itself a change: it
+            // launches the sweep that arms.
             let auto = OrderRepo::get(ledger, tkey)?.is_some_and(|o| o.auto_impl && o.worktree_path.is_some());
-            let (held, blocked) = match TicketRepo::get(ledger, tkey)? {
-                Some(t) => (t.held, !blockers_terminal(ledger, &t.blocked_by)?),
-                None => (false, false),
-            };
+            let held = TicketRepo::get(ledger, tkey)?.is_some_and(|t| t.held);
             let live_sailor = SessionRepo::for_ticket(ledger, tkey)?
                 .iter()
                 .any(|s| s.kind == CrewKind::Sailor && s.ended_at.is_none());
-            let changed = Some(ship_fingerprint(&snap)) != ship.swept;
-            if auto && !held && !blocked && !live_sailor && (needs_work(&snap) || changed) {
+            let changed = Some(ship_fingerprint(&snap, has_open_blocker(ledger, tkey)?)) != ship.swept;
+            if auto && !held && !live_sailor && (needs_work(&snap) || changed) {
                 actions.push(Action::LaunchSailor { ticket: tkey.0.clone() });
             }
         }
@@ -355,6 +352,14 @@ pub(crate) fn blockers_terminal(ledger: &Ledger, blockers: &[TicketKey]) -> Resu
         }
     }
     Ok(true)
+}
+
+/// The ticket waits on a blocker that isn't Done/Cancelled yet (an unknown ticket has none).
+fn has_open_blocker(ledger: &Ledger, key: &TicketKey) -> Result<bool> {
+    match TicketRepo::get(ledger, key)? {
+        Some(t) => Ok(!blockers_terminal(ledger, &t.blocked_by)?),
+        None => Ok(false),
+    }
 }
 
 /// fleetd's dispatch verdict for a convoy ticket — the absorbed `classify.py`. `None` for a ticket
@@ -878,9 +883,11 @@ fn needs_work(s: &ShipSnapshot) -> bool {
     s.has_conflicts || s.open_threads > 0 || s.pipeline == Some(PipelineStatus::Failed)
 }
 
-fn ship_fingerprint(s: &ShipSnapshot) -> String {
+/// What a sweep was launched against. `blocked` (an open ticket blocker) appends a marker only when
+/// set, so an unblocked ship's fingerprint is unchanged by it and the blocker landing reads as a change.
+fn ship_fingerprint(s: &ShipSnapshot, blocked: bool) -> String {
     format!(
-        "{:?}|{}|{}|{}|{}/{}|{:?}|{:?}",
+        "{:?}|{}|{}|{}|{}/{}|{:?}|{:?}{}",
         s.state,
         s.head_sha,
         s.has_conflicts,
@@ -889,6 +896,7 @@ fn ship_fingerprint(s: &ShipSnapshot) -> String {
         s.approvals.required,
         s.pipeline,
         s.merge_status,
+        if blocked { "|blocked" } else { "" },
     )
 }
 
@@ -940,7 +948,7 @@ fn launch_sailor<H: SessionHost, F: Forge + ?Sized>(
         .ok_or_else(|| anyhow!("launch_sailor {ticket}: no open ship"))?;
 
     let snap = fresh_snapshot(ledger, forge, &ship)?;
-    ShipRepo::set_swept(ledger, &ship.id, Some(&ship_fingerprint(&snap)))?;
+    ShipRepo::set_swept(ledger, &ship.id, Some(&ship_fingerprint(&snap, has_open_blocker(ledger, &tkey)?)))?;
 
     let worktree = OrderRepo::get(ledger, &tkey)?
         .and_then(|o| o.worktree_path)
@@ -2045,16 +2053,23 @@ mod tests {
     }
 
     #[test]
-    fn no_sailor_on_a_ship_whose_ticket_has_an_open_blocker() {
-        // PROJ-2's MR is up, but PROJ-2 is blocked by PROJ-1 (not Done) → no sailor, so nothing
-        // arms it ahead of its blocker. Once PROJ-1 lands, the gate lifts and the sweep fires.
+    fn a_blocked_ship_is_swept_and_resweeps_when_its_blocker_lands() {
+        // PROJ-2 is blocked by PROJ-1 (not Done): a blocker gates only the merge (`fleetc arm`
+        // refuses), never the sweep — so PROJ-2's MR still gets a sailor.
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         ticket(&db, "PROJ-2", TicketStatus::InQa, false, vec!["PROJ-1"]);
         order_wt(&db, "PROJ-2", true, Some("/wt/PROJ-2"));
         ship(&db, 10, "PROJ-2", ShipState::Open);
-        assert!(plan(&db, &[], true).unwrap().is_empty(), "gated while PROJ-1 is open");
+        assert_eq!(plan(&db, &[], true).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-2".into() }]);
 
+        // Swept while blocked (the sweep couldn't arm) → quiet while nothing changes…
+        let s = db.armada().unwrap().into_iter().find(|s| s.iid == 10).unwrap();
+        let snap = ShipRepo::snapshot(&db, &s.id).unwrap().unwrap();
+        db.set_swept(&s.id, Some(&ship_fingerprint(&snap, true))).unwrap();
+        assert!(plan(&db, &[], true).unwrap().is_empty(), "unchanged while PROJ-1 is open");
+
+        // …until PROJ-1 lands: the blocker lifting is itself a change → the sweep that arms.
         ticket(&db, "PROJ-1", TicketStatus::Done, false, vec![]);
         assert_eq!(plan(&db, &[], true).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-2".into() }]);
     }
@@ -2068,7 +2083,7 @@ mod tests {
         // mark swept = the current fingerprint → nothing changed.
         let s = db.armada().unwrap().into_iter().find(|s| s.iid == 10).unwrap();
         let snap = ShipRepo::snapshot(&db, &s.id).unwrap().unwrap();
-        db.set_swept(&s.id, Some(&ship_fingerprint(&snap))).unwrap();
+        db.set_swept(&s.id, Some(&ship_fingerprint(&snap, false))).unwrap();
         assert!(plan(&db, &[], true).unwrap().is_empty());
     }
 
@@ -2080,7 +2095,7 @@ mod tests {
         mutate(&mut snap);
         db.sync_snapshot(&snap).unwrap();
         let snap = ShipRepo::snapshot(db, &s.id).unwrap().unwrap();
-        db.set_swept(&s.id, Some(&ship_fingerprint(&snap))).unwrap();
+        db.set_swept(&s.id, Some(&ship_fingerprint(&snap, false))).unwrap();
     }
 
     #[test]
