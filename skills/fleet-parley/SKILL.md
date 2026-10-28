@@ -7,8 +7,8 @@ argument-hint:
 
 You are answering the reviewers on the ticket's MR. For each open thread: **validate the
 finding, then derive and apply the fix yourself**, or push back when it's wrong. Reply on
-the thread and resolve it once its ask is addressed. The reviewer diagnoses; you own the
-correction.
+the thread and resolve it: once you've answered, it's the reviewer's to re-open. The reviewer
+diagnoses; you own the correction.
 
 **Ends with** every addressable thread handled (exit 0, `OPEN=N REVIEW_NOTES=M` on
 stdout), or an escalation when a finding needs the operator (exit 1).
@@ -44,14 +44,18 @@ criteria and its *Out of scope*.
 
 Start strict, soften down: walk the categories in order; the first that clearly fires wins.
 
-1. **Push back — escalate** (only on a clear match; a partial match softens to 2):
-   - **A factual error or false diagnosis**: the code, a grep, or the project's doctrine
-     contradicts what the reviewer asserts, or the violated property doesn't actually hold.
+1. **Escalate** — you can't answer it; the operator rules:
    - **Two reviewers conflict** on the same lines; both can't be satisfied.
-   - **Scope expansion**: the ask goes beyond the ticket (tightening, tests, better
-     errors, and lint stay *inside* scope).
    - **It would amend an acceptance criterion, a design decision, or an invariant**: that's
      the ticket author's call, not a patch.
+   **Push back** — you answer it with evidence (only on a clear match; a partial match
+   softens to 3):
+   - **A factual error or false diagnosis**: the code, a grep, or the project's doctrine
+     contradicts what the reviewer asserts, or the violated property doesn't actually hold.
+     The reply cites the evidence.
+   - **Scope expansion**: the ask goes beyond the ticket (tightening, tests, better
+     errors, and lint stay *inside* scope). Propose it (`/fleet-propose`); the reply names
+     the proposed ticket's key.
 2. **Defer a nit** (only when `APPROVED` is true): the MR has its approvals, and a push can
    reset them, costing a review round for polish. A nit is what the reviewer labels one
    (`nit`, `[nit]`), or a pure style / naming / polish ask that changes no behaviour,
@@ -89,8 +93,12 @@ accepted and the fix you chose instead>
 EOF
 ```
 
-Resolve only once every ask in the thread is addressed. Never resolve over an unanswered
-question. A pushed-back thread stays open.
+**Resolve every thread you answer**: a fix, a deferral, a push-back with its evidence. Answering
+is your job; judging the answer is the reviewer's, and one who disagrees re-opens the thread.
+An ask for evidence CI produces (a test that must pass, a job that must go green) is answered
+by the fix and a reply naming that job: resolve it. The pipeline gates the merge on its own,
+green or red, so an open thread would only be a second gate on your sweep and your arm. Leave
+open only what you can't answer yet: an escalation, until the operator rules.
 
 ## Step 4 — Re-read and report
 
@@ -106,7 +114,7 @@ printf '%s' "$REVIEW" | jq -r '.floating_notes[] | "  floating-note [\(.created_
 | Outcome | Action | Exit |
 |---|---|---|
 | Every thread handled, fixes pushed | the `OPEN=N REVIEW_NOTES=M` line above | 0 |
-| A push-back | report the thread, the reviewer's claim, and the evidence against it, in your response | 1 |
+| An escalation | report the thread, what it asks, and the ruling it needs, in your response | 1 |
 | Tests fail or the push is refused | report the error in your response | 1 |
 
 The caller (the sailor) reads `OPEN` (the merge-blocking threads) and `REVIEW_NOTES` (read
