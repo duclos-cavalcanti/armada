@@ -39,18 +39,27 @@ don't re-assemble state by hand:
 fleetc packet
 ```
 
-The packet is `{ order, ship, snapshot, ticket }`. The **snapshot** is your
-decision input — it's fleetd's fresh poll of your MR: `state` (incl. draft),
-`has_conflicts`, `open_threads`, `pipeline`, `approvals`, `armed`, `head_sha`,
-and `merge_status` (GitLab's authoritative merge-readiness — e.g.
-`merge_request_blocked`, `ci_must_pass`, `mergeable`).
+The packet is `{ order, ship, snapshot, ticket }`. 
+
+The **snapshot** is your decision input, it's fleetd's fresh poll of your MR: 
+- `state` (incl. draft),
+- `has_conflicts` 
+- `open_threads`
+- `pipeline`
+- `approvals`
+- `armed`
+- `head_sha`,
+- `merge_status` 
+
+Th `merge_status` is GitLab's authoritative merge-readiness — e.g.
+`merge_request_blocked`, `ci_must_pass`, `mergeable`.
 
 ## The sweep (act on the snapshot)
 
 Do the work the snapshot calls for, this sweep only:
 
-- **`has_conflicts` (or diverged from target)** → `/fleet-rechart`.
-- **`open_threads > 0`** → `/fleet-parley` (answer review threads).
+- **`has_conflicts` or diverged from target** → `/fleet-rechart`.
+- **`open_threads > 0`** → `/fleet-parley` to answer review threads.
 - **`pipeline` failed** → `/fleet-repair`.
 - **clean + not draft + not armed** → **arm** auto-merge: `fleetc arm`.
   The forge merges it on its own once its gates pass. fleetd refuses (and says why)
