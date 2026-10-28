@@ -247,14 +247,18 @@ pub struct Convoy {
 }
 
 /// A cog's work-packet — the composed read `fleetc packet` serves: the dispatch order, the
-/// ship + its latest snapshot, and the cached ticket. A sailor reads this once at boot to
-/// decide its sweep without re-assembling state from glab/jira. Each piece is optional.
+/// ship + its latest snapshot, the cached ticket, and `open_blockers` — the ticket's blockers not
+/// yet Done/Cancelled, which gate the merge (`ticket.blocked_by` lists every edge, landed ones
+/// too). A sailor reads this once at boot to decide its sweep without re-assembling state from
+/// glab/jira. Each piece is optional.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Packet {
     pub order: Option<Order>,
     pub ship: Option<Ship>,
     pub snapshot: Option<ShipSnapshot>,
     pub ticket: Option<Ticket>,
+    #[serde(default)]
+    pub open_blockers: Vec<TicketKey>,
 }
 
 /// fleetd's dispatch verdict for a frontier (To Do) ticket — the absorbed `classify.py`. `None` on

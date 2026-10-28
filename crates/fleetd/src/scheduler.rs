@@ -502,8 +502,9 @@ fn waiting_on(ledger: &Ledger, blockers: &[TicketKey]) -> Result<Vec<TicketKey>>
 fn arm(ledger: &Ledger, forge: &dyn Forge, key: &TicketKey) -> Result<()> {
     let ticket = TicketRepo::get(ledger, key)?.ok_or_else(|| anyhow!("{}: not on the board", key.0))?;
     anyhow::ensure!(!ticket.held, "{} is held — not arming (fleetc unhold it first)", key.0);
-    if !reconcile::blockers_terminal(ledger, &ticket.blocked_by)? {
-        let keys: Vec<&str> = ticket.blocked_by.iter().map(|b| b.0.as_str()).collect();
+    let open = reconcile::open_blockers(ledger, &ticket.blocked_by)?;
+    if !open.is_empty() {
+        let keys: Vec<&str> = open.iter().map(|b| b.0.as_str()).collect();
         anyhow::bail!("{} is blocked by {} — not arming until it lands", key.0, keys.join(", "));
     }
     let ship = ledger
@@ -598,7 +599,7 @@ fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Resul
 }
 
 /// Compose a cog's work-packet from the ledger: its dispatch order, its open ship + the ship's
-/// latest snapshot, and the cached ticket. A pure read (the fresh-poll that keeps the snapshot
+/// latest snapshot, the cached ticket, and which of its blockers are still open. A pure read (the fresh-poll that keeps the snapshot
 /// current happens at LaunchSailor); the sailor calls this at boot to decide its sweep.
 fn build_packet(ledger: &Ledger, ticket: &TicketKey) -> Result<Packet> {
     let order = OrderRepo::get(ledger, ticket)?;
@@ -610,7 +611,11 @@ fn build_packet(ledger: &Ledger, ticket: &TicketKey) -> Result<Packet> {
         None => None,
     };
     let ticket_entity = TicketRepo::get(ledger, ticket)?;
-    Ok(Packet { order, ship, snapshot, ticket: ticket_entity })
+    let open_blockers = match &ticket_entity {
+        Some(t) => reconcile::open_blockers(ledger, &t.blocked_by)?,
+        None => vec![],
+    };
+    Ok(Packet { order, ship, snapshot, ticket: ticket_entity, open_blockers })
 }
 
 /// The live cog(s) on a ticket (sessions not yet ended).
@@ -1239,11 +1244,12 @@ mod tests {
     }
 
     #[test]
-    fn arm_is_refused_while_the_ticket_is_held_or_blocked() {
+    fn arm_and_the_packet_wait_only_on_open_blockers() {
         let db = Ledger::in_memory().unwrap();
         let mut child = tt("PROJ-2", TicketStatus::InQa);
-        child.blocked_by = vec![TicketKey("PROJ-1".into())];
-        sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress), child]), "now").unwrap();
+        child.blocked_by = vec![TicketKey("PROJ-1".into()), TicketKey("PROJ-3".into())];
+        let board = vec![tt("PROJ-1", TicketStatus::InProgress), tt("PROJ-3", TicketStatus::Done), child];
+        sync::sync_board(&db, &FakeTracker::new(board), "now").unwrap();
         let ship = Ship {
             id: ShipId(0),
             ticket: Some(TicketKey("PROJ-2".into())),
@@ -1261,9 +1267,12 @@ mod tests {
         let (forge, key) = (FakeForge::default(), TicketKey("PROJ-2".into()));
 
         let e = arm(&db, &forge, &key).unwrap_err().to_string();
-        assert!(e.contains("blocked by PROJ-1"), "{e}");
+        assert!(e.contains("blocked by PROJ-1 —"), "only the open blocker, not the landed PROJ-3: {e}");
+        let open = |db: &Ledger| build_packet(db, &key).unwrap().open_blockers;
+        assert_eq!(open(&db), vec![TicketKey("PROJ-1".into())], "the packet says what still gates the merge");
 
         sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::Done)]), "now").unwrap(); // the blocker lands
+        assert!(open(&db).is_empty(), "every edge stays in ticket.blocked_by; none is open");
         TicketRepo::set_held(&db, &key, true, Some("late review"), "t").unwrap();
         assert!(arm(&db, &forge, &key).unwrap_err().to_string().contains("is held"));
 

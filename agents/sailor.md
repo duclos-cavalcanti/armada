@@ -39,7 +39,7 @@ don't re-assemble state by hand:
 fleetc packet
 ```
 
-The packet is `{ order, ship, snapshot, ticket }`. 
+The packet is `{ order, ship, snapshot, ticket, open_blockers }`. 
 
 The **snapshot** is your decision input, it's fleetd's fresh poll of your MR: 
 - `state` (incl. draft),
@@ -48,6 +48,10 @@ The **snapshot** is your decision input, it's fleetd's fresh poll of your MR:
 - `pipeline`
 - `approvals`
 - `armed`
+
+`open_blockers` is fleetd's word on what still gates the merge: the blockers not yet Done or
+Cancelled. `ticket.blocked_by` lists every blocker edge, landed ones too, so never read it as
+"blocked".
 - `head_sha`,
 - `merge_status` 
 

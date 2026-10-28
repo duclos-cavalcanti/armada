@@ -347,13 +347,20 @@ pub(crate) fn is_ready(ledger: &Ledger, ticket: &Ticket) -> Result<bool> {
 /// Every blocker in `blockers` is terminal (Done/Cancelled) — the DAG-ready predicate shared by
 /// `is_ready` (the ticket itself) and `classify` (a candidate's single parent, one level deep).
 pub(crate) fn blockers_terminal(ledger: &Ledger, blockers: &[TicketKey]) -> Result<bool> {
+    Ok(open_blockers(ledger, blockers)?.is_empty())
+}
+
+/// The blockers in `blockers` not yet Done/Cancelled (one the ledger doesn't know counts as open):
+/// what still gates the merge, as `fleetc arm` and the packet report it.
+pub(crate) fn open_blockers(ledger: &Ledger, blockers: &[TicketKey]) -> Result<Vec<TicketKey>> {
+    let mut open = Vec::new();
     for b in blockers {
         let s = TicketRepo::get(ledger, b)?.and_then(|t| t.status);
         if !matches!(s, Some(TicketStatus::Done) | Some(TicketStatus::Cancelled)) {
-            return Ok(false);
+            open.push(b.clone());
         }
     }
-    Ok(true)
+    Ok(open)
 }
 
 /// The ticket waits on a blocker that isn't Done/Cancelled yet (an unknown ticket has none).
