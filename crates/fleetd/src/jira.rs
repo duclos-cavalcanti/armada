@@ -1,7 +1,7 @@
-//! The `jira` Tracker driver — shells out to `jira-cli` for reads + transitions
-//! (headless token auth; it handles the corp TLS/CA that trips raw HTTP — TODO #48).
-//! Native REST+PAT is reserved for the buggy writes (component/story-point sets,
-//! #47/#48) at ticket-creation time, not here.
+//! The `jira` Tracker driver — shells out to `jira-cli` for reads, creates and transitions.
+//! Field edits (description, labels) go to Jira's REST API through `curl` instead, with jira-cli's
+//! own credentials: `jira issue edit` re-sends every component on the ticket, so one Jira no longer
+//! accepts (an archived component) fails every edit.
 //!
 //! The vendor→domain status mapping lives here (and ONLY here): Jira's status names
 //! map onto `TicketStatus`. `core` never names Jira.
@@ -66,9 +66,43 @@ impl JiraTracker {
     }
 
     fn add_claim_label(&self, key: &TicketKey) -> Result<()> {
-        if let Some(label) = &self.claim_label {
-            self.jira(&["issue", "edit", &key.0, "--no-input", "--label", label])?;
+        match &self.claim_label {
+            Some(label) => self.label(key, label, true),
+            None => Ok(()),
         }
+    }
+
+    /// Set fields on an issue — `PUT /rest/api/2/issue/<KEY>` with only the given `body`, so the
+    /// ticket's other fields (its components) aren't re-sent. jira-cli's credentials: the server +
+    /// login from its config, the token from `JIRA_API_TOKEN` (passed on stdin, never in argv),
+    /// else `~/.netrc`.
+    fn put_issue(&self, key: &TicketKey, body: &serde_json::Value) -> Result<()> {
+        let cfg = jira_cli_config()?;
+        let url = format!("{}/rest/api/2/issue/{}", cfg.server.trim_end_matches('/'), key.0);
+        let token = std::env::var("JIRA_API_TOKEN").ok().filter(|t| !t.is_empty());
+        let mut curl = Command::new("curl");
+        curl.args(["-sS", "-X", "PUT", "-H", "Content-Type: application/json", "-w", "\n%{http_code}"])
+            .args(["--data-binary", &body.to_string(), &url])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        curl.args(if token.is_some() { ["-K", "-"] } else { ["--netrc", "-f"] });
+        let mut child = curl.spawn().context("curl")?;
+        if let Some(t) = &token {
+            let user = format!("user = \"{}:{}\"\n", cfg.login, t.replace('\\', "\\\\").replace('"', "\\\""));
+            std::io::Write::write_all(child.stdin.as_mut().context("curl stdin")?, user.as_bytes())?;
+        }
+        drop(child.stdin.take());
+        let out = child.wait_with_output()?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let (resp, code) = stdout.rsplit_once('\n').unwrap_or(("", &stdout));
+        ensure!(
+            out.status.success() && code.starts_with('2'),
+            "jira PUT {}: {code} {}{}",
+            key.0,
+            crate::preflight::one_line(resp.as_bytes()),
+            crate::preflight::one_line(&out.stderr)
+        );
         Ok(())
     }
 
@@ -195,13 +229,12 @@ impl Tracker for JiraTracker {
     }
 
     fn edit(&self, key: &TicketKey, description: &str) -> Result<()> {
-        // jira-cli converts the markdown body to Jira's markup, as `create -b` does.
-        self.jira(&["issue", "edit", &key.0, "--no-input", "--body", description]).map(drop)
+        self.put_issue(key, &serde_json::json!({ "fields": { "description": wiki(description) } }))
     }
 
     fn label(&self, key: &TicketKey, label: &str, on: bool) -> Result<()> {
-        let label = if on { label.to_string() } else { format!("-{label}") }; // jira-cli: `-x` removes x
-        self.jira(&["issue", "edit", &key.0, "--no-input", "--label", &label]).map(drop)
+        let op = if on { "add" } else { "remove" };
+        self.put_issue(key, &serde_json::json!({ "update": { "labels": [{ op: label }] } }))
     }
 
     fn block(&self, key: &TicketKey, by: &TicketKey) -> Result<()> {
@@ -212,6 +245,88 @@ impl Tracker for JiraTracker {
         }
         self.jira(&["issue", "link", &by.0, &key.0, "Blocks"]).map(drop)
     }
+}
+
+/// jira-cli's config (`jira init`): where Jira is and who logs in. `JIRA_CONFIG_FILE` overrides
+/// the default `~/.config/.jira/.config.yml`, as it does for jira-cli.
+#[derive(serde::Deserialize)]
+struct JiraCliConfig {
+    server: String,
+    login: String,
+}
+
+fn jira_cli_config() -> Result<JiraCliConfig> {
+    let path = match std::env::var("JIRA_CONFIG_FILE") {
+        Ok(p) if !p.is_empty() => p,
+        _ => format!("{}/.config/.jira/.config.yml", std::env::var("HOME").context("HOME")?),
+    };
+    let yaml = std::fs::read_to_string(&path).with_context(|| format!("reading jira-cli config {path}"))?;
+    serde_saphyr::from_str(&yaml).map_err(|e| anyhow::anyhow!("jira-cli config {path}: {e}"))
+}
+
+/// Markdown → Jira wiki markup (what REST v2 takes for a description; Jira stores it as ADF): the
+/// inverse of `adf_text` — headings, lists, code blocks, quotes, and inline code / bold / italic /
+/// links. jira-cli did this conversion for us; a REST edit does it here.
+fn wiki(md: &str) -> String {
+    let mut out = Vec::new();
+    let mut fence = false;
+    for line in md.lines() {
+        if let Some(lang) = line.trim_start().strip_prefix("```") {
+            out.push(match (fence, lang.trim()) {
+                (true, _) => "{code}".to_string(),
+                (false, "") => "{code}".to_string(),
+                (false, l) => format!("{{code:{l}}}"),
+            });
+            fence = !fence;
+            continue;
+        }
+        if fence {
+            out.push(line.to_string());
+            continue;
+        }
+        let indent = (line.len() - line.trim_start().len()) / 2;
+        let t = line.trim_start();
+        let hashes = t.chars().take_while(|&c| c == '#').count();
+        let digits = t.chars().take_while(char::is_ascii_digit).count();
+        out.push(if (1..=6).contains(&hashes) && t[hashes..].starts_with(' ') {
+            format!("h{hashes}. {}", inline(t[hashes..].trim_start()))
+        } else if let Some(q) = t.strip_prefix("> ") {
+            format!("bq. {}", inline(q))
+        } else if let Some(item) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")) {
+            format!("{} {}", "*".repeat(indent + 1), inline(item))
+        } else if digits > 0 && t[digits..].starts_with(". ") {
+            format!("{} {}", "#".repeat(indent + 1), inline(&t[digits + 2..]))
+        } else {
+            inline(line)
+        });
+    }
+    out.join("\n")
+}
+
+/// One line's inline markdown → wiki: `` `x` `` → `{{x}}`, `**x**` → `*x*`, `*x*` → `_x_`,
+/// `[t](u)` → `[t|u]`. An unclosed marker stays as written.
+fn inline(s: &str) -> String {
+    let mut out = String::new();
+    let mut rest = s;
+    while let Some(c) = rest.chars().next() {
+        let closed = |open: &str, close: &str| rest.strip_prefix(open).and_then(|r| r.find(close).map(|i| (&r[..i], &r[i + close.len()..])));
+        let (piece, tail) = if let Some((code, tail)) = closed("`", "`") {
+            (format!("{{{{{code}}}}}"), tail)
+        } else if let Some((bold, tail)) = closed("**", "**") {
+            (format!("*{}*", inline(bold)), tail)
+        } else if let Some((em, tail)) = closed("*", "*").filter(|(em, _)| !em.is_empty() && !em.starts_with(' ')) {
+            (format!("_{}_", inline(em)), tail)
+        } else if let Some((text, url, tail)) =
+            closed("[", "](").and_then(|(text, r)| r.find(')').map(|i| (text, &r[..i], &r[i + 1..])))
+        {
+            (format!("[{}|{url}]", inline(text)), tail)
+        } else {
+            (c.to_string(), &rest[c.len_utf8()..])
+        };
+        out.push_str(&piece);
+        rest = tail;
+    }
+    out
 }
 
 /// "story" → "Story".
@@ -260,7 +375,12 @@ fn adf_text(node: &serde_json::Value) -> String {
     match str_at("/type") {
         "text" => marked(str_at("/text"), node),
         "hardBreak" => "\n".into(),
-        "inlineCard" => str_at("/attrs/url").into(),
+        // A smart link: an issue's (`…/browse/KEY…`) reads as its bare key, which Jira links again
+        // on write; any other URL as is.
+        "inlineCard" => {
+            let url = str_at("/attrs/url");
+            url.split_once("/browse/").map_or(url, |(_, k)| k.split(['#', '?', '/']).next().unwrap_or(k)).into()
+        }
         "heading" => {
             let level = node.pointer("/attrs/level").and_then(|l| l.as_u64()).unwrap_or(2) as usize;
             format!("{} {}\n\n", "#".repeat(level), inner())
@@ -406,7 +526,9 @@ mod tests {
                     {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Outcome"}]},
                     {"type": "paragraph", "content": [
                         {"type": "text", "text": "neg", "marks": [{"type": "code"}, {"type": "strong"}]},
-                        {"type": "text", "text": " works, per "},
+                        {"type": "text", "text": " works ("},
+                        {"type": "inlineCard", "attrs": {"url": "https://x.atlassian.net/browse/PROJ-2#icft=PROJ-2"}},
+                        {"type": "text", "text": "), per "},
                         {"type": "text", "text": "the spec", "marks": [{"type": "link", "attrs": {"href": "https://x.io/s"}}]},
                         {"type": "text", "text": "."}
                     ]},
@@ -426,11 +548,20 @@ mod tests {
         assert_eq!((d.ticket.key.0.as_str(), d.kind.as_str()), ("PROJ-7", "story"));
         assert_eq!(
             d.description,
-            "## Outcome\n\n**`neg`** works, per [the spec](https://x.io/s).\n\n- AC one\n\n1. first\n2. second\n\n```rust\nlet x = 1;\n```\n\n> quoted"
+            "## Outcome\n\n**`neg`** works (PROJ-2), per [the spec](https://x.io/s).\n\n- AC one\n\n1. first\n2. second\n\n```rust\nlet x = 1;\n```\n\n> quoted"
         );
         assert_eq!(capitalized("story"), "Story");
         assert_eq!(d.location, "https://example.atlassian.net/browse/PROJ-7");
         assert_eq!(d.labels, vec!["fleet-proposed".to_string()]);
+    }
+
+    #[test]
+    fn markdown_becomes_jira_wiki_markup() {
+        let md = "## Outcome\n\n**`neg`** works, per [the spec](https://x.io/s), *now*.\n\n- AC one\n  - nested\n\n1. first\n2. second\n\n```rust\nlet x = *y*;\n```\n\n> quoted\na * b stays";
+        assert_eq!(
+            wiki(md),
+            "h2. Outcome\n\n*{{neg}}* works, per [the spec|https://x.io/s], _now_.\n\n* AC one\n** nested\n\n# first\n# second\n\n{code:rust}\nlet x = *y*;\n{code}\n\nbq. quoted\na * b stays"
+        );
     }
 
     // Real jira --raw / REST field shape (trimmed).
