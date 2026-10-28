@@ -28,7 +28,7 @@ fn socket() -> String {
 
 /// fleetc's usage: a header, then one line per verb form (`fleetc <verb> …`).
 const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project: the cwd's, or -C's — nearest folder with a fleet.toml; in a cog, an omitted ticket / --iid / --convoy is its own)\n  \
-     fleetc status   --cog <worker|sailor|hand> [--ticket <KEY-N>] --state <state> [--last-action <text>]\n  \
+     fleetc status   --cog <worker|sailor|hand|lookout> [--ticket <KEY-N>] --state <state> [--last-action <text>]\n  \
      fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--hold] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
      fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
      fleetc convoy   open <KEY> [--title <text>] | close [<KEY>]\n  \
@@ -145,10 +145,14 @@ fn status(args: &[String]) -> Result<()> {
         }
     }
     let cog = cog.ok_or_else(|| anyhow!("--cog required"))?;
-    let ticket = ticket_key(&ticket.or_else(|| own("FLEET_TICKET")).ok_or_else(|| anyhow!("--ticket required"))?, "status")?;
     let state = state.ok_or_else(|| anyhow!("--state required"))?;
-
     let kind = CrewKind::parse(&cog).ok_or_else(|| anyhow!("invalid --cog: {cog}"))?;
+    // The lookout is a singleton: fleetd finds it without a ticket.
+    let ticket = match (ticket.or_else(|| own("FLEET_TICKET")), kind) {
+        (Some(t), _) => Some(ticket_key(&t, "status")?),
+        (None, CrewKind::Lookout) => None,
+        (None, _) => bail!("--ticket required"),
+    };
     let parsed = CogState::parse(kind, &state)
         .ok_or_else(|| anyhow!("invalid state '{state}' for cog '{cog}'"))?;
 

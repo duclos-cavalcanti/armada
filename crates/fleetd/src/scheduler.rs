@@ -60,7 +60,7 @@ type SettingsReply = std::sync::mpsc::Sender<std::result::Result<Vec<crate::sett
 /// scheduler. Fields are already validated (parsed into `domain` types) — the lint
 /// happened at the edge; this is the authoritative apply.
 pub enum Command {
-    RecordStatus { cog: CrewKind, ticket: TicketKey, state: CogState, last_action: Option<String>, reply: Reply },
+    RecordStatus { cog: CrewKind, ticket: Option<TicketKey>, state: CogState, last_action: Option<String>, reply: Reply },
     Dispatch { order: Order, reply: Reply },
     LaunchHand { worktree_path: String, reply: Reply }, // ticketless operator-driven hand, no order
     OpenConvoy { key: ConvoyKey, title: Option<String>, reply: Reply },
@@ -173,7 +173,7 @@ fn ensure_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey) -> Res
 fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Forge, cfg: &Config, cmd: Command) {
     match cmd {
         Command::RecordStatus { cog, ticket, state, last_action, reply } => {
-            let res = record_status(ledger, cog, &ticket, state, last_action)
+            let res = record_status(ledger, cog, ticket.as_ref(), state, last_action)
                 .map_err(|e| e.to_string());
             let _ = reply.send(res); // receiver may have hung up; nothing to do
         }
@@ -781,14 +781,18 @@ fn signal<H: SessionHost>(ledger: &Ledger, host: &H, verb: Verb, s: &Session) ->
 fn record_status(
     ledger: &Ledger,
     cog: CrewKind,
-    ticket: &TicketKey,
+    ticket: Option<&TicketKey>,
     state: CogState,
     last_action: Option<String>,
 ) -> Result<()> {
-    let session = SessionRepo::for_ticket(ledger, ticket)?
-        .into_iter()
-        .find(|s| s.ended_at.is_none() && s.kind == cog)
-        .ok_or_else(|| anyhow!("no live {} session for {}", cog.as_str(), ticket.0))?;
+    // A ticket's cog is found by its ticket; without one, the live session of that kind (the lookout).
+    let live = match ticket {
+        Some(t) => SessionRepo::for_ticket(ledger, t)?.into_iter().filter(|s| s.ended_at.is_none()).collect(),
+        None => SessionRepo::live(ledger)?,
+    };
+    let session = live.into_iter().find(|s| s.kind == cog).ok_or_else(|| {
+        anyhow!("no live {} session{}", cog.as_str(), ticket.map(|t| format!(" for {}", t.0)).unwrap_or_default())
+    })?;
     ledger.record(&Report {
         session: session.id,
         state,
@@ -1033,6 +1037,28 @@ mod tests {
         assert!(db.pending().unwrap().is_empty());
         assert_eq!(ProposalRepo::get(&db, &id).unwrap().unwrap().accepted_as, Some(key));
         assert!(accept_proposal(&db, &tracker, &id, None).is_err(), "an accepted proposal can't be accepted again");
+    }
+
+    #[test]
+    fn the_lookout_reports_without_a_ticket() {
+        let db = Ledger::in_memory().unwrap();
+        let lookout = Session {
+            id: SessionId(0),
+            kind: CrewKind::Lookout,
+            ticket: None,
+            convoy: None,
+            worktree_path: "/project".into(),
+            tmux_session: "lookout".into(),
+            harness_session_id: None,
+            created_at: "t".into(),
+            ended_at: None,
+            anchored_at: None,
+        };
+        let id = SessionRepo::start(&db, &lookout).unwrap().expect("session start");
+        let reviewed = CogState::Lookout(LookoutState::Reviewed);
+        assert!(record_status(&db, CrewKind::Worker, None, reviewed, None).is_err(), "no live worker");
+        record_status(&db, CrewKind::Lookout, None, reviewed, None).unwrap();
+        assert_eq!(ReportRepo::latest(&db, &id).unwrap().map(|r| r.state), Some(reviewed));
     }
 
     #[test]

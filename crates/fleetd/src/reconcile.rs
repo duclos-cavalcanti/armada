@@ -19,7 +19,8 @@
 //!   sweep trigger can re-launch on the next change (a crash looks identical; it re-fires too).
 //! - lookout:   one SINGLETON cog reviewing ALLIED ships (not ours). An allied open ship whose code
 //!   changed since its last review (head_sha ≠ reviewed) → launch the lookout on it (fleetd picks
-//!   the iid + marks it reviewed at dispatch); it reviews one, exits, the next tick takes the next.
+//!   the iid + marks it reviewed at dispatch); it reviews one and reports `reviewed`, reconcile
+//!   stands it down, and the next tick takes the next ally.
 //! - captain:   one cold captain per ACTIVE convoy — launched when the convoy has a pass of work
 //!   (a ready-undispatched ticket, or all delivered → close), stood down when it finishes.
 
@@ -172,7 +173,7 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
         // on the next change. Unlike the Dead path below, the cog is alive, so the StandDown's
         // host.kill does the real work. An operator anchor still outranks it.
         if cog.session.kind == CrewKind::Sailor
-            && state.is_some_and(|s| s.is_slept())
+            && state.is_some_and(|s| s.is_done())
             && cog.session.anchored_at.is_none()
         {
             actions.push(Action::StandDown { ticket: tkey.0.clone(), kind: "sailor".into() });
@@ -233,22 +234,23 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
     }
 
     // LOOKOUT — one SINGLETON cog reviewing ALLIED ships (MRs we don't own: `ticket IS NULL`). Stand a
-    // dead lookout down (it finished its one review, or crashed); then, if none is live, launch it on
+    // finished lookout down (it reported `reviewed`, or died); then, if none is live, launch it on
     // the next unreviewed ally. fleetd picks the iid — the first allied OPEN ship whose code changed
     // since its last review (head_sha ≠ reviewed) — and marks it reviewed at dispatch.
-    let mut dead_lookout = false;
+    let mut finished_lookout = false;
     let mut live_lookout = false;
     for cog in cogs {
         if cog.session.kind != CrewKind::Lookout || cog.session.ended_at.is_some() {
             continue;
         }
-        if cog.liveness == Liveness::Dead && cog.session.anchored_at.is_none() {
-            dead_lookout = true;
+        let done = ReportRepo::latest(ledger, &cog.session.id)?.is_some_and(|r| r.state.is_done());
+        if (done || cog.liveness == Liveness::Dead) && cog.session.anchored_at.is_none() {
+            finished_lookout = true;
         } else {
             live_lookout = true; // alive (reviewing) or anchored → still holds the singleton slot
         }
     }
-    if dead_lookout {
+    if finished_lookout {
         actions.push(Action::StandDownLookout); // ended first, so the launch below can take the slot
     }
     // An operator-anchored lookout (its hold lives on the singleton `lookout` row, the trigger
@@ -2281,6 +2283,23 @@ mod tests {
         let mut cog = lookout_cog();
         cog.liveness = Liveness::Dead;
         assert_eq!(plan(&db, &[cog], true).unwrap(), vec![Action::StandDownLookout]);
+    }
+
+    #[test]
+    fn a_live_lookout_that_reported_reviewed_stands_down_and_the_next_ally_launches() {
+        // `claude --agent` doesn't self-exit: the lookout's `reviewed` report, not a dead tmux, ends
+        // its pass — and frees the singleton slot for the next unreviewed ally in the same plan.
+        let db = db();
+        allied_ship(&db, 77, ShipState::Open);
+        let id = SessionRepo::start(&db, &lookout_cog().session).unwrap().expect("session start");
+        let cog = Cog { session: SessionRepo::get(&db, &id).unwrap().unwrap(), liveness: Liveness::Active };
+        report(&db, &cog, CogState::Lookout(LookoutState::Escalated));
+        assert!(plan(&db, std::slice::from_ref(&cog), true).unwrap().is_empty(), "an escalated lookout holds the slot");
+        report(&db, &cog, CogState::Lookout(LookoutState::Reviewed));
+        assert_eq!(
+            plan(&db, &[cog], true).unwrap(),
+            vec![Action::StandDownLookout, Action::LaunchLookout { iid: 77 }]
+        );
     }
 
     #[test]

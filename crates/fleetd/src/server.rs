@@ -136,9 +136,13 @@ fn handle_status(request: &str, cmds: &Sender<Command>) -> String {
         }
     };
 
-    let ticket = match parse_ticket(&dto.ticket) {
-        Ok(t) => t,
-        Err(r) => return r,
+    // The lookout is a singleton: its report needs no ticket to find its session; every other cog's does.
+    let ticket = match (dto.ticket.as_deref().map(parse_ticket).transpose(), kind) {
+        (Err(r), _) => return r,
+        (Ok(None), k) if k != CrewKind::Lookout => {
+            return http_response("400 Bad Request", "text/plain", &format!("{} reports need a ticket", dto.cog));
+        }
+        (Ok(t), _) => t,
     };
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
     let cmd = Command::RecordStatus {

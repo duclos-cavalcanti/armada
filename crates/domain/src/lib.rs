@@ -107,10 +107,16 @@ pub enum SailorState { Started, Finishing, Sleeping, InDraft, Merged, Closed, Es
 #[serde(rename_all = "snake_case")]
 pub enum HandState { Awaiting, Implementing, Concluded, Anchored }
 
+/// The lookout's pass over one allied MR: `reviewed` (done, stand it down) or `escalated` (wait
+/// for the operator in its pane).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LookoutState { Reviewed, Escalated }
+
 /// A crew member's self-reported state, typed per cog. The `reports` table stores the
 /// string (`as_str`); readers widen it back with the session's `kind` via `parse`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CogState { Worker(WorkerState), Sailor(SailorState), Hand(HandState) }
+pub enum CogState { Worker(WorkerState), Sailor(SailorState), Hand(HandState), Lookout(LookoutState) }
 
 /// A ticket's workflow status — a cached mirror of the tracker (re-synced,
 /// never trusted past `synced_at`). The tracker adapter maps the vendor onto this.
@@ -661,6 +667,22 @@ impl HandState {
     }
 }
 
+impl LookoutState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LookoutState::Reviewed => "reviewed",
+            LookoutState::Escalated => "escalated",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "reviewed" => Some(Self::Reviewed),
+            "escalated" => Some(Self::Escalated),
+            _ => None,
+        }
+    }
+}
+
 impl CogState {
     /// Which cog this state belongs to (the enum variant carries it).
     pub fn cog(&self) -> CrewKind {
@@ -668,6 +690,7 @@ impl CogState {
             CogState::Worker(_) => CrewKind::Worker,
             CogState::Sailor(_) => CrewKind::Sailor,
             CogState::Hand(_) => CrewKind::Hand,
+            CogState::Lookout(_) => CrewKind::Lookout,
         }
     }
     pub fn as_str(&self) -> &'static str {
@@ -675,6 +698,7 @@ impl CogState {
             CogState::Worker(s) => s.as_str(),
             CogState::Sailor(s) => s.as_str(),
             CogState::Hand(s) => s.as_str(),
+            CogState::Lookout(s) => s.as_str(),
         }
     }
     /// Widen a stored string back to a typed state, given the session's cog. The cog
@@ -684,21 +708,22 @@ impl CogState {
             CrewKind::Worker => WorkerState::parse(s).map(CogState::Worker),
             CrewKind::Sailor => SailorState::parse(s).map(CogState::Sailor),
             CrewKind::Hand => HandState::parse(s).map(CogState::Hand),
-            // A captain commands + a lookout reviews allied MRs; both are ticketless and write no
-            // status drop (their output is a convoy close / MR threads + approval), so no CogState.
-            CrewKind::Captain | CrewKind::Lookout => None,
+            CrewKind::Lookout => LookoutState::parse(s).map(CogState::Lookout),
+            // A captain commands its convoy and writes no status drop (its output is the convoy's
+            // close), so no CogState.
+            CrewKind::Captain => None,
         }
     }
     /// A builder's happy terminal — MR open + reviewed, ready to hand to a sailor.
     pub fn is_concluded(&self) -> bool {
         matches!(self, CogState::Worker(WorkerState::Concluded) | CogState::Hand(HandState::Concluded))
     }
-    /// A sailor's clean cold-loop rest — swept, nothing to do, idling. The self-reported
-    /// counterpart to a Dead process: reconcile stands a sleeping sailor down (graceful
-    /// reap) so the sweep trigger re-launches on the next change. `claude --agent` does not
-    /// self-exit, so this report — not a dead tmux — is what signals the clean finish.
-    pub fn is_slept(&self) -> bool {
-        matches!(self, CogState::Sailor(SailorState::Sleeping))
+    /// A cold cog's clean finish — a sailor swept (`sleeping`), the lookout `reviewed` — now
+    /// idling. The self-reported counterpart to a Dead process: reconcile stands it down (graceful
+    /// reap) so its trigger re-launches on the next change. `claude --agent` does not self-exit,
+    /// so this report — not a dead tmux — is what signals the clean finish.
+    pub fn is_done(&self) -> bool {
+        matches!(self, CogState::Sailor(SailorState::Sleeping) | CogState::Lookout(LookoutState::Reviewed))
     }
     /// A DELIBERATE non-terminal hold (escalation drain / awaiting the operator's merge / park).
     /// reconcile must not heal or stand down a cog reporting this even when its liveness is Dead —
