@@ -27,7 +27,7 @@ path = "main"
 [forge]
 kind       = "github"
 project    = "duclos-cavalcanti/armada-test"
-auto_merge = false   # the sailor lands each PR to clean, then waits for the operator to merge
+auto_merge = false   # fleetd never arms: the sailor lands each PR to clean, the operator merges
 
 # --- tracker: ticket files in tickets/ ---
 [tracker]

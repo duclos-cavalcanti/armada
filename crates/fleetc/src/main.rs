@@ -29,7 +29,7 @@ fn socket() -> String {
 /// fleetc's usage: a header, then one line per verb form (`fleetc <verb> …`).
 const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project: the cwd's, or -C's — nearest folder with a fleet.toml; in a cog, an omitted ticket / --iid / --convoy is its own)\n  \
      fleetc status   --cog <worker|sailor|hand|lookout> [--ticket <KEY-N>] --state <state> [--last-action <text>]\n  \
-     fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--hold] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
+     fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
      fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
      fleetc convoy   open <KEY> [--title <text>] | close [<KEY>]\n  \
      fleetc convoy   <add|remove> <KEY> <KEY-N>   (a ticket joins the convoy — its only one — or an added one leaves)\n  \
@@ -165,10 +165,10 @@ fn status(args: &[String]) -> Result<()> {
 }
 
 /// `fleetc dispatch` — submit an order intent (the dispatch packet) to the queue, for
-/// reconcile to spawn. Defaults: a worker, and the deployment's `[forge] auto_merge`.
+/// reconcile to spawn. Defaults: a worker.
 fn dispatch(args: &[String]) -> Result<()> {
     let (mut ticket, mut ac, mut fork_from, mut park_at, mut worktree) = (None, None, None, None, None);
-    let (mut auto_impl, mut auto_merge) = (true, None);
+    let mut auto_impl = true;
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
@@ -179,7 +179,6 @@ fn dispatch(args: &[String]) -> Result<()> {
             "--worktree" => worktree = Some(take()?),
             "--park-at" => park_at = Some(take()?),
             "--hand" => auto_impl = false,   // operator-driven, not a worker
-            "--hold" => auto_merge = Some(false), // the sailor waits for the operator to merge
             other => bail!("unknown flag: {other}"),
         }
     }
@@ -195,7 +194,6 @@ fn dispatch(args: &[String]) -> Result<()> {
     submit("/dispatch", &wire::DispatchOrder {
         ticket,
         auto_impl,
-        auto_merge,
         fork_from,
         ac_summary,
         park_at,

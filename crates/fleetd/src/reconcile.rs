@@ -1184,7 +1184,6 @@ mod tests {
             &Order {
                 ticket: TicketKey(key.into()),
                 auto_impl,
-                auto_merge: true,
                 fork_from: "origin/master".into(),
                 ac_summary: "do it".into(),
                 park_at: None,
@@ -2581,13 +2580,13 @@ mod tests {
     }
 
     #[test]
-    fn a_sailor_awaiting_the_operators_merge_is_left_alone() {
-        // `awaiting_merge` is a deliberate hold (the order says the operator merges): even Dead, it
-        // is neither stood down nor re-launched over — the live-sailor lock holds the slot.
+    fn an_escalated_sailor_is_left_alone() {
+        // `escalated` is a deliberate hold (it waits for the operator): even Dead, it is neither
+        // stood down nor re-launched over — the live-sailor lock holds the slot.
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         let s = live_cog(&db, CrewKind::Sailor, "PROJ-1", Liveness::Dead);
-        report(&db, &s, CogState::Sailor(SailorState::AwaitingMerge));
+        report(&db, &s, CogState::Sailor(SailorState::Escalated));
         assert!(plan(&db, &[s], true).unwrap().is_empty());
     }
 

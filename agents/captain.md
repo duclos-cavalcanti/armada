@@ -72,9 +72,7 @@ can't — a grooming glance — then act on it:
      The child's MR targets the parent branch; fleetd declares the block, the sailor
      keeps it rebased on the parent, and it unwinds onto the default branch when the parent merges —
      all automatic.
-   - Defaults are the normal path (a worker + the deployment's merge policy); your
-     policy calls are `--hand` (operator-driven, no worker) and `--hold` (the sailor
-     lands the MR to clean, then waits for the operator to merge it).
+   - A worker is the default; your one policy call is `--hand` (operator-driven, no worker).
 3. **Too ill-formed to build** (no clear ACs, ambiguous scope) → **hold it**, don't
    dispatch guesswork: `fleetc hold <TICKET> --reason "<what's missing>"`. The reason
    shows wherever the ticket does (`fleetc ticket`, `fleetc context`, the dashboard),

@@ -20,8 +20,6 @@ use std::sync::mpsc::Sender;
 pub struct Deployment {
     /// The resolved `[project] path`.
     pub project: String,
-    /// `[forge] auto_merge`.
-    pub auto_merge: bool,
     /// origin's default branch (`origin/main`), read from the project checkout at boot.
     pub default_branch: String,
     /// The forge can stack MRs (`Forge::stacks`). Without it a dispatch must fork the default branch.
@@ -217,7 +215,6 @@ fn handle_dispatch(request: &str, cmds: &Sender<Command>, deployment: &Deploymen
     let order = Order {
         ticket,
         auto_impl: dto.auto_impl,
-        auto_merge: dto.auto_merge.unwrap_or(deployment.auto_merge),
         fork_from,
         ac_summary: dto.ac_summary,
         park_at: dto.park_at,
@@ -887,7 +884,7 @@ mod tests {
         let (sock2, stacks) = (sock.clone(), tag != "nostack");
         std::thread::spawn(move || {
             let deployment =
-                Deployment { project: "/wt/project".into(), auto_merge: true, default_branch: "origin/main".into(), stacks };
+                Deployment { project: "/wt/project".into(), default_branch: "origin/main".into(), stacks };
             let _ = serve(&sock2, snapshot, cmds, deployment);
         });
         for _ in 0..100 {
@@ -1005,12 +1002,12 @@ mod tests {
     fn post_dispatch_relays_the_order_to_the_writer() {
         let snapshot: Snapshot = Arc::new(Mutex::new(Vec::new()));
         let (tx, rx) = std::sync::mpsc::channel::<Command>();
-        let (seen_tx, seen) = std::sync::mpsc::channel::<(bool, String)>(); // each relayed order's (auto_merge, fork_from)
+        let (seen_tx, seen) = std::sync::mpsc::channel::<String>(); // each relayed order's fork_from
         std::thread::spawn(move || {
             for cmd in rx {
                 match cmd {
                     Command::Dispatch { order, reply } => {
-                        let _ = seen_tx.send((order.auto_merge, order.fork_from));
+                        let _ = seen_tx.send(order.fork_from);
                         let _ = reply.send(Ok(()));
                     }
                     Command::RecordStatus { reply, .. }
@@ -1051,16 +1048,16 @@ mod tests {
         });
         let sock = spawn_server(snapshot, tx, "dispatch");
 
-        let body = r#"{"ticket":"PROJ-1","auto_impl":true,"auto_merge":false,"fork_from":"origin/master","ac_summary":"do it","park_at":null}"#;
+        let body = r#"{"ticket":"PROJ-1","auto_impl":true,"fork_from":"origin/master","ac_summary":"do it","park_at":null}"#;
         let req = format!("POST /dispatch HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len());
         assert!(roundtrip(&sock, req.as_bytes()).contains("200 OK"));
-        assert_eq!(seen.recv().unwrap(), (false, "origin/master".into()), "explicit values are kept");
+        assert_eq!(seen.recv().unwrap(), "origin/master", "an explicit fork is kept");
 
-        // No auto_merge / fork_from on the wire → the deployment defaults.
+        // No fork_from on the wire → the deployment's default branch.
         let body = r#"{"ticket":"PROJ-1","auto_impl":true,"ac_summary":"do it","park_at":null}"#;
         let req = format!("POST /dispatch HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len());
         assert!(roundtrip(&sock, req.as_bytes()).contains("200 OK"));
-        assert_eq!(seen.recv().unwrap(), (true, "origin/main".into()), "unset values inherit the deployment's");
+        assert_eq!(seen.recv().unwrap(), "origin/main", "an unset fork inherits the deployment's");
 
         // Malformed JSON is rejected at the edge.
         let req = "POST /dispatch HTTP/1.1\r\nContent-Length: 3\r\n\r\n{ x";

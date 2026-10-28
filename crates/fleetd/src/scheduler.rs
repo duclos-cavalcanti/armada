@@ -257,7 +257,7 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let _ = reply.send(res);
         }
         Command::Arm { ticket, reply } => {
-            let _ = reply.send(arm(ledger, forge, &ticket).map_err(|e| format!("{e:#}")));
+            let _ = reply.send(arm(ledger, forge, &ticket, cfg.forge.auto_merge).map_err(|e| format!("{e:#}")));
         }
         Command::GetTicket { ticket, reply } => {
             let _ = reply.send(read_ticket(ledger, tracker, &ticket).map_err(|e| format!("{e:#}")));
@@ -499,7 +499,7 @@ fn waiting_on(ledger: &Ledger, blockers: &[TicketKey]) -> Result<Vec<TicketKey>>
 /// Arm a ticket's open MR to merge once its gates pass. Refused while the ticket is held or has an
 /// open blocker: the fleet's gates must hold at the moment the arm happens, not only when the sailor
 /// launched (a hold or a blocker can land mid-sweep).
-fn arm(ledger: &Ledger, forge: &dyn Forge, key: &TicketKey) -> Result<()> {
+fn arm(ledger: &Ledger, forge: &dyn Forge, key: &TicketKey, merges: bool) -> Result<()> {
     let ticket = TicketRepo::get(ledger, key)?.ok_or_else(|| anyhow!("{}: not on the board", key.0))?;
     anyhow::ensure!(!ticket.held, "{} is held — not arming (fleetc unhold it first)", key.0);
     let open = reconcile::open_blockers(ledger, &ticket.blocked_by)?;
@@ -507,6 +507,7 @@ fn arm(ledger: &Ledger, forge: &dyn Forge, key: &TicketKey) -> Result<()> {
         let keys: Vec<&str> = open.iter().map(|b| b.0.as_str()).collect();
         anyhow::bail!("{} is blocked by {} — not arming until it lands", key.0, keys.join(", "));
     }
+    anyhow::ensure!(merges, "{} is ready — this project merges by hand ([forge] auto_merge = false)", key.0);
     let ship = ledger
         .armada()?
         .into_iter()
@@ -527,7 +528,7 @@ fn refresh(ledger: &Ledger, forge: &dyn Forge, ship: &Ship) {
 
 /// Hold or release a ticket. An armed MR merges on the forge's own say, past every fleet gate, so a
 /// hold also acts on the ticket's open MR: disarm it, clear its `swept` (the first pass after
-/// release re-sweeps: a fresh sailor re-arms, or reports `awaiting_merge`), and mark it draft — a
+/// release re-sweeps: a fresh sailor re-arms), and mark it draft — a
 /// draft can't merge even if re-armed. Release marks it ready. Each forge step that fails is
 /// reported with what already happened, so the caller can react (e.g. a forge without drafts).
 fn set_held(ledger: &Ledger, forge: &dyn Forge, ticket: &TicketKey, held: bool, reason: Option<&str>) -> Result<()> {
@@ -1211,7 +1212,6 @@ mod tests {
         OrderRepo::dispatch(&db, &Order {
             ticket: key.clone(),
             auto_impl: true,
-            auto_merge: true,
             fork_from: "origin/chore/PROJ-1-parent".into(), // a stacked child
             ac_summary: "ac".into(),
             park_at: None,
@@ -1266,7 +1266,7 @@ mod tests {
         ShipRepo::upsert(&db, &ship).unwrap();
         let (forge, key) = (FakeForge::default(), TicketKey("PROJ-2".into()));
 
-        let e = arm(&db, &forge, &key).unwrap_err().to_string();
+        let e = arm(&db, &forge, &key, true).unwrap_err().to_string();
         assert!(e.contains("blocked by PROJ-1 —"), "only the open blocker, not the landed PROJ-3: {e}");
         let open = |db: &Ledger| build_packet(db, &key).unwrap().open_blockers;
         assert_eq!(open(&db), vec![TicketKey("PROJ-1".into())], "the packet says what still gates the merge");
@@ -1274,10 +1274,12 @@ mod tests {
         sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::Done)]), "now").unwrap(); // the blocker lands
         assert!(open(&db).is_empty(), "every edge stays in ticket.blocked_by; none is open");
         TicketRepo::set_held(&db, &key, true, Some("late review"), "t").unwrap();
-        assert!(arm(&db, &forge, &key).unwrap_err().to_string().contains("is held"));
+        assert!(arm(&db, &forge, &key, true).unwrap_err().to_string().contains("is held"));
 
         TicketRepo::set_held(&db, &key, false, None, "t").unwrap();
-        arm(&db, &forge, &key).unwrap();
+        let e = arm(&db, &forge, &key, false).unwrap_err().to_string();
+        assert!(e.contains("merges by hand"), "{e}");
+        arm(&db, &forge, &key, true).unwrap();
         assert_eq!(*forge.armed.borrow(), vec![7], "armed only once clear");
         let snap = ShipRepo::snapshot(&db, &db.armada().unwrap()[0].id).unwrap().unwrap();
         assert!(snap.armed, "the ledger shows the arm at once, not at the next sync");
@@ -1580,7 +1582,6 @@ mod tests {
             &Order {
                 ticket: TicketKey("PROJ-1".into()),
                 auto_impl: true,
-                auto_merge: true,
                 fork_from: "origin/master".into(),
                 ac_summary: "do it".into(),
                 park_at: None,

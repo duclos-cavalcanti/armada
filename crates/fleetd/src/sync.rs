@@ -357,7 +357,6 @@ mod tests {
         db.dispatch(&Order {
             ticket: TicketKey("PROJ-3".into()),
             auto_impl: true,
-            auto_merge: true,
             fork_from: "origin/main".into(),
             ac_summary: "do it".into(),
             park_at: None,
@@ -385,7 +384,6 @@ mod tests {
         db.dispatch(&Order {
             ticket: TicketKey("PROJ-2".into()),
             auto_impl: true,
-            auto_merge: true,
             fork_from: "origin/main".into(),
             ac_summary: "do it".into(),
             park_at: None,

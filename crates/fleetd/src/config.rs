@@ -61,8 +61,9 @@ pub struct ForgeConfig {
     pub kind: Option<ForgeKind>,
     /// The forge's project: GitLab's numeric project id, or GitHub's `owner/repo`.
     pub project: String,
-    /// The dispatch default: true = the sailor arms auto-merge; false = it lands the MR to clean,
-    /// then reports `awaiting_merge` and waits for the operator. `fleetc dispatch --hold` forces false.
+    /// Whether the fleet merges: true = `fleetc arm` sets the MR to merge once its gates pass;
+    /// false = arm refuses and the operator merges on the forge (e.g. a GitHub repo where arming
+    /// without required checks merges at once).
     pub auto_merge: bool,
 }
 
@@ -259,7 +260,7 @@ mod tests {
     #[test]
     fn forge_auto_merge_defaults_on_and_can_be_turned_off() {
         let c: Config = toml::from_str(&format!("{FORGE}{TRACKER}")).unwrap();
-        assert!(c.forge.auto_merge, "the sailor arms auto-merge unless the deployment says otherwise");
+        assert!(c.forge.auto_merge, "the fleet arms unless the deployment says otherwise");
         let c: Config = toml::from_str(&format!("{FORGE}auto_merge = false\n{TRACKER}")).unwrap();
         assert!(!c.forge.auto_merge);
     }

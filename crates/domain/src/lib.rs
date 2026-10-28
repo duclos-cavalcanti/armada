@@ -100,7 +100,7 @@ pub enum WorkerState { Started, Implementing, Concluded, Escalated, Anchored }
 /// A sailor's lifecycle while it sails the ship into harbor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SailorState { Started, Finishing, Sleeping, InDraft, Merged, Closed, Escalated, AwaitingMerge, Anchored }
+pub enum SailorState { Started, Finishing, Sleeping, InDraft, Merged, Closed, Escalated, Anchored }
 
 /// A hand's lifecycle (ad-hoc, operator-driven).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -216,7 +216,7 @@ pub struct Report {
 }
 
 /// The work order (PLAN §3.1 `tickets` = the board). Identity + edges + a cached
-/// tracker mirror. Dispatch policy (auto_impl/auto_merge) lives on the `Order`.
+/// tracker mirror. Dispatch policy (auto_impl) lives on the `Order`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Ticket {
     pub key: TicketKey,
@@ -558,12 +558,11 @@ pub struct Event {
 }
 
 /// A dispatch order — the queue (operational intent). `launched` is derived
-/// (a session exists); `auto_impl` defaults true, `auto_merge` to the deployment's `[forge] auto_merge`.
+/// (a session exists); `auto_impl` defaults true.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Order {
     pub ticket: TicketKey,
     pub auto_impl: bool,   // true = worker · false = hand
-    pub auto_merge: bool, // true = the sailor arms auto-merge · false = it waits for the operator to merge
     pub fork_from: String,
     pub ac_summary: String,
     pub park_at: Option<String>,
@@ -631,7 +630,6 @@ impl SailorState {
             SailorState::Merged => "merged",
             SailorState::Closed => "closed",
             SailorState::Escalated => "escalated",
-            SailorState::AwaitingMerge => "awaiting_merge",
             SailorState::Anchored => "anchored",
         }
     }
@@ -644,7 +642,6 @@ impl SailorState {
             "merged" => Some(Self::Merged),
             "closed" => Some(Self::Closed),
             "escalated" => Some(Self::Escalated),
-            "awaiting_merge" => Some(Self::AwaitingMerge),
             "anchored" => Some(Self::Anchored),
             _ => None,
         }
@@ -729,14 +726,14 @@ impl CogState {
     pub fn is_done(&self) -> bool {
         matches!(self, CogState::Sailor(SailorState::Sleeping) | CogState::Lookout(LookoutState::Reviewed))
     }
-    /// A DELIBERATE non-terminal hold (escalation drain / awaiting the operator's merge / park).
+    /// A DELIBERATE non-terminal hold (an escalation, an anchor).
     /// reconcile must not heal or stand down a cog reporting this even when its liveness is Dead —
     /// it stopped on purpose.
     pub fn is_paused(&self) -> bool {
         matches!(
             self,
             CogState::Worker(WorkerState::Escalated | WorkerState::Anchored)
-                | CogState::Sailor(SailorState::Escalated | SailorState::AwaitingMerge | SailorState::Anchored)
+                | CogState::Sailor(SailorState::Escalated | SailorState::Anchored)
                 | CogState::Hand(HandState::Anchored)
         )
     }

@@ -190,7 +190,6 @@ fn boot(project: &wire::Project, cfg: config::Config) -> Result<()> {
     let socket = project.socket();
     let deployment = server::Deployment {
         project: cfg.project.path.clone(),
-        auto_merge: cfg.forge.auto_merge,
         default_branch: git::GitWorktrees::new(&cfg.project.path).default_branch()?, // preflight checked it
         stacks: forge.stacks(),
     };

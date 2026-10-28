@@ -64,7 +64,6 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 ("Ticket", 12),
                 ("Crew", 7),
                 ("Phase", 15),
-                ("Merge", 7),
                 ("Status", 12),
                 ("Age", 6),
                 ("Waiting on", 0),
@@ -162,7 +161,6 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
 
 fn order_row(o: &OrderRow) -> Line<'static> {
     let crew = if o.order.auto_impl { "worker" } else { "hand" };
-    let merge = if o.order.auto_merge { "auto" } else { "manual" };
     let status = o.status.map(|s| s.as_str().to_string()).unwrap_or_else(|| "—".into());
     let mut waiting = Vec::new();
     if let Some(reason) = &o.held {
@@ -182,7 +180,6 @@ fn order_row(o: &OrderRow) -> Line<'static> {
         (o.order.ticket.0.clone(), 12, Style::default()),
         (crew.into(), 7, Style::default()),
         (o.phase.as_str().into(), 15, phase_style),
-        (merge.into(), 7, Style::default()),
         (status, 12, Style::default()),
         (fmt_age(o.age_secs), 6, dim()),
         (waiting, 0, waiting_style),
@@ -492,7 +489,6 @@ fn state_style(state: &str) -> Style {
         "escalated" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         "anchored" => Style::default().fg(Color::Magenta),
         "concluded" | "merged" => green(),
-        "awaiting_merge" => Style::default().fg(Color::Cyan),
         "sleeping" | "·" => dim(),
         _ => Style::default(),
     }
