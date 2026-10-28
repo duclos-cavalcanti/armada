@@ -10,9 +10,6 @@
 
 .DEFAULT_GOAL := help
 
-# fleetc onto PATH, built in the workspace's own target/ (shared cache: unchanged, it's instant).
-# `run` reinstalls it too, so the fleetc cogs (and you) call always matches the fleetd just built.
-INSTALL_FLEETC := cargo install -q --path crates/fleetc --force --target-dir target
 .PHONY: help install uninstall .project preflight run stop dashboard admiral export
 
 help:                            ## Show this help
@@ -20,7 +17,7 @@ help:                            ## Show this help
 
 install:                         ## Install the kit (Brewfile + stow) and fleetc onto PATH
 	./install.sh
-	$(INSTALL_FLEETC)
+	cargo install -q --path crates/fleetc --force --target-dir target
 
 uninstall:                       ## Uninstall the kit and remove fleetc
 	-cargo uninstall fleetc
@@ -32,10 +29,12 @@ uninstall:                       ## Uninstall the kit and remove fleetc
 preflight: .project              ## Check the project's setup: runtime state, checkout, forge + tracker CLIs, tmux + claude
 	cargo run -q -p fleetd -- -C projects/$(FLEET_PROJECT) preflight
 
-run: .project                    ## Build fleetd + reinstall fleetc, start fleetd in the background (unless it's up), open its dashboard
+run: .project                    ## Build fleetd + reinstall fleetc, (re)start fleetd in the background, open its dashboard
 	@pids=$$(pgrep -x fleetd | paste -sd, -); if [ -n "$$pids" ] && ps -o args= -p "$$pids" | grep -v '/fleetd -C projects/$(FLEET_PROJECT)$$'; then echo "↑ another project's fleetd is up — make stop FLEET_PROJECT=<it> first"; exit 1; fi
 	@cargo build -q -p fleetd
-	@$(INSTALL_FLEETC)
+	@cargo install -q --path crates/fleetc --force --target-dir target
+	@$(MAKE) --no-print-directory stop
+	@while pgrep -f '/fleetd -C projects/$(FLEET_PROJECT)$$' >/dev/null; do sleep 0.2; done
 	@nohup target/debug/fleetd -C projects/$(FLEET_PROJECT) </dev/null >/dev/null 2>&1 &
 	@$(MAKE) --no-print-directory dashboard
 
