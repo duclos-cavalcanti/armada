@@ -233,7 +233,7 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
         }
     }
 
-    // LOOKOUT — one SINGLETON cog reviewing ALLIED ships (MRs we don't own: `ticket IS NULL`). Stand a
+    // LOOKOUT — one SINGLETON cog reviewing ALLIED ships (MRs we don't own: no fleet order). Stand a
     // finished lookout down (it reported `reviewed`, or died); then, if none is live, launch it on
     // the next unreviewed ally. fleetd picks the iid — the first allied OPEN ship whose code changed
     // since its last review (head_sha ≠ reviewed) — and marks it reviewed at dispatch.
@@ -257,7 +257,13 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
     // source) is skipped — no relaunch while the anchor stands.
     if !live_lookout && !LookoutRepo::anchored(ledger)? {
         for ship in ledger.armada()? {
-            if ship.ticket.is_some() || ship.ended_at.is_some() {
+            // Ours = the fleet dispatched its ticket (an order). A peer's MR carries a ticket key too,
+            // so the key alone says nothing about who owns it.
+            let ours = match &ship.ticket {
+                Some(t) => OrderRepo::get(ledger, t)?.is_some(),
+                None => false,
+            };
+            if ours || ship.ended_at.is_some() {
                 continue; // ours, or closed — the lookout reviews only allies
             }
             let unreviewed = match ShipRepo::snapshot(ledger, &ship.id)? {
@@ -1255,7 +1261,7 @@ mod tests {
         db.set_reviewed(&s.id, &head).unwrap();
     }
 
-    /// An ALLIED ship (an MR we don't own — `ticket = None`) + its snapshot, for the lookout tests.
+    /// An ALLIED ship (an MR we don't own — no order; here no ticket either) + its snapshot, for the lookout tests.
     fn allied_ship(db: &Ledger, iid: i64, state: ShipState) {
         let id = ShipRepo::upsert(
             db,
@@ -2064,7 +2070,7 @@ mod tests {
         let d2 = db();
         ticket(&d2, "PROJ-2", TicketStatus::InQa, false, vec![]); // no order at all
         ship(&d2, 11, "PROJ-2", ShipState::Open);
-        assert!(plan(&d2, &[], true).unwrap().is_empty(), "no order → no sailor");
+        assert_eq!(plan(&d2, &[], true).unwrap(), vec![Action::LaunchLookout { iid: 11 }], "no order → no sailor; an ally's to review");
     }
 
     #[test]
@@ -2249,16 +2255,16 @@ mod tests {
     }
 
     #[test]
-    fn the_lookout_ignores_our_own_ships() {
-        // Our ships (ticket = Some) are the sailor's; the lookout reviews only allies.
+    fn the_lookout_ignores_our_own_ships_but_reviews_a_peers_ticketed_one() {
+        // Ours = dispatched (an order) — the sailor's. A peer's MR names a ticket too, but no order:
+        // an ally, so the lookout reviews it.
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         ship(&db, 10, "PROJ-1", ShipState::Open);
-        let actions = plan(&db, &[], true).unwrap();
-        assert!(
-            !actions.iter().any(|a| matches!(a, Action::LaunchLookout { .. })),
-            "no lookout on our own ship"
-        );
+        let lookout = |db: &Ledger| plan(db, &[], true).unwrap().into_iter().find(|a| matches!(a, Action::LaunchLookout { .. }));
+        assert_eq!(lookout(&db), Some(Action::LaunchLookout { iid: 10 }), "a peer's ticketed MR is an ally");
+        order(&db, "PROJ-1", true);
+        assert_eq!(lookout(&db), None, "no lookout on our own ship");
     }
 
     #[test]
