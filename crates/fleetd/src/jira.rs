@@ -65,6 +65,12 @@ impl JiraTracker {
         Ok(())
     }
 
+    /// One issue by key — `jira issue view --raw`, a direct fetch. Never a JQL search: Jira's search
+    /// index lags a create by seconds, so a just-filed ticket isn't found by `key = X` yet.
+    fn view(&self, key: &TicketKey) -> Result<serde_json::Value> {
+        Ok(serde_json::from_str(&self.jira(&["issue", "view", &key.0, "--raw"])?)?)
+    }
+
     fn add_claim_label(&self, key: &TicketKey) -> Result<()> {
         match &self.claim_label {
             Some(label) => self.label(key, label, true),
@@ -139,10 +145,7 @@ impl Tracker for JiraTracker {
     }
 
     fn get(&self, key: &TicketKey) -> Result<TrackerTicket> {
-        parse_jira_issues(&self.raw_page(&format!("key = {}", key.0), 0)?)?
-            .into_iter()
-            .next()
-            .context("ticket not found")
+        issue_to_ticket(&self.view(key)?).with_context(|| format!("jira issue view {}: unexpected shape", key.0))
     }
 
     fn comment(&self, key: &TicketKey, body: &str) -> Result<()> {
@@ -192,8 +195,9 @@ impl Tracker for JiraTracker {
     }
 
     fn parent_of(&self, key: &TicketKey) -> Result<Option<TicketKey>> {
-        // The issue's `fields.parent.key` from the --raw JSON (absent for non-sub-tasks).
-        Ok(parse_parent(&self.raw_page(&format!("key = {}", key.0), 0)?))
+        // The issue's `fields.parent.key` (absent for non-sub-tasks).
+        let parent = self.view(key)?.pointer("/fields/parent/key").and_then(|k| k.as_str()).map(String::from);
+        Ok(parent.and_then(|k| TicketKey::parse(&k).ok()))
     }
 
     fn subtasks(&self, parent: &TicketKey) -> Result<Vec<TicketStatus>> {
@@ -202,8 +206,7 @@ impl Tracker for JiraTracker {
     }
 
     fn read(&self, key: &TicketKey) -> Result<TicketDetail> {
-        let issue: serde_json::Value = serde_json::from_str(&self.jira(&["issue", "view", &key.0, "--raw"])?)?;
-        detail_from_issue(&issue).with_context(|| format!("jira issue view {}: unexpected shape", key.0))
+        detail_from_issue(&self.view(key)?).with_context(|| format!("jira issue view {}: unexpected shape", key.0))
     }
 
     fn create(&self, d: &TicketDraft) -> Result<TicketKey> {
@@ -415,14 +418,6 @@ fn marked(text: &str, node: &serde_json::Value) -> String {
     }
 }
 
-/// The first issue's `fields.parent.key` from a `--raw` page, if present.
-fn parse_parent(json: &str) -> Option<TicketKey> {
-    let v: serde_json::Value = serde_json::from_str(json).ok()?;
-    let issues = v.get("issues").and_then(|i| i.as_array())?;
-    let key = issues.first()?.get("fields")?.get("parent")?.get("key")?.as_str()?;
-    TicketKey::parse(key).ok()
-}
-
 /// Parse one page → (raw issue count, mapped tickets). The raw count drives
 /// pagination; unknown-status issues are dropped from the mapped set.
 fn parse_page(json: &str) -> Result<(usize, Vec<TrackerTicket>)> {
@@ -433,10 +428,6 @@ fn parse_page(json: &str) -> Result<(usize, Vec<TrackerTicket>)> {
         .or_else(|| v.as_array())
         .context("expected {issues:[...]} (or an array) from jira")?;
     Ok((issues.len(), issues.iter().filter_map(issue_to_ticket).collect()))
-}
-
-fn parse_jira_issues(json: &str) -> Result<Vec<TrackerTicket>> {
-    Ok(parse_page(json)?.1)
 }
 
 fn issue_to_ticket(i: &serde_json::Value) -> Option<TrackerTicket> {
@@ -472,9 +463,11 @@ fn issue_to_ticket(i: &serde_json::Value) -> Option<TrackerTicket> {
 /// A ticket's blockers from its `issueLinks`: the inward side of a "Blocks" link — "X is blocked by
 /// Y" ⇒ a `Blocks`-type link on X carrying `inwardIssue` = Y. The outward "blocks" side is the
 /// reverse edge (carried on the blocker, not here); `Relates` / "Work item split" / etc. are ignored.
-/// NB: jira-cli's `--raw` camelCases the field — `issueLinks`, not `issuelinks`.
+/// NB: jira-cli spells the field two ways — `issue list --raw` says `issueLinks`, `issue view
+/// --raw` (Jira's own REST shape) says `issuelinks`.
 fn parse_blocked_by(fields: &serde_json::Value) -> Vec<TicketKey> {
-    let Some(links) = fields.get("issueLinks").and_then(|l| l.as_array()) else {
+    let links = fields.get("issueLinks").or_else(|| fields.get("issuelinks"));
+    let Some(links) = links.and_then(|l| l.as_array()) else {
         return Vec::new();
     };
     links
@@ -522,6 +515,7 @@ mod tests {
             "fields": {
                 "summary": "Add neg", "status": {"name": "To Do"}, "issuetype": {"name": "Story"},
                 "labels": ["fleet-proposed"],
+                "issuelinks": [{"type": {"name": "Blocks"}, "inwardIssue": {"key": "PROJ-3"}}],
                 "description": {"type": "doc", "content": [
                     {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Outcome"}]},
                     {"type": "paragraph", "content": [
@@ -553,6 +547,7 @@ mod tests {
         assert_eq!(capitalized("story"), "Story");
         assert_eq!(d.location, "https://example.atlassian.net/browse/PROJ-7");
         assert_eq!(d.labels, vec!["fleet-proposed".to_string()]);
+        assert_eq!(d.ticket.blocked_by, vec![TicketKey("PROJ-3".into())], "view --raw spells it `issuelinks`");
     }
 
     #[test]
@@ -573,7 +568,7 @@ mod tests {
 
     #[test]
     fn parses_issues_and_maps_status() {
-        let ts = parse_jira_issues(SAMPLE).unwrap();
+        let ts = parse_page(SAMPLE).unwrap().1;
         assert_eq!(ts.len(), 2); // "Backlog" is unknown → dropped
         assert_eq!(ts[0].key, TicketKey("PROJ-6192".into()));
         assert_eq!(ts[0].status, TicketStatus::InProgress);
@@ -595,7 +590,7 @@ mod tests {
 
     #[test]
     fn maps_convoy_from_parent_and_blocked_by_from_inward_blocks_links() {
-        let ts = parse_jira_issues(LINKED).unwrap();
+        let ts = parse_page(LINKED).unwrap().1;
         let blocked = ts.iter().find(|t| t.key == TicketKey("PROJ-4160".into())).unwrap();
         assert_eq!(blocked.convoy, Some(ConvoyKey("PROJ-280".into())), "convoy = the epic (parent)");
         assert_eq!(blocked.blocked_by, vec![TicketKey("PROJ-6412".into())], "inward Blocks link = a blocker");
