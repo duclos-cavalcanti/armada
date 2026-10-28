@@ -33,3 +33,13 @@ Accepted edge cases: understood, not fixed, each with its workaround.
   writes as standalone, variable-free commands. Keep new prose to that shape.
   *Workaround:* for a cog already stuck, answer it in its pane ("go, arm it"): your message is the
   explicit intent the classifier accepts.
+
+- **`fleetc`'s `import_restores_a_snapshot_and_drops_the_stale_wal` test is flaky.**
+  *Scenario:* it builds a throwaway project under the temp dir and binds `.fleet/fleetd.sock`
+  there. Two failures seen: (1) with a long `TMPDIR` (a sandboxed agent's), the socket path
+  passes macOS's 104-byte limit and the bind fails every time ("path must be shorter than
+  SUN_LEN"); (2) in some `cargo test --workspace` runs, `import_into` errors intermittently.
+  It passes when rerun or run alone (`cargo test -p fleetc`); (2)'s cause isn't pinned down.
+  *Workaround:* rerun, or run with `TMPDIR=/tmp`.
+  *Fix if it bites:* root the test project under a short path (e.g. `/tmp/fi-<pid>`), and print
+  `import_into`'s error in the assertion so (2) names itself.
