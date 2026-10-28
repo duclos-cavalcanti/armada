@@ -22,7 +22,7 @@
 #   ships/list         $1=iid  $2=ticket  $3=pilot  $4=url
 #   board/tickets      $1=key  $2=status  $3=convoy
 #   convoys            $1=key  $2=title  $3=captain_tmux     (Fleet + Board)
-#   proposals          $1=kind(proposal|held)  $2=ref(proposal id | ticket key)   (Fleet + Board)
+#   proposals          $1=kind(proposal|anchored)  $2=ref(proposal id | ticket key)   (Fleet + Board)
 #
 # Forge- and tracker-neutral: links come from the fleet itself (`fleetc -C "$FLEET_PROJECT_DIR"`,
 # the project folder the dashboard passes in), never from hardcoded hosts.
@@ -65,13 +65,13 @@ main() {
         convoys/enter) launch_tmux "${3:-}" "convoy ${1:-} has no captain" ;;
         convoys/t) launch_ticket "${1:-}" ;;
 
-        # ---- Proposals (Fleet + Board): proposals + held convoy tickets ----
-        # enter reads a proposal; a/d settle it; t opens a held ticket, u unholds it.
-        proposals/enter) [ "${1:-}" = proposal ] || fail "a held ticket: t opens it, u unholds it"; read_proposal "${2:-}" ;;
-        proposals/t) [ "${1:-}" = held ] || fail "a proposal isn't a ticket yet: enter reads it"; launch_ticket "${2:-}" ;;
+        # ---- Proposals (Fleet + Board): proposals + anchored convoy tickets ----
+        # enter reads a proposal; a/d settle it; t opens an anchored ticket, w weighs it.
+        proposals/enter) [ "${1:-}" = proposal ] || fail "an anchored ticket: t opens it, w weighs it"; read_proposal "${2:-}" ;;
+        proposals/t) [ "${1:-}" = anchored ] || fail "a proposal isn't a ticket yet: enter reads it"; launch_ticket "${2:-}" ;;
         proposals/a) [ "${1:-}" = proposal ] || fail "only a proposal is accepted"; settle_proposal accept "${2:-}" ;;
         proposals/d) [ "${1:-}" = proposal ] || fail "only a proposal is dropped"; settle_proposal drop "${2:-}" ;;
-        proposals/u) [ "${1:-}" = held ] || fail "only a held ticket is unheld"; confirm_fleet "unhold ${2:-}?" unhold "${2:-}" ;;
+        proposals/w) [ "${1:-}" = anchored ] || fail "only an anchored ticket is weighed"; confirm_fleet "weigh ${2:-}?" weigh "${2:-}" ;;
 
         # ---- Fleet · dispatched / impl / merge (the line, by phase) --------
         fleet/dispatched/t) launch_ticket "${1:-}" ;;

@@ -67,7 +67,7 @@ impl TabId {
 }
 
 /// Every pane on every tab. Fleet reads the line top-down: the open convoys → what waits on the
-/// operator (proposals, held convoy tickets) → dispatched orders → builders at work (impl phase)
+/// operator (proposals, anchored convoy tickets) → dispatched orders → builders at work (impl phase)
 /// → ships being landed (merge phase).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Pane {
@@ -183,7 +183,7 @@ impl App {
     ///   ships/list         iid  ticket  pilot  url
     ///   board/tickets      key  status  convoy
     ///   convoys            key  title  captain_tmux
-    ///   proposals          kind(proposal|held)  ref(proposal id | ticket key)
+    ///   proposals          kind(proposal|anchored)  ref(proposal id | ticket key)
     fn focused_action(&self) -> Option<(String, Vec<String>)> {
         let pane = self.pane();
         let i = self.cursor(pane);
@@ -230,7 +230,7 @@ impl App {
             }),
             Pane::Proposals => match f.proposals.get(i) {
                 Some(p) => Some(vec!["proposal".into(), p.id.0.to_string()]),
-                None => f.held.get(i - f.proposals.len()).map(|t| vec!["held".into(), t.key.0.clone()]),
+                None => f.held.get(i - f.proposals.len()).map(|t| vec!["anchored".into(), t.key.0.clone()]),
             },
             Pane::Log => None, // no row actions; `y` yanks
         }?;

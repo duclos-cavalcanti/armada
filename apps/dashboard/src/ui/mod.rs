@@ -114,7 +114,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
         ),
         Pane::Proposals => (
             format!(
-                " Proposals · {} open · {} held · enter read · a accept · d drop · t ticket · u unhold ",
+                " Proposals · {} open · {} anchored · enter read · a accept · d drop · t ticket · w weigh ",
                 f.proposals.len(),
                 f.held.len()
             ),
@@ -164,7 +164,7 @@ fn order_row(o: &OrderRow) -> Line<'static> {
     let status = o.status.map(|s| s.as_str().to_string()).unwrap_or_else(|| "—".into());
     let mut waiting = Vec::new();
     if let Some(reason) = &o.held {
-        waiting.push(format!("✋ {}", short(reason, 40)));
+        waiting.push(format!("⚓ {}", short(reason, 40)));
     }
     if !o.blockers.is_empty() {
         waiting.push(format!("⛔ {}", o.blockers.join(", ")));
@@ -208,15 +208,10 @@ fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>) -> Line<'static> {
 
 fn landing_row(r: &LandingRow, up: bool) -> Line<'static> {
     let snap = r.snapshot.as_ref();
-    let (sailor, sailor_style, age) = match &r.sailor {
-        Some(s) => {
-            let state = s.state.clone().unwrap_or_else(|| "·".into());
-            // An ended sailor's last word stays visible, dimmed: the ship is at rest.
-            let style = if r.live { state_style(&state) } else { dim() };
-            (state, style, s.age_secs)
-        }
-        None => ("—".into(), dim(), None),
-    };
+    // An ended sailor's last word stays visible, dimmed: the ship is at rest.
+    let sailor = crate::source::sailor_label(r.sailor.as_ref());
+    let sailor_style = if r.live { state_style(&sailor) } else { dim() };
+    let age = r.sailor.as_ref().and_then(|s| s.age_secs);
     let live = if r.live { live_cell(r.sailor.as_ref().and_then(|s| s.liveness.as_deref()), up) } else { ("—".into(), 7, dim()) };
     let pipe = pipeline(snap);
     let (appr, appr_style) = match snap {
@@ -286,7 +281,7 @@ fn ship_rows(ships: &[ShipRow]) -> Vec<Line<'static>> {
                 ),
                 None => ("—".into(), "—".into(), "—".into(), "·"),
             };
-            let sailor = r.sailor_state.as_deref().unwrap_or("·");
+            let sailor = &r.sailor;
             Line::from(format!(
                 "!{:<6} {:<14} {:<7} {:<8} {:>5} {:<9} {}",
                 r.ship.iid, owner, state, pipe, appr, sailor, reviewed,
@@ -295,7 +290,7 @@ fn ship_rows(ships: &[ShipRow]) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// One line per ticket; a held one shows `✋ <reason>`, one waiting on open blockers `⛔ <keys>`.
+/// One line per ticket; an anchored one shows `⚓ <reason>`, one waiting on open blockers `⛔ <keys>`.
 fn ticket_rows(board: &[Ticket], held_reasons: &HashMap<String, String>) -> Vec<Line<'static>> {
     board
         .iter()
@@ -305,7 +300,7 @@ fn ticket_rows(board: &[Ticket], held_reasons: &HashMap<String, String>) -> Vec<
             let mut gate = String::new();
             if t.held {
                 let reason = held_reasons.get(&t.key.0).map(String::as_str).unwrap_or("");
-                gate += &format!(" ✋ {}", short(reason, 40));
+                gate += &format!(" ⚓ {}", short(reason, 40));
             }
             let waiting = open_blockers(t, board);
             if !waiting.is_empty() {
@@ -363,17 +358,17 @@ fn proposal_row(p: &Proposal) -> Line<'static> {
     ])
 }
 
-/// Proposals · a convoy ticket a captain held (not Ready): fix it, then unhold it.
+/// Proposals · a convoy ticket a captain anchored (not Ready): fix it, then weigh it.
 fn held_row(t: &Ticket, reasons: &HashMap<String, String>) -> Line<'static> {
     let reason = reasons.get(&t.key.0).map(String::as_str).filter(|r| !r.is_empty()).unwrap_or("(no reason given)");
     cells(vec![
-        ("held".into(), 9, Style::default().fg(Color::Magenta)),
+        ("anchored".into(), 9, Style::default().fg(Color::Magenta)),
         ("—".into(), 5, dim()),
         (t.key.0.clone(), 12, Style::default()),
         ("—".into(), 12, dim()),
         (t.convoy.as_ref().map(|c| c.0.clone()).unwrap_or_default(), 12, Style::default()),
         ("—".into(), 6, dim()),
-        (format!("✋ {reason}"), 0, yellow()),
+        (format!("⚓ {reason}"), 0, yellow()),
     ])
 }
 
@@ -489,7 +484,7 @@ fn state_style(state: &str) -> Style {
         "escalated" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         "anchored" => Style::default().fg(Color::Magenta),
         "concluded" | "merged" => green(),
-        "sleeping" | "·" => dim(),
+        "sleeping" | "unmanned" | "·" => dim(),
         _ => Style::default(),
     }
 }

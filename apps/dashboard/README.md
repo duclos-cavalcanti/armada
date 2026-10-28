@@ -16,10 +16,10 @@ Cycle with `Tab` / `S-Tab`:
   - **Convoys** — the open convoys: the captain's liveness (or off), how many tickets are still
     open; `enter` switches to the captain;
   - **Proposals** — what waits on you before it can enter the line: open proposals (`a` accept,
-    `d` drop) and convoy tickets a captain held as not Ready (`✋ <reason>`; fix the ticket, then
-    `u` unhold). `enter` reads a proposal, `t` opens a held ticket;
+    `d` drop) and convoy tickets a captain anchored as not Ready (`⚓ <reason>`; fix the ticket, then
+    `w` weigh). `enter` reads a proposal, `t` opens an anchored ticket;
   - **Dispatch** — every order the fleet is working, with its phase (waiting / implementation /
-    merge) and what it waits on (held ✋ / blocked ⛔);
+    merge) and what it waits on (anchored ⚓ / blocked ⛔);
   - **Implementation** — builders at work (workers + hands): state, liveness, MR + pipeline, last action;
   - **Merge** — our ships being landed: the sailor's state (dimmed once it's stood down),
     pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status;

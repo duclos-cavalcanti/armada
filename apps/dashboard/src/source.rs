@@ -37,14 +37,26 @@ pub struct CogRow {
     pub liveness: Option<String>,
 }
 
-/// A ship paired with its latest snapshot (if the armada sync has populated one) and
-/// its most-recent sailor's last self-report. `sailor_state` is durable past the reap:
-/// the cold loop ends a swept sailor's session, but its `reports` row survives, so a
-/// ship at rest still shows `sleeping` here (= attended, idle) with no live cog.
+/// A ship paired with its latest snapshot (if the armada sync has populated one) and its sailor's
+/// label (`sailor_label`). It's durable past the reap: the cold loop ends a swept sailor's session,
+/// but its `reports` row survives, so a ship at rest still shows `sleeping` (= attended, idle).
 pub struct ShipRow {
     pub ship: Ship,
     pub snapshot: Option<ShipSnapshot>,
-    pub sailor_state: Option<String>,
+    pub sailor: String,
+}
+
+/// What a ship's sailor is doing: `unmanned` (no sailor has boarded), its last report, `sailing`
+/// (aboard, nothing reported yet), or `·` (it ended without a word — crashed or sunk).
+pub fn sailor_label(sailor: Option<&CogRow>) -> String {
+    match sailor {
+        None => "unmanned".into(),
+        Some(s) => match (&s.state, s.session.ended_at.is_none()) {
+            (Some(state), _) => state.clone(),
+            (None, true) => "sailing".into(),
+            (None, false) => "·".into(),
+        },
+    }
 }
 
 /// How far a dispatched ticket has got.
@@ -116,8 +128,8 @@ pub struct Fleet {
     pub convoys: Vec<Convoy>,
     /// Work cogs found mid-ticket, waiting on the operator to accept or drop it.
     pub proposals: Vec<Proposal>,
-    /// Tickets held in an open convoy and never dispatched — a captain judged them not Ready, and
-    /// they wait on the operator to fix and unhold them.
+    /// Tickets anchored in an open convoy and never dispatched — a captain judged them not Ready, and
+    /// they wait on the operator to fix and weigh them.
     pub held: Vec<Ticket>,
     /// The latest reconcile `TickRan` event — fleetd's last plan (applied/failed/planned).
     pub tick: Option<Event>,
@@ -196,7 +208,7 @@ impl Fleet {
             armada.push(ShipRow {
                 ship: ship.clone(),
                 snapshot: snapshot.clone(),
-                sailor_state: sailor.as_ref().and_then(|s| s.state.clone()),
+                sailor: sailor_label(sailor.as_ref()),
             });
             let Some(ticket) = &ship.ticket else { continue }; // an ally: Ships tab only
             if building.contains(ticket) {
