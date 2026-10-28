@@ -2635,12 +2635,11 @@ mod tests {
 
     #[test]
     fn a_live_sailor_mid_sweep_is_left_running() {
-        // Only the `sleeping` terminal report reaps a LIVE cog — a sailor still working
-        // (reports `finishing`, Active) is left to finish.
+        // Only the `sleeping` terminal report reaps a LIVE cog — a sailor still working (no report
+        // yet, Active) is left to finish.
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         let s = live_cog(&db, CrewKind::Sailor, "PROJ-1", Liveness::Active);
-        report(&db, &s, CogState::Sailor(SailorState::Finishing));
         assert!(plan(&db, &[s], true).unwrap().is_empty());
     }
 

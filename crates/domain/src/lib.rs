@@ -97,10 +97,11 @@ pub enum CrewKind { Worker, Sailor, Hand, Captain, Lookout }
 #[serde(rename_all = "snake_case")]
 pub enum WorkerState { Started, Implementing, Concluded, Escalated, Anchored }
 
-/// A sailor's lifecycle while it sails the ship into harbor.
+/// What a sailor reports: its sweep is done (`sleeping`), or it holds for the operator (`escalated`,
+/// `anchored`). Working, it reports nothing — fleetd sees the MR itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SailorState { Started, Finishing, Sleeping, InDraft, Merged, Closed, Escalated, Anchored }
+pub enum SailorState { Sleeping, Escalated, Anchored }
 
 /// A hand's lifecycle (ad-hoc, operator-driven).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -623,24 +624,14 @@ impl WorkerState {
 impl SailorState {
     pub fn as_str(&self) -> &'static str {
         match self {
-            SailorState::Started => "started",
-            SailorState::Finishing => "finishing",
             SailorState::Sleeping => "sleeping",
-            SailorState::InDraft => "in_draft",
-            SailorState::Merged => "merged",
-            SailorState::Closed => "closed",
             SailorState::Escalated => "escalated",
             SailorState::Anchored => "anchored",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "started" => Some(Self::Started),
-            "finishing" => Some(Self::Finishing),
             "sleeping" => Some(Self::Sleeping),
-            "in_draft" => Some(Self::InDraft),
-            "merged" => Some(Self::Merged),
-            "closed" => Some(Self::Closed),
             "escalated" => Some(Self::Escalated),
             "anchored" => Some(Self::Anchored),
             _ => None,
