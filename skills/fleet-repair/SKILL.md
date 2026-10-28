@@ -22,14 +22,12 @@ than improvise.
 
 ```bash
 set -euo pipefail
-MR_IID=$(fleetc packet "$FLEET_TICKET" | jq -r '.ship.iid // empty')
-[ -n "$MR_IID" ] || { echo "no open MR for $FLEET_TICKET" >&2; exit 1; }
-CI=$(fleetc ci --iid "$MR_IID")          # {status, failed: [{name, url, log_excerpt}]}
+CI=$(fleetc ci)          # your MR's CI: {status, failed: [{name, url, log_excerpt}]}
 STATUS=$(printf '%s' "$CI" | jq -r '.status // "none"')
 case "$STATUS" in
   failed|canceled) ;;                                    # fall through to the fix
-  success|running|manual) echo "CI on !$MR_IID is $STATUS — nothing to fix"; exit 0 ;;
-  none) echo "no CI yet on !$MR_IID"; exit 1 ;;
+  success|running|manual) echo "CI is $STATUS — nothing to fix"; exit 0 ;;
+  none) echo "no CI yet"; exit 1 ;;
   *) echo "unexpected CI status: $STATUS"; exit 1 ;;
 esac
 printf '%s' "$CI" | jq -r '.failed[] | "== \(.name)  \(.url)\n\(.log_excerpt)\n"'
@@ -41,7 +39,7 @@ every failed job is listed, each with an excerpt of its log: the lines that read
 
 ## Step 1 — Gather context
 
-- **The ticket** — `fleetc ticket "$FLEET_TICKET"`: the acceptance criteria bound what a
+- **The ticket** — `fleetc ticket`: the acceptance criteria bound what a
   fix may change.
 - **The code** — the local tree, and the project's own conventions (`CLAUDE.md`, its
   `docs/`) for the area that failed.
@@ -54,7 +52,7 @@ it produces.
 
 | Category | Cue in the log | Action |
 |---|---|---|
-| **Transient** | A runner died, a network or registry timeout, out of memory, a cache miss, a test known to be flaky | `fleetc retry-ci --iid "$MR_IID"`. No commit. |
+| **Transient** | A runner died, a network or registry timeout, out of memory, a cache miss, a test known to be flaky | `fleetc retry-ci` (its own command). No commit. |
 | **Lint / format** | A formatter or linter diff (`cargo fmt`, `clippy -D warnings`, `shellcheck`, …) | Run the formatter / fixer on the affected files, commit (`fix: <linter> auto-fix`), push. |
 | **Build** | A compile or syntax error, a missing dependency, a broken import | Read the error, fix the broken file within the ticket's scope, commit, push. |
 | **Test** | A unit / integration test failed | Decide which side is wrong: the *test* (a missing case, a stale expectation) or the *code* (an implementation gap). Fix that side, commit, push. **If the log and the ticket don't make it obvious which side is wrong, escalate rather than guess.** |

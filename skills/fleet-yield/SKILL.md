@@ -16,20 +16,16 @@ the handoff signal.
   ship; if nothing's pushed, there's nothing to yield.
 - Run inside the hand's session, so `FLEET_TICKET` (injected by fleetd) is set.
 
-## Step 0 — Derive the ticket + yield
+## Step 0 — Yield
 
-Run in one Bash invocation (from your worktree):
+From your worktree:
 
 ```bash
-TICKET="${FLEET_TICKET:-}"
-if [ -z "$TICKET" ]; then
-  echo "no FLEET_TICKET — a ticketless hand has no sailor to yield to; nothing to do."
-  exit 0
-fi
-fleetc status --cog hand --ticket "$TICKET" --state concluded \
-  --last-action "operator yielded the hand to a sailor"
-echo "yielded $TICKET to a sailor."
+fleetc status --cog hand --state concluded --last-action "operator yielded the hand to a sailor"
 ```
+
+fleetc fills in your ticket from `FLEET_TICKET`. If it answers `--ticket required`, you're a
+ticketless hand: there's no sailor to yield to, so say so and stop.
 
 That `concluded` report is the whole handoff: fleetd promotes your (manual) order to
 auto, moves the ticket In Progress → In QA, requests the team's review, reaps you, and
@@ -39,5 +35,5 @@ auto, moves the ticket In Progress → In QA, requests the team's review, reaps 
 ## Checklist
 
 - [ ] An open MR exists (there's a ship for the sailor to sail)
-- [ ] Ticket read from FLEET_TICKET; if unset, reported "nothing to yield" and stopped
+- [ ] If fleetc answered `--ticket required` (ticketless), reported "nothing to yield" and stopped
 - [ ] `fleetc status … --state concluded` sent (ticketed hand only)

@@ -29,12 +29,14 @@ ship changes again, the daemon will spawn you fresh.
 
 ## Read your packet
 
-Your ticket is the `FLEET_TICKET` env var. Read the
-work-packet fleetd composed for you and don't re-assemble state by hand:
+Your ticket is the `FLEET_TICKET` env var. fleetc fills in your ticket and MR wherever you
+leave them out, so never put a shell variable in a `fleetc` command (`fleetc arm`, not
+`fleetc arm "$FLEET_TICKET"`): a command holding one skips your allow rule and goes to the
+auto-mode classifier, which can block it. Read the work-packet fleetd composed for you and
+don't re-assemble state by hand:
 
 ```bash
-TICKET="$FLEET_TICKET"
-fleetc packet "$TICKET"
+fleetc packet
 ```
 
 The packet is `{ order, ship, snapshot, ticket }`. The **snapshot** is your
@@ -50,7 +52,7 @@ Do the work the snapshot calls for, this sweep only:
 - **`has_conflicts` (or diverged from target)** → `/fleet-rechart`.
 - **`open_threads > 0`** → `/fleet-parley` (answer review threads).
 - **`pipeline` failed** → `/fleet-repair`.
-- **clean + not draft + not armed** → **arm** auto-merge: `fleetc arm "$TICKET"`.
+- **clean + not draft + not armed** → **arm** auto-merge: `fleetc arm`.
   The forge merges it on its own once its gates pass. fleetd refuses (and says why)
   while the ticket is held or has an open blocker — then don't retry: report
   `sleeping`, and the next sweep comes when the gate lifts. **Unless
@@ -72,7 +74,7 @@ exception: on an approved MR, `/fleet-parley` defers nits to a proposed follow-u
 
 - **Made progress / armed and waiting** → your sweep is done: **report `sleeping`,
   then stop.**
-  `fleetc status --cog sailor --ticket "$TICKET" --state sleeping`. That report is
+  `fleetc status --cog sailor --state sleeping`. That report is
   how you finish — it's fleetd's signal to reap you (end your session, close your
   pane) and re-spawn a fresh sweep when the ship next changes. Don't rely on exiting
   the process; a `claude --agent` session doesn't self-exit, so a sweep that just
@@ -82,17 +84,17 @@ exception: on an approved MR, `/fleet-parley` defers nits to a proposed follow-u
 - **Stuck** (a rebase conflict you can't resolve, reviewer pushback needing
   design direction, CI infra that retry won't fix) → report it and **stay alive**
   so the operator can chat you in your pane:
-  `fleetc status --cog sailor --ticket "$TICKET" --state escalated --last-action "<why>"`,
+  `fleetc status --cog sailor --state escalated --last-action "<why>"`,
   then stop and wait. When the operator unblocks you, resume the sweep. (Here you do
   NOT report `sleeping` — that would reap you; escalated holds you alive.)
 - **Awaiting merge** — the MR is clean but `order.auto_merge` is false → report it
   and **stay alive** for the operator's go:
-  `fleetc status --cog sailor --ticket "$TICKET" --state awaiting_merge --last-action "ready to merge"`,
+  `fleetc status --cog sailor --state awaiting_merge --last-action "ready to merge"`,
   then stop and wait. When the operator tells you to merge, arm it (the command
   above) and report `sleeping`. If they ask for changes instead, do them and
   re-check the snapshot.
 - **Anchored** — if you receive an `⚓ anchor` message, stop:
-  `fleetc status --cog sailor --ticket "$TICKET" --state anchored`, then stop and wait
+  `fleetc status --cog sailor --state anchored`, then stop and wait
   (the anchor holds you until the operator weighs it).
 
 ## Out-of-scope findings

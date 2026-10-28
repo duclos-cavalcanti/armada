@@ -22,9 +22,7 @@ The base is the ticket's fork base (a stacked child forks off its parent's branc
 else origin's default branch. `fleetc launch` resolves the same base as the MR target.
 
 ```bash
-TICKET="${FLEET_TICKET:-}"
-BASE=""
-[ -n "$TICKET" ] && BASE="$(fleetc packet "$TICKET" | jq -r '.order.fork_from // empty')"
+BASE="$(fleetc packet 2>/dev/null | jq -r '.order.fork_from // empty')"   # empty for a ticketless hand
 [ -n "$BASE" ] || BASE="$(git symbolic-ref --short refs/remotes/origin/HEAD)"
 BASE="origin/${BASE#origin/}"
 git fetch origin "${BASE#origin/}" --quiet --no-tags
@@ -40,7 +38,7 @@ branch): surface it and stop. Don't retry blindly.
 
 ## Step 2 — Gather context
 
-- **The ticket.** If `$TICKET` is set, `fleetc packet "$TICKET"` carries its title
+- **The ticket.** If you have one (`FLEET_TICKET`), `fleetc packet` carries its title
   (`.ticket.title`) and the acceptance-criteria summary (`.order.ac_summary`).
 - **The change** against the base:
   ```bash
@@ -83,7 +81,7 @@ The ticket key in the title links the MR to its ticket.
 ## Step 4 — Launch
 
 ```bash
-fleetc launch ${TICKET:+--ticket "$TICKET"} --title "<title>" --body "$(cat <<'EOF'
+fleetc launch --title "<title>" --body "$(cat <<'EOF'
 <the description from Step 3>
 EOF
 )"   # add --draft if asked

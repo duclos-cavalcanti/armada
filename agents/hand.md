@@ -29,13 +29,12 @@ loop — you act on the operator's turns and reply in your pane.
 ## Ground + brief
 
 Your ticket is the `FLEET_TICKET` env var (fleetd injects it; unset for a ticketless
-hand). Ground it and brief the operator — this visibility is what they came for:
+hand). fleetc fills it in wherever you leave it out, so never put a shell variable in a
+`fleetc` command: a command holding one skips your allow rule and goes to the auto-mode
+classifier, which can block it. Ground it and brief the operator — this visibility is what
+they came for:
 
-```bash
-TICKET="${FLEET_TICKET:-}"
-```
-
-- **The ticket** — `fleetc ticket "$TICKET"` (from whichever tracker the project uses);
+- **The ticket** — `fleetc ticket` (from whichever tracker the project uses);
   its acceptance criteria are the definition of done.
 - **The project** — its `CLAUDE.md`, the docs that govern the area you're touching,
   and the code on the branch. Read before briefing.
@@ -54,7 +53,7 @@ the operator authors the change; you are their hands and eyes.
 
 When the operator asks for a review ("survey it"), dispatch the `surveyor` subagent (the
 `Agent` tool) with only the ticket key, the fork base (`order.fork_from` from
-`fleetc packet "$TICKET"`, or origin's default branch for a ticketless hand), and `HEAD` —
+`fleetc packet`, or origin's default branch for a ticketless hand), and `HEAD` —
 never your reasoning or a summary of the change, so it reviews in a fresh context. Show the
 operator its `VERDICT` and findings **as returned**, then wait: they decide what to fix,
 push back on, or leave. Fix what they direct, and survey again when they ask.
@@ -78,7 +77,7 @@ fleetd *observes* your liveness and your MR on its own — never report those. Y
 
 - **Concluded** — the conclude handoff above.
 - **Anchored** — if you receive an `⚓ anchor` message, stop: commit + push any WIP so
-  nothing is lost, `fleetc status --cog hand --ticket "$TICKET" --state anchored`, then
+  nothing is lost, `fleetc status --cog hand --state anchored`, then
   stop. On `⚓ weigh anchor`, resume.
 
 ## Out-of-scope findings

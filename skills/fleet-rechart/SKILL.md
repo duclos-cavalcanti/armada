@@ -35,25 +35,21 @@ fleetd fresh-polled the MR when it launched you; its packet carries the iid, the
 the merge-readiness (the same vocabulary on every forge):
 
 ```bash
-PACKET=$(fleetc packet "$FLEET_TICKET")
-MR_IID=$(printf '%s' "$PACKET" | jq -r '.ship.iid // empty')
-[ -n "$MR_IID" ] || { echo "no open MR for $FLEET_TICKET" >&2; exit 1; }
+PACKET=$(fleetc packet)
+[ -n "$(printf '%s' "$PACKET" | jq -r '.ship.iid // empty')" ] || { echo "no open MR" >&2; exit 1; }
 TARGET=$(printf '%s' "$PACKET" | jq -r '.ship.target')
 ```
 
 ### 2 — Branch on conflict state
 
 ```bash
-CONFLICTED=$(printf '%s' "$PACKET" | jq -r 'if (.snapshot.has_conflicts==true) or (.snapshot.merge_status=="conflict") then "true" else "false" end')
-
-if [ "$CONFLICTED" = "false" ]; then
-  # Clean divergence — trigger the server-side rebase (disarms MWPS if needed) and exit.
-  # Don't wait: the sailor re-fires when head_sha moves (or has_conflicts flips, on a surprise).
-  fleetc rebase --iid "$MR_IID"
-  exit 0
-fi
-# Conflicted → resolve locally (Step 3).
+printf '%s' "$PACKET" | jq -r 'if (.snapshot.has_conflicts==true) or (.snapshot.merge_status=="conflict") then "CONFLICTED=true" else "CONFLICTED=false" end'
 ```
+
+- **`CONFLICTED=false`** (clean divergence) → trigger the server-side rebase (it disarms MWPS if
+  needed) as its own command, `fleetc rebase`, and stop. Don't wait: the sailor re-fires when
+  `head_sha` moves (or `has_conflicts` flips, on a surprise).
+- **`CONFLICTED=true`** → resolve locally (Step 3).
 
 ### 3 — Intelligent rebase (only when conflicted)
 

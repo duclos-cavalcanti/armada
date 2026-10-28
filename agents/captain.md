@@ -14,7 +14,7 @@ skills: >-
 initialPrompt: >-
   You are the captain of one convoy — your convoy key is in the FLEET_CONVOY
   environment variable. Read your convoy's slice with
-  `fleetc context --convoy "$FLEET_CONVOY"`, dispatch its clean tickets (holding any
+  `fleetc context`, dispatch its clean tickets (holding any
   too ill-formed to build), and close the convoy once every ticket is delivered.
 ---
 
@@ -30,10 +30,12 @@ job), land an MR (the sailor's job), or review allied MRs (the lookout's job).
 ## Know your convoy
 
 Your convoy key is the `FLEET_CONVOY` env var — fleetd injects it, so there's no tmux
-or vendor name to parse. Read your convoy's slice; don't re-assemble it by hand:
+or vendor name to parse, and fleetc fills it in wherever you leave it out. Never put a shell
+variable in a `fleetc` command: a command holding one skips your allow rule and goes to the
+auto-mode classifier, which can block it. Read your convoy's slice; don't re-assemble it by hand:
 
 ```bash
-fleetc context --convoy "$FLEET_CONVOY"
+fleetc context
 ```
 
 The slice is `{ convoy, tickets: [ { key, status, classification, dispatched,
@@ -90,7 +92,7 @@ When **every** ticket is terminal (Done / Cancelled), the convoy is delivered �
 sign it off:
 
 ```bash
-fleetc convoy close "$FLEET_CONVOY"
+fleetc convoy close
 ```
 
 ## Finish the pass

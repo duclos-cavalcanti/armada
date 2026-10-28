@@ -27,11 +27,11 @@ fn socket() -> String {
 }
 
 /// fleetc's usage: a header, then one line per verb form (`fleetc <verb> …`).
-const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project: the cwd's, or -C's — nearest folder with a fleet.toml)\n  \
-     fleetc status   --cog <worker|sailor|hand> --ticket <KEY-N> --state <state> [--last-action <text>]\n  \
+const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project: the cwd's, or -C's — nearest folder with a fleet.toml; in a cog, an omitted ticket / --iid / --convoy is its own)\n  \
+     fleetc status   --cog <worker|sailor|hand> [--ticket <KEY-N>] --state <state> [--last-action <text>]\n  \
      fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--hold] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
      fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
-     fleetc convoy   <open|close> <KEY> [--title <text>]\n  \
+     fleetc convoy   open <KEY> [--title <text>] | close [<KEY>]\n  \
      fleetc convoy   <add|remove> <KEY> <KEY-N>   (a ticket joins the convoy — its only one — or an added one leaves)\n  \
      fleetc anchor   --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (graceful stop & hold)\n  \
      fleetc weigh    --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (resume)\n  \
@@ -40,19 +40,19 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc hold     <KEY-N> [--reason <why>]  (hold off the frontier; disarms + drafts its open MR)\n  \
      fleetc decommission <KEY-N> --reason <why> [--yes]   (withdraw it for good: close its MR, cancel it with the reason, reap its cogs + worktree)\n  \
      fleetc unhold   <KEY-N>          (release back onto the frontier; readies its MR)\n  \
-     fleetc packet   <KEY-N>          (the cog's work-packet: order + ship + ticket)\n  \
-     fleetc context  --convoy <KEY> [--format table]   (a captain's convoy slice)\n  \
+     fleetc packet   [<KEY-N>]        (the cog's work-packet: order + ship + ticket)\n  \
+     fleetc context  [--convoy <KEY>] [--format table]   (a captain's convoy slice)\n  \
      fleetc plan                       (fleetd's latest reconcile plan — the parity lens)\n  \
      fleetc transcript --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] [--open]   (resolve a cog's transcript)\n  \
-     fleetc review   --iid <N>         (an MR's fresh review surface: open threads + floating notes)\n  \
-     fleetc reply    --iid <N> --thread <id> --body <text|-> [--resolve]   (answer a review thread)\n  \
-     fleetc ship     --iid <N>         (one MR, ours or an ally's: ship + snapshot + fetch ref, as JSON)\n  \
-     fleetc review-post --iid <N> --body <text|-> [--approve]   (post one review comment; approve if clean)\n  \
-     fleetc rebase   --iid <N>         (server-side rebase an MR)\n  \
-     fleetc ci       --iid <N>         (the MR's CI: status + each failed job's log excerpt, as JSON)\n  \
-     fleetc retry-ci --iid <N>         (re-run the MR's failed CI jobs)\n  \
-     fleetc arm      <KEY-N>          (arm the ticket's MR to merge once green; refused while held or blocked)\n  \
-     fleetc ticket   <KEY-N> [--where]      (a ticket's full text; --where: its URL or file path)\n  \
+     fleetc review   [--iid <N>]       (an MR's fresh review surface: open threads + floating notes)\n  \
+     fleetc reply    [--iid <N>] --thread <id> --body <text|-> [--resolve]   (answer a review thread)\n  \
+     fleetc ship     [--iid <N>]       (one MR, ours or an ally's: ship + snapshot + fetch ref, as JSON)\n  \
+     fleetc review-post [--iid <N>] --body <text|-> [--approve]   (post one review comment; approve if clean)\n  \
+     fleetc rebase   [--iid <N>]       (server-side rebase an MR)\n  \
+     fleetc ci       [--iid <N>]       (the MR's CI: status + each failed job's log excerpt, as JSON)\n  \
+     fleetc retry-ci [--iid <N>]       (re-run the MR's failed CI jobs)\n  \
+     fleetc arm      [<KEY-N>]        (arm the ticket's MR to merge once green; refused while held or blocked)\n  \
+     fleetc ticket   [<KEY-N>] [--where]    (a ticket's full text; --where: its URL or file path)\n  \
      fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (prints the new key)\n  \
      fleetc ticket   block <KEY-N> --by <KEY-N>   (record an 'is blocked by' edge)\n  \
      fleetc propose  --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (a cog: file a new ticket labelled fleet-proposed; prints its id + key)\n  \
@@ -143,7 +143,7 @@ fn status(args: &[String]) -> Result<()> {
         }
     }
     let cog = cog.ok_or_else(|| anyhow!("--cog required"))?;
-    let ticket = ticket_key(&ticket.ok_or_else(|| anyhow!("--ticket required"))?, "status")?;
+    let ticket = ticket_key(&ticket.or_else(|| own("FLEET_TICKET")).ok_or_else(|| anyhow!("--ticket required"))?, "status")?;
     let state = state.ok_or_else(|| anyhow!("--state required"))?;
 
     let kind = CrewKind::parse(&cog).ok_or_else(|| anyhow!("invalid --cog: {cog}"))?;
@@ -236,7 +236,8 @@ fn convoy(args: &[String]) -> Result<()> {
             submit("/convoy-open", &wire::ConvoyCmd { key, title })
         }
         Some("close") => {
-            let key = convoy_key(args.get(1).ok_or_else(|| anyhow!("convoy close needs <KEY>"))?, "convoy close")?;
+            let key = args.get(1).cloned().or_else(|| own("FLEET_CONVOY")).ok_or_else(|| anyhow!("convoy close needs <KEY>"))?;
+            let key = convoy_key(&key, "convoy close")?;
             submit("/convoy-close", &wire::ConvoyCmd { key, title: None })
         }
         Some(verb @ ("add" | "remove")) => {
@@ -342,7 +343,7 @@ fn unhold(args: &[String]) -> Result<()> {
 /// `fleetc packet <KEY-N>` — read the cog's composed work-packet (order + ship + snapshot +
 /// ticket) from fleetd and print it as JSON. The sailor's boot read; also handy for an operator.
 fn packet(args: &[String]) -> Result<()> {
-    let ticket = require_ticket(args, "packet")?;
+    let ticket = ticket_or_own(args, "packet")?;
     let socket = socket();
     let (code, body) = wire::get_json(&socket, &format!("/packet?ticket={ticket}"))?;
     if code == 200 {
@@ -368,7 +369,7 @@ fn context(args: &[String]) -> Result<()> {
             other => bail!("unknown flag: {other}"),
         }
     }
-    let convoy = convoy_key(&convoy.ok_or_else(|| anyhow!("context needs --convoy <KEY>"))?, "context")?;
+    let convoy = convoy_key(&convoy.or_else(|| own("FLEET_CONVOY")).ok_or_else(|| anyhow!("context needs --convoy <KEY>"))?, "context")?;
     let socket = socket();
     let (code, body) = wire::get_json(&socket, &format!("/context?convoy={convoy}"))?;
     if code != 200 {
@@ -426,6 +427,40 @@ fn require_ticket(args: &[String], verb: &str) -> Result<String> {
         bail!("{verb}: unexpected flag {t:?} — expected a ticket <KEY-N>");
     }
     ticket_key(t, verb)
+}
+
+/// A fleetd-injected cog env var (`FLEET_TICKET`, `FLEET_CONVOY`, `FLEET_SHIP`): what a cog's verbs
+/// fill an omitted key with, so its commands carry no shell variable (Claude Code's allow rules
+/// match only a command it can check before it runs; one with `"$FLEET_TICKET"` goes to auto mode's
+/// classifier, which may block it).
+fn own(var: &str) -> Option<String> {
+    std::env::var(var).ok().filter(|v| !v.is_empty())
+}
+
+/// A ticket verb's `<KEY-N>`: the first arg, else the cog's own ticket.
+fn ticket_or_own(args: &[String], verb: &str) -> Result<String> {
+    match (args.is_empty(), own("FLEET_TICKET")) {
+        (true, Some(t)) => ticket_key(&t, verb),
+        _ => require_ticket(args, verb),
+    }
+}
+
+/// An MR verb's iid: `--iid` when given, else the cog's own MR — the lookout's `FLEET_SHIP`, or the
+/// open MR of its `FLEET_TICKET`.
+fn iid_or_own(iid: Option<i64>, verb: &str) -> Result<i64> {
+    if let Some(iid) = iid {
+        return Ok(iid);
+    }
+    if let Some(s) = own("FLEET_SHIP") {
+        return s.parse().map_err(|_| anyhow!("{verb}: FLEET_SHIP isn't an iid: {s:?}"));
+    }
+    let ticket = own("FLEET_TICKET").ok_or_else(|| anyhow!("{verb} needs --iid <N>"))?;
+    let (code, body) = wire::get_json(&socket(), &format!("/packet?ticket={ticket}"))?;
+    anyhow::ensure!(code == 200, "fleetd ({code}): {body}");
+    serde_json::from_str::<serde_json::Value>(&body)?
+        .pointer("/ship/iid")
+        .and_then(|i| i.as_i64())
+        .ok_or_else(|| anyhow!("{verb}: {ticket} has no open MR"))
 }
 
 /// Validate a ticket key at the edge — the domain's `<PREFIX>-<n>` parse, tagged with the verb.
@@ -686,7 +721,7 @@ fn reply(args: &[String]) -> Result<()> {
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
     }
     post_and_print("/reply", &wire::ReplyCmd {
-        iid: iid.ok_or_else(|| anyhow!("--iid required"))?,
+        iid: iid_or_own(iid, "reply")?,
         thread: thread.ok_or_else(|| anyhow!("--thread required"))?,
         body,
         resolve,
@@ -835,7 +870,7 @@ fn review_post(args: &[String]) -> Result<()> {
         body.clear();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut body)?;
     }
-    post_and_print("/review-post", &wire::ReviewPostCmd { iid: iid.ok_or_else(|| anyhow!("--iid required"))?, body, approve })
+    post_and_print("/review-post", &wire::ReviewPostCmd { iid: iid_or_own(iid, "review-post")?, body, approve })
 }
 
 /// `fleetc ci --iid <N>` — the MR's CI as JSON: `{status, failed: [{name, url, log_excerpt}]}`, failed
@@ -882,6 +917,10 @@ fn launch(args: &[String]) -> Result<()> {
             other => bail!("unknown flag: {other}"),
         }
     }
+    let ticket = match ticket {
+        Some(t) => Some(t),
+        None => own("FLEET_TICKET").map(|t| ticket_key(&t, "launch")).transpose()?,
+    };
     let worktree = match worktree {
         Some(w) => w,
         None => std::env::current_dir()?.to_string_lossy().into_owned(),
@@ -899,7 +938,7 @@ fn launch(args: &[String]) -> Result<()> {
 /// `fleetc arm <KEY-N>` — arm the ticket's open MR to merge once its gates pass (the sailor's land
 /// step). fleetd refuses while the ticket is held or has an open blocker, and says which.
 fn arm(args: &[String]) -> Result<()> {
-    let ticket = require_ticket(args, "arm")?;
+    let ticket = ticket_or_own(args, "arm")?;
     post_and_print("/arm", &wire::ArmCmd { ticket })
 }
 
@@ -913,6 +952,10 @@ fn ticket(args: &[String]) -> Result<()> {
             Some("--where") => ticket_where(&ticket_key(key, "ticket")?),
             _ => ticket_show(&ticket_key(key, "ticket")?),
         },
+        None | Some("--where") if own("FLEET_TICKET").is_some() => {
+            let key = ticket_or_own(&[], "ticket")?;
+            if args.is_empty() { ticket_show(&key) } else { ticket_where(&key) }
+        }
         _ => bail!("usage: fleetc ticket <KEY-N> | new --title <t> --type <type> … | block <KEY-N> --by <KEY-N>"),
     }
 }
@@ -1143,7 +1186,7 @@ fn post_and_print<T: serde::Serialize>(path: &str, body: &T) -> Result<()> {
     Ok(())
 }
 
-/// Parse the required `--iid <N>` from a verb's args.
+/// Parse `--iid <N>` from a verb's args — in a cog, its own MR when omitted.
 fn require_iid(args: &[String], verb: &str) -> Result<i64> {
     let mut iid = None;
     let mut it = args.iter();
@@ -1153,8 +1196,8 @@ fn require_iid(args: &[String], verb: &str) -> Result<i64> {
             other => bail!("{verb}: unknown flag {other:?}"),
         }
     }
-    let iid = iid.ok_or_else(|| anyhow!("{verb} needs --iid <N>"))?;
-    iid.parse().map_err(|_| anyhow!("{verb}: --iid must be an integer, got {iid:?}"))
+    let iid = iid.map(|i| i.parse().map_err(|_| anyhow!("{verb}: --iid must be an integer, got {i:?}"))).transpose()?;
+    iid_or_own(iid, verb)
 }
 
 /// `fleetc settings [list | set <key> <value>]` — read or overwrite the live config levers (the
@@ -1261,7 +1304,7 @@ mod tests {
     #[test]
     fn verb_usage_is_every_form_of_that_verb() {
         let ci = verb_usage("ci").unwrap();
-        assert!(ci.starts_with("usage: fleetc") && ci.contains("fleetc ci       --iid <N>"), "{ci}");
+        assert!(ci.starts_with("usage: fleetc") && ci.contains("fleetc ci       [--iid <N>]"), "{ci}");
         assert_eq!(ci.lines().count(), 2, "the header + its one form");
         assert_eq!(verb_usage("convoy").unwrap().lines().count(), 3, "both convoy forms");
         assert!(!verb_usage("ticket").unwrap().contains("fleetc propose"), "only that verb");

@@ -17,13 +17,12 @@ stdout), or an escalation when a finding needs the operator (exit 1).
 
 ```bash
 set -euo pipefail
-PACKET=$(fleetc packet "$FLEET_TICKET")
-MR_IID=$(printf '%s' "$PACKET" | jq -r '.ship.iid // empty')
-[ -n "$MR_IID" ] || { echo "no open MR for $FLEET_TICKET" >&2; exit 1; }
+PACKET=$(fleetc packet)
+[ -n "$(printf '%s' "$PACKET" | jq -r '.ship.iid // empty')" ] || { echo "no open MR" >&2; exit 1; }
 # Gates nit deferral: at least one approval, and all that are required.
 APPROVED=$(printf '%s' "$PACKET" | jq '(.snapshot.approvals // {current: 0}) | .current > 0 and .current >= .required')
 echo "APPROVED=$APPROVED"
-REVIEW=$(fleetc review --iid "$MR_IID")   # {open_threads, threads: [{id, path, line, author, body}], floating_notes}
+REVIEW=$(fleetc review)   # your MR's: {open_threads, threads: [{id, path, line, author, body}], floating_notes}
 OPEN=$(printf '%s' "$REVIEW" | jq '.open_threads')
 REVIEW_NOTES=$(printf '%s' "$REVIEW" | jq '.floating_notes | length')
 if [ "$OPEN" -eq 0 ]; then
@@ -38,7 +37,7 @@ printf '%s' "$REVIEW" | jq -r '.threads[] | "== \(.id)  \(.path // "-"):\(.line 
 They don't block the merge, so they aren't in `OPEN`, but they can gate an approval:
 read them, and never treat `OPEN=0` as "review complete" while one asks for changes.
 
-The scope authority is the **ticket** (`fleetc ticket "$FLEET_TICKET"`): its acceptance
+The scope authority is the **ticket** (`fleetc ticket`): its acceptance
 criteria and its *Out of scope*.
 
 ## Step 1 — Classify each thread
@@ -84,7 +83,7 @@ approvals." and resolve it.
 For each other thread you handled:
 
 ```bash
-fleetc reply --iid "$MR_IID" --thread "<id>" --resolve --body - <<'EOF'
+fleetc reply --thread <id> --resolve --body - <<'EOF'
 <what you changed and why — or, for "right problem, wrong remedy", the diagnosis you
 accepted and the fix you chose instead>
 EOF
@@ -99,7 +98,7 @@ Your push may have answered a floating note, or a new verdict may have landed, s
 against the new HEAD:
 
 ```bash
-REVIEW=$(fleetc review --iid "$MR_IID")
+REVIEW=$(fleetc review)
 echo "OPEN=$(printf '%s' "$REVIEW" | jq '.open_threads') REVIEW_NOTES=$(printf '%s' "$REVIEW" | jq '.floating_notes | length')"
 printf '%s' "$REVIEW" | jq -r '.floating_notes[] | "  floating-note [\(.created_at)] \(.author): \(.body[0:240])"'
 ```

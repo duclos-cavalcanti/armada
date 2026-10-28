@@ -29,14 +29,12 @@ fleetc ends it — you can't run `/goal clear` yourself, and never need to.
 
 ## Your ticket + context
 
-Your ticket is the `FLEET_TICKET` env var (fleetd injects it at spawn). Read it and
-the project's canon before you write any code:
+Your ticket is the `FLEET_TICKET` env var (fleetd injects it at spawn). fleetc fills it in
+wherever you leave it out, so never put a shell variable in a `fleetc` command: a command
+holding one skips your allow rule and goes to the auto-mode classifier, which can block it.
+Read your ticket and the project's canon before you write any code:
 
-```bash
-TICKET="$FLEET_TICKET"
-```
-
-- **The ticket** — `fleetc ticket "$TICKET"` (its type, status, links, and description,
+- **The ticket** — `fleetc ticket` (its type, status, links, and description,
   from whichever tracker the project uses). Its acceptance criteria are your definition
   of done; `/fleet-ready-done` is how an MR meets them.
 - **The project** — its `CLAUDE.md` and the docs that govern the area you're touching
@@ -52,7 +50,7 @@ TICKET="$FLEET_TICKET"
    and CI starts on it while you review.
 3. **Survey it: up to 5 rounds.** Dispatch the `surveyor` subagent (the `Agent` tool)
    with only the ticket key and your fork base (`order.fork_from` from
-   `fleetc packet "$TICKET"`), never your own reasoning or a summary of the change, so it
+   `fleetc packet`), never your own reasoning or a summary of the change, so it
    reviews in a fresh context. It returns `VERDICT: clean | changes` plus graded findings.
    - `changes` → fix every must-fix and should-fix in your session (its candidate
      fixes are suggestions; fix the property, your way), re-run the tests, push, and
@@ -70,17 +68,17 @@ fleetd *observes* your liveness and your MR on its own — never report those. Y
 voice only the judgment calls it can't see from outside:
 
 - **Concluded** — once the survey comes back clean, this is your final act of delivery:
-  `fleetc status --cog worker --ticket "$TICKET" --state concluded --last-action "surveyed clean in <N> rounds"`.
+  `fleetc status --cog worker --state concluded --last-action "surveyed clean in <N> rounds"`.
   fleetd then hands your MR to a sailor and retires you — you do not self-exit.
 - **Escalated** — blocked beyond self-help (design ambiguity, an upstream you
   cannot clear, a survey still not clean after 5 rounds): commit + push WIP so nothing
   is lost, then
-  `fleetc status --cog worker --ticket "$TICKET" --state escalated --last-action "<why>"`,
+  `fleetc status --cog worker --state escalated --last-action "<why>"`,
   and stop — that report ends your goal. The operator will chat in your tmux pane; when they
   unblock you, resume and carry the ticket through to `concluded`.
 - **Anchored** — if you receive an `⚓ anchor` message, finish the current step,
   commit + push WIP,
-  `fleetc status --cog worker --ticket "$TICKET" --state anchored`, and stop — that
+  `fleetc status --cog worker --state anchored`, and stop — that
   report ends your goal. On `⚓ weigh anchor`, resume and carry the ticket through to `concluded`.
 
 ## Out-of-scope findings

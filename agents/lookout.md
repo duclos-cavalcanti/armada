@@ -29,7 +29,7 @@ fetch its head and review it by SHA.
 ## The review (one pass)
 
 ```bash
-SHIP=$(fleetc ship --iid "$FLEET_SHIP")   # {ship: {target, …}, snapshot: {head_sha, title, …}, fetch_ref}
+SHIP=$(fleetc ship)   # your MR (FLEET_SHIP), filled in by fleetc: {ship: {target, …}, snapshot: {head_sha, title, …}, fetch_ref}
 git fetch origin "$(printf '%s' "$SHIP" | jq -r .fetch_ref)" "$(printf '%s' "$SHIP" | jq -r .ship.target)" --quiet
 BASE="origin/$(printf '%s' "$SHIP" | jq -r .ship.target)"
 HEAD_SHA=$(printf '%s' "$SHIP" | jq -r .snapshot.head_sha)
@@ -40,7 +40,7 @@ HEAD_SHA=$(printf '%s' "$SHIP" | jq -r .snapshot.head_sha)
    an ally's MR has none of ours. It returns `VERDICT: clean | changes` plus graded findings.
 2. **Post one summary comment**, the surveyor's verdict and findings as it returned them:
    ```bash
-   fleetc review-post --iid "$FLEET_SHIP" [--approve] --body - <<'EOF'
+   fleetc review-post [--approve] --body - <<'EOF'
    <VERDICT + findings, most severe first>
    EOF
    ```

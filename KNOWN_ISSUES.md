@@ -23,15 +23,13 @@ Accepted edge cases: understood, not fixed, each with its workaround.
   blocked by BY") before relying on it.
   *Fix:* verify against a live Jira; if reversed, swap the two keys in `JiraTracker::block`.
 
-- **Auto mode's classifier can block a cog's `fleetc` call.**
-  *Scenario:* the committed base settings (`.claude/settings.json`) allow `tmux` but not
-  `fleetc`, so in auto mode the classifier judges each `fleetc` call on its own. It blocked a
-  sailor's `fleetc arm` as an "Unrequested Commit in a Connected App": the sweep escalated and
-  waited for the operator, though arming only merges once the forge's gates pass.
-  *Workaround:* add `"Bash(fleetc *)"` to your harness profile's `permissions.allow`
-  (`harness/profiles/<name>.json`), then `harness/apply.sh harness/profiles/<name>.json`. A
-  narrow allow rule resolves before the classifier. For a cog already stuck, answer it in its
-  pane ("go, arm it"): your message is the explicit intent the classifier accepts.
-  *Fix:* add `"Bash(fleetc *)"` to the committed base allowlist, beside `Bash(tmux *)`, so every
-  deployment's cogs get it. The operator commits it: the classifier blocks the shipwright
-  widening its own harness's permissions (Self-Modification).
+- **A `fleetc` call holding a shell variable goes to auto mode's classifier.**
+  *Scenario:* Claude Code matches an allow rule only against a command it can check before it
+  runs, so `Bash(fleetc *)` approves `fleetc arm` but not `fleetc arm "$FLEET_TICKET"`. That one
+  goes to the classifier, which has blocked a sailor's arm as an "Unrequested Commit in a
+  Connected App". The same holds for a compound command: every part must match a rule.
+  *Prevention:* a cog's own ticket, MR and convoy are filled in by fleetc from `FLEET_TICKET` /
+  `FLEET_SHIP` / `FLEET_CONVOY` when left out, and the agents and skills write their `fleetc`
+  writes as standalone, variable-free commands. Keep new prose to that shape.
+  *Workaround:* for a cog already stuck, answer it in its pane ("go, arm it"): your message is the
+  explicit intent the classifier accepts.
