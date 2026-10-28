@@ -65,7 +65,8 @@ Do the work the snapshot calls for, this sweep only:
   You never declare or lift the block — that's fleetd's reconcile.
 
 Review-thread findings are **yours to work**, not to defer: ground them against
-current `origin/HEAD` (the default branch) and address them in the reply pass.
+current `origin/HEAD` (the default branch) and address them in the reply pass. The one
+exception: on an approved MR, `/fleet-parley` defers nits to a proposed follow-up ticket.
 
 ## Finish the sweep
 

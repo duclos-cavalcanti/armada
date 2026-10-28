@@ -17,8 +17,12 @@ stdout), or an escalation when a finding needs the operator (exit 1).
 
 ```bash
 set -euo pipefail
-MR_IID=$(fleetc packet "$FLEET_TICKET" | jq -r '.ship.iid // empty')
+PACKET=$(fleetc packet "$FLEET_TICKET")
+MR_IID=$(printf '%s' "$PACKET" | jq -r '.ship.iid // empty')
 [ -n "$MR_IID" ] || { echo "no open MR for $FLEET_TICKET" >&2; exit 1; }
+# Gates nit deferral: at least one approval, and all that are required.
+APPROVED=$(printf '%s' "$PACKET" | jq '(.snapshot.approvals // {current: 0}) | .current > 0 and .current >= .required')
+echo "APPROVED=$APPROVED"
 REVIEW=$(fleetc review --iid "$MR_IID")   # {open_threads, threads: [{id, path, line, author, body}], floating_notes}
 OPEN=$(printf '%s' "$REVIEW" | jq '.open_threads')
 REVIEW_NOTES=$(printf '%s' "$REVIEW" | jq '.floating_notes | length')
@@ -49,17 +53,21 @@ Start strict, soften down: walk the categories in order; the first that clearly 
      errors, and lint stay *inside* scope).
    - **It would amend an acceptance criterion, a design decision, or an invariant**: that's
      the ticket author's call, not a patch.
-2. **Apply with research**: the ask is underspecified ("this might break on X", "consider
+2. **Defer a nit** (only when `APPROVED` is true): the MR has its approvals, and a push can
+   reset them, costing a review round for polish. A nit is what the reviewer labels one
+   (`nit`, `[nit]`), or a pure style / naming / polish ask that changes no behaviour,
+   correctness, test, or doc accuracy. When in doubt, it isn't a nit: apply it.
+3. **Apply with research**: the ask is underspecified ("this might break on X", "consider
    Y"). Verify or compare, then apply; the reply says what you chose and why.
-3. **Apply** (the default): confirm the diagnosis against the current code, derive the fix
+4. **Apply** (the default): confirm the diagnosis against the current code, derive the fix
    (the reviewer's suggestion is one input, not an instruction), apply it.
    - **Right problem, wrong remedy**: apply your own fix; the reply says both.
-4. **Asks nothing** (a verdict, a pass, an acknowledgement): reply with the disposition and
+5. **Asks nothing** (a verdict, a pass, an acknowledgement): reply with the disposition and
    resolve it now.
 
-When a push-back trigger is a genuine 50/50, descend to 2 and note the ambiguity in the
+When a push-back trigger is a genuine 50/50, descend to 3 and note the ambiguity in the
 reply. Never answer a correct finding with "we'll ticket it later": a right finding is
-fixed now, a wrong one is pushed back.
+fixed now, a wrong one is pushed back. The one exception is a nit on an approved MR (2).
 
 ## Step 2 — Fix, verify, push
 
@@ -68,7 +76,12 @@ Make the fixes in the worktree, run the tests, commit, and push. After a rebase,
 
 ## Step 3 — Reply and resolve
 
-For each thread you handled:
+**Deferred nits first:** propose them all as **one** follow-up ticket with `/fleet-propose`
+(a task: "Nits from !<iid>", one bullet per thread: its file:line and ask). Then reply on each
+nit thread "Deferred to <KEY>: the MR is approved, and polish isn't worth resetting its
+approvals." and resolve it.
+
+For each other thread you handled:
 
 ```bash
 fleetc reply --iid "$MR_IID" --thread "<id>" --resolve --body - <<'EOF'
