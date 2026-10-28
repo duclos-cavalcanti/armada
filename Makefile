@@ -34,15 +34,16 @@ run: .project                    ## Build fleetd + reinstall fleetc, (re)start f
 	@cargo build -q -p fleetd
 	@cargo install -q --path crates/fleetc --force --target-dir target
 	@$(MAKE) --no-print-directory stop
-	@while pgrep -f '/fleetd -C projects/$(FLEET_PROJECT)$$' >/dev/null; do sleep 0.2; done
 	@nohup target/debug/fleetd -C projects/$(FLEET_PROJECT) </dev/null >/dev/null 2>&1 &
 	@$(MAKE) --no-print-directory dashboard
 
 export: .project                 ## Snapshot the project's ledger to projects/<name>/exports/<name>-<UTC stamp>.db (safe while running)
 	cargo run -q -p fleetc -- -C projects/$(FLEET_PROJECT) export "projects/$(FLEET_PROJECT)/exports/$(FLEET_PROJECT)-$$(date -u +%Y%m%dT%H%M%SZ).db"
 
-stop: .project                   ## Stop the project's fleet daemon
-	@pkill -f '/fleetd -C projects/$(FLEET_PROJECT)$$' && echo "fleetd stopped ($(FLEET_PROJECT))" || echo "fleetd not running ($(FLEET_PROJECT))"
+stop: .project                   ## Stop the project's fleet daemon (waits up to 5s for it to exit)
+	@pkill -f '/fleetd -C projects/$(FLEET_PROJECT)$$' || { echo "fleetd not running ($(FLEET_PROJECT))"; exit 0; }; \
+	for _ in $$(seq 25); do pgrep -f '/fleetd -C projects/$(FLEET_PROJECT)$$' >/dev/null || { echo "fleetd stopped ($(FLEET_PROJECT))"; exit 0; }; sleep 0.2; done; \
+	echo "fleetd ($(FLEET_PROJECT)) still running after 5s"; exit 1
 
 dashboard: .project              ## Build + run the TUI dashboard over the project (cargo run --release)
 	cargo run --release -p dashboard -- -C projects/$(FLEET_PROJECT)
