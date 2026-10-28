@@ -50,6 +50,8 @@ struct Header {
     assignee: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parent: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    labels: Vec<String>,
 }
 
 /// A folder scan: `(key, ticket)` per good file, `(file, why)` per bad one.
@@ -217,6 +219,7 @@ impl Tracker for FsTracker {
             ticket: self.to_ticket(key.clone(), &t),
             held: None,
             location: self.path(key).to_string_lossy().into_owned(),
+            labels: t.header.labels.clone(),
         })
     }
 
@@ -240,6 +243,7 @@ impl Tracker for FsTracker {
                 blocked_by: d.blocked_by.iter().map(|b| b.0.clone()).collect(),
                 assignee: None,
                 parent: None,
+                labels: d.labels.clone(),
             },
             body: d.description.clone(),
         };
@@ -252,6 +256,15 @@ impl Tracker for FsTracker {
             .with_context(|| format!("creating {}", path.display()))?;
         std::io::Write::write_all(&mut file, render(&ticket)?.as_bytes())?;
         Ok(key)
+    }
+
+    fn label(&self, key: &TicketKey, label: &str, on: bool) -> Result<()> {
+        self.update(key, |h| {
+            h.labels.retain(|l| l != label);
+            if on {
+                h.labels.push(label.to_string());
+            }
+        })
     }
 
     fn block(&self, key: &TicketKey, by: &TicketKey) -> Result<()> {
@@ -330,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn creates_the_next_numbered_ticket_and_blocks_it() {
+    fn creates_the_next_numbered_ticket_and_blocks_and_labels_it() {
         let (t, dir) = tracker("create", &[("ARMT-4.md", ARMT_4), ("ARMT-9.md", "a bad file still holds its number")]);
         let draft = TicketDraft {
             title: "Add mul".into(),
@@ -338,6 +351,7 @@ mod tests {
             description: "## Outcome\n\nmul works.\n".into(),
             convoy: Some(ConvoyKey("ARMT-1".into())),
             blocked_by: vec![],
+            labels: vec!["fleet-proposed".into()],
         };
         let key = t.create(&draft).unwrap();
         assert_eq!(key, TicketKey("ARMT-10".into()), "after the highest number, bad files included");
@@ -346,6 +360,10 @@ mod tests {
         let d = t.read(&key).unwrap();
         assert_eq!((d.kind.as_str(), d.description.as_str()), ("story", "## Outcome\n\nmul works.\n"));
         assert_eq!((d.ticket.status, d.ticket.blocked_by.clone()), (TicketStatus::Todo, vec![TicketKey("ARMT-4".into())]));
+        assert_eq!(d.labels, vec!["fleet-proposed".to_string()]);
+        t.label(&key, "fleet-proposed", false).unwrap();
+        t.label(&key, "fleet-proposed", false).unwrap(); // idempotent
+        assert!(t.read(&key).unwrap().labels.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 

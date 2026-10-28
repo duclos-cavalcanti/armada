@@ -55,9 +55,9 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc ticket   <KEY-N> [--where]      (a ticket's full text; --where: its URL or file path)\n  \
      fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (prints the new key)\n  \
      fleetc ticket   block <KEY-N> --by <KEY-N>   (record an 'is blocked by' edge)\n  \
-     fleetc propose  --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (a cog: propose a new ticket; prints its id)\n  \
+     fleetc propose  --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (a cog: file a new ticket labelled fleet-proposed; prints its id + key)\n  \
      fleetc propose  --existing <KEY-N> --why <text> [--convoy <KEY>]   (a cog: propose taking on an existing ticket)\n  \
-     fleetc proposal [<id> | accept <id> [--convoy <KEY>] | drop <id>]   (the open proposals; one in full; accept — a new ticket is filed, into --convoy; drop)\n  \
+     fleetc proposal [<id> | accept <id> [--convoy <KEY>] | drop <id>]   (the open proposals; one in full; accept — official, into --convoy; drop — a proposed ticket is cancelled)\n  \
      fleetc launch   --title <t> --body <text> [--ticket <KEY-N>] [--target <branch>] [--draft] [--worktree <path>]   (open the MR for the worktree's branch; prints its URL)\n  \
      fleetc settings [list | set <key> <value>]   (live config levers; no restart)\n  \
      fleetc project                   (the project checkout's path, from fleet.toml)\n  \
@@ -1044,7 +1044,7 @@ fn propose(args: &[String]) -> Result<()> {
     if code != 200 {
         bail!("fleetd ({code}): {resp}");
     }
-    println!("proposal {resp} — held for the operator (fleetc proposal {resp})");
+    println!("{resp}");
     Ok(())
 }
 
@@ -1284,6 +1284,7 @@ mod tests {
             description: "## Context\nIt flakes.\n".into(),
             convoy: Some(domain::ConvoyKey("PROJ-9".into())),
             blocked_by: vec![],
+            labels: vec![],
         }));
         let existing = proposal(4, domain::Proposed::Existing {
             ticket: domain::TicketKey("PROJ-7".into()),

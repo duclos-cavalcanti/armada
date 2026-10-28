@@ -86,7 +86,7 @@ voice only the judgment calls it can't see from outside:
 ## Out-of-scope findings
 
 Work you find that isn't your ticket's — a bug nearby, debt worth its own ticket — never
-widens your diff. Propose it with `/fleet-propose`: the operator files or drops it. Then
+widens your diff. Propose it with `/fleet-propose`: the operator accepts or drops it. Then
 carry on with your ticket.
 
 ## Restart awareness

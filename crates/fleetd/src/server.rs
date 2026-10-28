@@ -589,7 +589,7 @@ fn parse_draft(dto: wire::TicketNewCmd) -> Result<domain::TicketDraft, String> {
     if dto.title.trim().is_empty() {
         return Err(bad("a ticket needs a title".into()));
     }
-    Ok(domain::TicketDraft { title: dto.title, kind: dto.kind, description: dto.description, convoy, blocked_by })
+    Ok(domain::TicketDraft { title: dto.title, kind: dto.kind, description: dto.description, convoy, blocked_by, labels: vec![] })
 }
 
 /// Relay a command to the writer and await its reply: 200 with the reply's text, 409 with the

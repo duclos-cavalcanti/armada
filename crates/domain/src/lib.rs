@@ -457,6 +457,8 @@ pub struct TicketDetail {
     /// Where a person opens it: a URL (Jira) or a file path (the filesystem tracker).
     #[serde(default)]
     pub location: String,
+    #[serde(default)]
+    pub labels: Vec<String>,
 }
 
 /// A new ticket, as `fleetc ticket new` asks the tracker to create it. It starts in To Do.
@@ -467,11 +469,14 @@ pub struct TicketDraft {
     pub description: String,
     pub convoy: Option<ConvoyKey>,
     pub blocked_by: Vec<TicketKey>,
+    #[serde(default)]
+    pub labels: Vec<String>,
 }
 
 /// Work a cog found mid-ticket that isn't its own, held for the operator (or the admiral) to accept
-/// or drop. Open while `ended_at` is `None`; `accepted_as` names the ticket it became (a new one,
-/// filed on accept) or already was (an existing one).
+/// or drop. A new ticket is filed when proposed, labelled `fleet-proposed` and outside any convoy, and
+/// held as an existing one; accept makes it official, drop cancels it. Open while `ended_at` is
+/// `None`; `accepted_as` names the ticket it is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Proposal {
     pub id: ProposalId,
@@ -504,13 +509,6 @@ impl Proposed {
         match self {
             Proposed::New(d) => &mut d.convoy,
             Proposed::Existing { convoy, .. } => convoy,
-        }
-    }
-    /// Land it in `convoy` unless it already names one.
-    pub fn default_convoy(&mut self, convoy: Option<ConvoyKey>) {
-        let slot = self.convoy_mut();
-        if slot.is_none() {
-            *slot = convoy;
         }
     }
     /// Land it in `convoy` when given (the accepter's pick), else keep its own.

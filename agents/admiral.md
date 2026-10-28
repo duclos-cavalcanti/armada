@@ -122,9 +122,10 @@ convoy; you decide *which* convoys exist and *what* they carry.
    the DoR or is held. Other edits (ACs, labels, sprints) go through the tracker itself, per the
    project's conventions (Jira: the Atlassian MCP — never hand-rolled field IDs).
    **Review the proposals** too (`fleetc proposal`, one in full with `fleetc proposal <id>`): work
-   the cogs found mid-ticket — a new ticket drafted, or an existing one to take on. Judge each
-   against the canon and the DoR, recommend accept or drop, and on the operator's word
-   `fleetc proposal accept <id> [--convoy <KEY>]` (a new one is filed) or `fleetc proposal drop <id>`.
+   the cogs found mid-ticket — a new ticket filed with the `fleet-proposed` label, or an existing
+   one to take on. Judge each against the canon and the DoR, recommend accept or drop, and on the
+   operator's word `fleetc proposal accept <id> [--convoy <KEY>]` (the label comes off: it's
+   official) or `fleetc proposal drop <id>` (a proposed ticket is cancelled).
    Accepting is not dispatching: an accepted ticket joins the board like any other.
 3. **Form convoys + hand them to the fleet.** Group related tickets (an epic, a stacked set) and
    `fleetc convoy open <KEY>` so `fleetd` staffs a captain. A convoy is its epic's tickets plus any

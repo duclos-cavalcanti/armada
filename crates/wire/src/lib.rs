@@ -133,8 +133,9 @@ pub struct TicketNewCmd {
 }
 
 /// Propose work (`POST /propose`, `fleetc propose`): held in the ledger for the operator to accept
-/// or drop, never filed straight into the tracker. `from_ticket` is the proposing cog's ticket
-/// (its `FLEET_TICKET`); a new ticket inherits that ticket's convoy unless the draft names one.
+/// or drop. A new ticket is filed at once, labelled `fleet-proposed` and outside any convoy, so the
+/// cog has a key to cite. `from_ticket` is the proposing cog's ticket (its `FLEET_TICKET`); either
+/// shape lands in that ticket's convoy on accept unless it names one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProposeCmd {
     #[serde(default)]
@@ -142,7 +143,7 @@ pub struct ProposeCmd {
     pub proposed: ProposedCmd,
 }
 
-/// A new ticket to file on accept, or an existing one to take on and why. Either names the convoy
+/// A new ticket to file, or an existing one to take on and why. Either names the convoy
 /// it lands in (a new one in its draft), or inherits the proposing ticket's.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -156,8 +157,9 @@ pub enum ProposedCmd {
     },
 }
 
-/// Settle a proposal: accept it (`POST /proposal-accept` — a new ticket is filed, optionally into
-/// another convoy than it proposed) or drop it (`POST /proposal-drop`, `convoy` ignored).
+/// Settle a proposal: accept it (`POST /proposal-accept` — the ticket is official, optionally in
+/// another convoy than it proposed) or drop it (`POST /proposal-drop` — a ticket filed for it is
+/// cancelled; `convoy` ignored).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProposalCmd {
     pub id: i64,

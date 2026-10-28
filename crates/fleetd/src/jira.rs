@@ -178,6 +178,9 @@ impl Tracker for JiraTracker {
         if let Some(convoy) = &d.convoy {
             args.extend(["-P", &convoy.0]);
         }
+        for label in &d.labels {
+            args.extend(["-l", label]);
+        }
         args.extend(["--no-input", "--raw"]);
         let out = self.jira(&args)?;
         let key = serde_json::from_str::<serde_json::Value>(&out)
@@ -189,6 +192,11 @@ impl Tracker for JiraTracker {
             self.block(&key, blocker)?;
         }
         Ok(key)
+    }
+
+    fn label(&self, key: &TicketKey, label: &str, on: bool) -> Result<()> {
+        let label = if on { label.to_string() } else { format!("-{label}") }; // jira-cli: `-x` removes x
+        self.jira(&["issue", "edit", &key.0, "--no-input", "--label", &label]).map(drop)
     }
 
     fn block(&self, key: &TicketKey, by: &TicketKey) -> Result<()> {
@@ -221,6 +229,11 @@ fn detail_from_issue(issue: &serde_json::Value) -> Option<TicketDetail> {
         },
         held: None,
         location: browse_url(issue).unwrap_or_default(),
+        labels: f
+            .get("labels")
+            .and_then(|l| l.as_array())
+            .map(|l| l.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
     })
 }
 
@@ -361,6 +374,7 @@ mod tests {
             "self": "https://example.atlassian.net/rest/api/3/issue/10042",
             "fields": {
                 "summary": "Add neg", "status": {"name": "To Do"}, "issuetype": {"name": "Story"},
+                "labels": ["fleet-proposed"],
                 "description": {"type": "doc", "content": [
                     {"type": "heading", "attrs": {"level": 2}, "content": [{"type": "text", "text": "Outcome"}]},
                     {"type": "paragraph", "content": [{"type": "text", "text": "neg works."}]},
@@ -375,6 +389,7 @@ mod tests {
         assert_eq!(d.description, "## Outcome\n\nneg works.\n\n- AC one");
         assert_eq!(capitalized("story"), "Story");
         assert_eq!(d.location, "https://example.atlassian.net/browse/PROJ-7");
+        assert_eq!(d.labels, vec!["fleet-proposed".to_string()]);
     }
 
     // Real jira --raw / REST field shape (trimmed).

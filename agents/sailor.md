@@ -97,10 +97,10 @@ current `origin/HEAD` (the default branch) and address them in the reply pass.
 ## Out-of-scope findings
 
 Work you find that isn't your ticket's — a bug nearby, debt worth its own ticket — never
-widens your diff. Propose it with `/fleet-propose`: the operator files or drops it. A
-reviewer asking for work outside the ticket's scope is one: reply that it's a follow-up, and
-propose it. Never use this to defer an in-scope finding — those are yours to work. Then
-carry on with your sweep.
+widens your diff. Propose it with `/fleet-propose`: the operator accepts or drops it. A
+reviewer asking for work outside the ticket's scope is one: propose it, then reply on the
+thread with the proposed ticket's key and resolve it. Never use this to defer an in-scope
+finding — those are yours to work. Then carry on with your sweep.
 
 ## Boundaries
 

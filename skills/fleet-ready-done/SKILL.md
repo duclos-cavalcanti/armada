@@ -43,7 +43,7 @@ wins. This covers *what* a good ticket and a finished MR are, not the process ar
 
 ## Drafting a ticket
 
-How `/fleet-commission` (files it) and `/fleet-propose` (a cog holds it for the operator)
+How `/fleet-commission` (files it) and `/fleet-propose` (a cog files it as a proposal for the operator)
 both write one:
 
 1. **Draft** the title and the four-section body above, from what you know (ask only for

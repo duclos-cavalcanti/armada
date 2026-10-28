@@ -223,8 +223,10 @@ pub trait Tracker {
     fn subtasks(&self, parent: &TicketKey) -> Result<Vec<TicketStatus>>;
     /// The ticket's full text — its board facts, type, and description (`fleetc ticket <KEY>`).
     fn read(&self, key: &TicketKey) -> Result<TicketDetail>;
-    /// Create a ticket in To Do from `draft`, with its "is blocked by" edges; returns its key.
+    /// Create a ticket in To Do from `draft`, with its "is blocked by" edges and labels; returns its key.
     fn create(&self, draft: &TicketDraft) -> Result<TicketKey>;
+    /// Add (`on`) or remove a label on the ticket (idempotent).
+    fn label(&self, key: &TicketKey, label: &str, on: bool) -> Result<()>;
     /// Record that `key` is blocked by `by` (idempotent).
     fn block(&self, key: &TicketKey, by: &TicketKey) -> Result<()>;
     /// Add a comment to the ticket — a decision's why, kept where the team reads the ticket.

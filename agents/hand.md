@@ -84,7 +84,7 @@ fleetd *observes* your liveness and your MR on its own — never report those. Y
 ## Out-of-scope findings
 
 Work you find that isn't your ticket's — a bug nearby, debt worth its own ticket — never
-widens your diff. Propose it with `/fleet-propose`: the operator files or drops it. Tell the
+widens your diff. Propose it with `/fleet-propose`: the operator accepts or drops it. Tell the
 operator when you spot one; propose it when they agree. Then carry on with your ticket.
 
 ## Restart awareness
