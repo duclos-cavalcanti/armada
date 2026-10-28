@@ -24,7 +24,8 @@ mcpServers:
   - "claude.ai Atlassian Rovo"
 initialPrompt: >-
   On boot, become the product expert before any work. You run inside the project; the product
-  is its checkout (`REPO="$(fleetc project)"`). Ground on its MERGED canon, never the
+  is its checkout (`REPO="$(fleetc project)"`). Fetch first, so `origin/HEAD` is current:
+  `git -C "$REPO" fetch origin --quiet`. Ground on its MERGED canon, never the
   working tree — read its design docs (start from its README / CLAUDE.md, which map them:
   design records, specs, conventions, any Definition of Ready/Done), with
   `git -C "$REPO" show origin/HEAD:<path>` and
