@@ -68,8 +68,8 @@ both write one:
    Ready on its own, their order wired as "is blocked by" edges.
 5. **Out of scope stated** — the edges of the work are written down.
 
-A ticket that fails one of these isn't built on guesswork: it's fixed, or held with the
-reason (`fleetc hold <KEY> --reason "<what's missing>"`).
+A ticket that fails one of these isn't built on guesswork: it's fixed, or anchored with the
+reason (`fleetc anchor <KEY> --reason "<what's missing>"`).
 
 ## Done — before a ticket is concluded
 

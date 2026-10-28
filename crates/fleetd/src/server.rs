@@ -86,8 +86,8 @@ fn handle(
         (Some("POST"), Some("/weigh")) => handle_hold(&request, cmds, Hold::Weigh),
         (Some("POST"), Some("/sink")) => handle_hold(&request, cmds, Hold::Sink),
         (Some("POST"), Some("/send")) => handle_send(&request, cmds),
-        (Some("POST"), Some("/hold")) => handle_set_held(&request, cmds, true),
-        (Some("POST"), Some("/unhold")) => handle_set_held(&request, cmds, false),
+        (Some("POST"), Some("/anchor-ticket")) => handle_anchor_ticket(&request, cmds, true),
+        (Some("POST"), Some("/weigh-ticket")) => handle_anchor_ticket(&request, cmds, false),
         (Some("GET"), Some(p)) if p.starts_with("/packet") => handle_packet(cmds, p),
         (Some("GET"), Some(p)) if p.starts_with("/review") => handle_review(cmds, p),
         (Some("POST"), Some(p)) if p.starts_with("/rebase") => handle_rebase(cmds, p),
@@ -796,11 +796,11 @@ fn handle_send(request: &str, cmds: &Sender<Command>) -> String {
     }
 }
 
-/// `POST /hold` | `/unhold` — set/clear a ticket's `held` flag (keeping it off the dispatch
-/// frontier). The route decides `held`; `/hold` carries the groomer's `reason`, `/unhold` ignores it.
-fn handle_set_held(request: &str, cmds: &Sender<Command>, held: bool) -> String {
+/// `POST /anchor-ticket` | `/weigh-ticket` — anchor or weigh everything on a ticket. The route
+/// decides which; `/anchor-ticket` carries the `reason`, `/weigh-ticket` ignores it.
+fn handle_anchor_ticket(request: &str, cmds: &Sender<Command>, anchor: bool) -> String {
     let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
-    let dto: wire::HoldCmd = match serde_json::from_str(body) {
+    let dto: wire::TicketAnchor = match serde_json::from_str(body) {
         Ok(d) => d,
         Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
     };
@@ -809,10 +809,10 @@ fn handle_set_held(request: &str, cmds: &Sender<Command>, held: bool) -> String 
         Err(r) => return r,
     };
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    let cmd = Command::SetHeld {
+    let cmd = Command::AnchorTicket {
         ticket,
-        held,
-        reason: if held { dto.reason } else { None },
+        anchor,
+        reason: if anchor { dto.reason } else { None },
         reply: reply_tx,
     };
     if cmds.send(cmd).is_err() {
@@ -955,7 +955,7 @@ mod tests {
                     | Command::Weigh { reply, .. }
                     | Command::Sink { reply, .. }
                     | Command::Send { reply, .. }
-                    | Command::SetHeld { reply, .. }
+                    | Command::AnchorTicket { reply, .. }
                     | Command::SetSetting { reply, .. }
                     | Command::Rebase { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetPacket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
@@ -1018,7 +1018,7 @@ mod tests {
                     | Command::Weigh { reply, .. }
                     | Command::Sink { reply, .. }
                     | Command::Send { reply, .. }
-                    | Command::SetHeld { reply, .. }
+                    | Command::AnchorTicket { reply, .. }
                     | Command::SetSetting { reply, .. }
                     | Command::Rebase { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetPacket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }

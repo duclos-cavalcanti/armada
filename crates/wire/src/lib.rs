@@ -68,11 +68,11 @@ pub struct CogTarget {
     pub convoy: Option<String>,
 }
 
-/// A ticket hold command. `/hold` sets `held` (keeping the ticket off the dispatch frontier) and
-/// carries the groomer's `reason`; `/unhold` releases it (the route decides, so `reason` is ignored
-/// there). The captain's groom-gate uses this; so can the operator.
+/// Anchor a ticket (`POST /anchor-ticket`, `fleetc anchor <KEY>`): hold everything on it — the
+/// ticket off the frontier, its MR disarmed + drafted, its live cogs stopped — with the `reason`.
+/// `POST /weigh-ticket` releases it all (`reason` ignored). The captain's groom-gate; the operator's.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct HoldCmd {
+pub struct TicketAnchor {
     pub ticket: String,
     #[serde(default)]
     pub reason: Option<String>,

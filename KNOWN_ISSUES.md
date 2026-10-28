@@ -9,7 +9,7 @@ Accepted edge cases: understood, not fixed, each with its workaround.
   nothing to stop it. GitLab stops it only once PROJ-9 has an open MR, because that's
   when reconcile declares the `/blocks` dependency.
   *Workaround:* a late dependency is the operator's or captain's call. Run
-  `fleetc hold PROJ-2`: the hold disarms the MR and marks it draft. `fleetc unhold` it
+  `fleetc anchor PROJ-2`: the anchor disarms the MR and marks it draft. `fleetc weigh` it
   once PROJ-9 lands, and a fresh sailor re-sweeps it.
   *Fix if it bites:* reconcile holds an armed MR on its own when a blocker appears. (An arm
   *after* the blocker lands is already refused: `fleetc arm` checks for open blockers.)

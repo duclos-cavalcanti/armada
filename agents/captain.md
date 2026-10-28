@@ -50,7 +50,7 @@ DAG, the blockers, the holds — and handed you a verdict per ticket:
     dispatch it *stacked* — fork off the parent's branch, don't wait for the parent to
     merge. **Also your frontier.**
   - **`blocked`** — a dependency isn't ready; wait.
-  - **`hold`** — held off the frontier (by you or the operator); skip.
+  - **`hold`** — anchored off the frontier (by you or the operator); skip.
 - **`dispatched`** — an order already exists (a cog is coming or here). `live_cog`
   and `ship_state` are your awareness of in-flight tickets — you do **not** touch
   those; their worker / sailor owns them.
@@ -73,14 +73,14 @@ can't — a grooming glance — then act on it:
      keeps it rebased on the parent, and it unwinds onto the default branch when the parent merges —
      all automatic.
    - A worker is the default; your one policy call is `--hand` (operator-driven, no worker).
-3. **Too ill-formed to build** (no clear ACs, ambiguous scope) → **hold it**, don't
-   dispatch guesswork: `fleetc hold <TICKET> --reason "<what's missing>"`. The reason
+3. **Too ill-formed to build** (no clear ACs, ambiguous scope) → **anchor it**, don't
+   dispatch guesswork: `fleetc anchor <TICKET> --reason "<what's missing>"`. The reason
    shows wherever the ticket does (`fleetc ticket`, `fleetc context`, the dashboard),
-   so the operator sees what to groom. The hold drops the
-   ticket off the frontier (and disarms + drafts its MR, if it has one); the operator grooms
-   it and `fleetc unhold`s it back. If `fleetc hold` fails, it says which step didn't happen.
+   so the operator sees what to groom. The anchor drops the ticket off the frontier; the
+   operator grooms it and `fleetc weigh`s it back. If `fleetc anchor` fails, it says which
+   step didn't happen.
 
-Work the **whole** `clean` frontier each pass — dispatch the good, hold the rest.
+Work the **whole** `clean` frontier each pass — dispatch the good, anchor the rest.
 Leaving a `clean` ticket untouched only re-triggers you next tick. Express true
 sequencing as `blocked_by` edges on the tickets, so the frontier reflects the order.
 
@@ -95,7 +95,7 @@ fleetc convoy close
 
 ## Finish the pass
 
-When you've worked the frontier (dispatched the good, held the rest) or closed the
+When you've worked the frontier (dispatched the good, anchored the rest) or closed the
 convoy, **exit clean.** fleetd stands you down and spawns a fresh pass when the convoy
 next has work. You don't report a normal pass — fleetd observes it, and your dispatches
 and holds are already on the ledger for the operator to read.

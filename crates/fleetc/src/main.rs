@@ -33,13 +33,12 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
      fleetc convoy   open <KEY> [--title <text>] | close [<KEY>]\n  \
      fleetc convoy   <add|remove> <KEY> <KEY-N>   (a ticket joins the convoy — its only one — or an added one leaves)\n  \
-     fleetc anchor   --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (graceful stop & hold)\n  \
-     fleetc weigh    --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (resume)\n  \
+     fleetc anchor   <KEY-N> [--reason <why>]   (hold everything on it: off the frontier, its cogs stopped, its MR disarmed + drafted)\n  \
+     fleetc anchor   --cog <captain|lookout> [--convoy <KEY>]   (stop a ticketless cog)\n  \
+     fleetc weigh    <KEY-N> | --cog <captain|lookout> [--convoy <KEY>]   (release what anchor held)\n  \
      fleetc sink     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (scuttle — hard teardown)\n  \
      fleetc send     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] <message>   (message into the cog's pane)\n  \
-     fleetc hold     <KEY-N> [--reason <why>]  (hold off the frontier; disarms + drafts its open MR)\n  \
      fleetc decommission <KEY-N> --reason <why> [--yes]   (withdraw it for good: close its MR, cancel it with the reason, reap its cogs + worktree)\n  \
-     fleetc unhold   <KEY-N>          (release back onto the frontier; readies its MR)\n  \
      fleetc packet   [<KEY-N>]        (the cog's work-packet: order + ship + ticket)\n  \
      fleetc context  [--convoy <KEY>] [--format table]   (a captain's convoy slice)\n  \
      fleetc plan                       (fleetd's latest reconcile plan — the parity lens)\n  \
@@ -97,9 +96,7 @@ fn run() -> Result<()> {
         Some("weigh") => weigh(&args[1..]),
         Some("sink") => sink(&args[1..]),
         Some("send") => send(&args[1..]),
-        Some("hold") => hold(&args[1..]),
         Some("decommission") => decommission(&args[1..]),
-        Some("unhold") => unhold(&args[1..]),
         Some("packet") => packet(&args[1..]),
         Some("context") => context(&args[1..]),
         Some("plan") => plan(&args[1..]),
@@ -254,15 +251,41 @@ fn convoy(args: &[String]) -> Result<()> {
     }
 }
 
-/// `fleetc anchor --cog <kind> [--ticket|--convoy]` — drop anchor on the cog: a graceful stop & hold
-/// (it checkpoints; reconcile won't respawn it). To tear a cog down hard, use `sink`.
+/// `fleetc anchor <KEY-N> [--reason <why>]` — hold everything on the ticket, whatever its stage: off
+/// the frontier, its live cogs stopped (they checkpoint), its open MR disarmed + drafted. `--cog
+/// captain --convoy <KEY>` / `--cog lookout` anchor a ticketless cog. To tear a cog down, `sink`.
 fn anchor(args: &[String]) -> Result<()> {
-    submit("/anchor", &require_cog_target(args, "anchor")?)
+    match args.first() {
+        Some(key) if !key.starts_with('-') => {
+            let reason = match &args[1..] {
+                [] => None,
+                [flag, why] if flag == "--reason" => Some(why.clone()),
+                _ => bail!("usage: fleetc anchor <KEY-N> [--reason <why>]"),
+            };
+            submit("/anchor-ticket", &wire::TicketAnchor { ticket: ticket_key(key, "anchor")?, reason })
+        }
+        _ => submit("/anchor", &ticketless_target(args, "anchor")?),
+    }
 }
 
-/// `fleetc weigh --cog <kind> [--ticket|--convoy]` — weigh anchor (get under way): clear the hold.
+/// `fleetc weigh <KEY-N>` — weigh anchor (get under way): release all `anchor` held. `--cog captain
+/// --convoy <KEY>` / `--cog lookout` for a ticketless cog.
 fn weigh(args: &[String]) -> Result<()> {
-    submit("/weigh", &require_cog_target(args, "weigh")?)
+    match args {
+        [key] if !key.starts_with('-') => {
+            submit("/weigh-ticket", &wire::TicketAnchor { ticket: ticket_key(key, "weigh")?, reason: None })
+        }
+        _ => submit("/weigh", &ticketless_target(args, "weigh")?),
+    }
+}
+
+/// A `--cog` target for anchor/weigh: a ticketed cog is anchored through its ticket, never alone.
+fn ticketless_target(args: &[String], verb: &str) -> Result<wire::CogTarget> {
+    let target = require_cog_target(args, verb)?;
+    if target.ticket.is_some() {
+        bail!("{verb} the ticket, which holds its cog too: fleetc {verb} <KEY-N>");
+    }
+    Ok(target)
 }
 
 /// `fleetc sink --cog <kind> [--ticket|--convoy]` — scuttle the cog: a deliberate, destructive
@@ -271,9 +294,6 @@ fn sink(args: &[String]) -> Result<()> {
     submit("/sink", &require_cog_target(args, "sink")?)
 }
 
-/// `fleetc hold <KEY-N> --reason <why>` — hold the ticket off the dispatch frontier (the captain's
-/// groom-gate decision, or an operator lever); fleetd also disarms its open MR and marks it draft. `--reason`
-/// rides on the `TicketHeld` event.
 /// `fleetc decommission <KEY-N> --reason <why> [--yes]` — withdraw a ticket from the fleet for good:
 /// fleetd closes its open MR (noting why), comments the reason on the ticket and cancels it, then
 /// reaps its cogs, worktree and order. The operator's call — a cog can't — and it asks first, showing
@@ -323,25 +343,6 @@ fn decommission_preview(ticket: &str) -> Result<String> {
         out += &format!("  remove the worktree {wt} and its local branch, retire the order\n");
     }
     Ok(out)
-}
-
-fn hold(args: &[String]) -> Result<()> {
-    let ticket = require_ticket(args, "hold")?;
-    let mut reason = None;
-    let mut it = args[1..].iter();
-    while let Some(flag) = it.next() {
-        match flag.as_str() {
-            "--reason" => reason = Some(it.next().cloned().ok_or_else(|| anyhow!("--reason needs a value"))?),
-            other => bail!("unknown flag: {other}"),
-        }
-    }
-    submit("/hold", &wire::HoldCmd { ticket, reason })
-}
-
-/// `fleetc unhold <KEY-N>` — release a held ticket back onto the frontier.
-fn unhold(args: &[String]) -> Result<()> {
-    let ticket = require_ticket(args, "unhold")?;
-    submit("/unhold", &wire::HoldCmd { ticket, reason: None })
 }
 
 /// `fleetc packet <KEY-N>` — read the cog's composed work-packet (order + ship + snapshot +
@@ -1481,6 +1482,10 @@ mod tests {
         assert!(a(&["--cog", "lookout", "--ticket", "PROJ-1"]).is_err(), "lookout takes no key");
         assert!(a(&["--cog", "worker", "--convoy", "PROJ-100"]).is_err(), "worker can't use --convoy");
         assert!(a(&["--cog", "foreman", "--ticket", "PROJ-1"]).is_err(), "unknown cog");
+        // anchor/weigh reach a ticketed cog only through its ticket.
+        let t = |args: &[&str]| ticketless_target(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "anchor");
+        assert!(t(&["--cog", "lookout"]).is_ok());
+        assert!(t(&["--cog", "worker", "--ticket", "PROJ-1"]).unwrap_err().to_string().contains("fleetc anchor <KEY-N>"));
     }
 
     #[test]

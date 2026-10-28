@@ -69,7 +69,7 @@ pub enum Command {
     Weigh { target: ControlTarget, reply: Reply },
     Sink { target: ControlTarget, reply: Reply },
     Send { target: ControlTarget, message: String, reply: Reply }, // push an operator message to the cog's pane
-    SetHeld { ticket: TicketKey, held: bool, reason: Option<String>, reply: Reply },
+    AnchorTicket { ticket: TicketKey, anchor: bool, reason: Option<String>, reply: Reply }, // hold everything on it, or release it
     GetPacket { ticket: TicketKey, reply: PacketReply }, // a read: the cog's composed work-packet
     GetConvoyView { convoy: ConvoyKey, reply: ConvoyReply }, // a read: the captain's convoy slice
     GetReview { iid: i64, reply: ReviewReply }, // a read: an MR's fresh review surface (forge)
@@ -216,8 +216,8 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let res = send(ledger, host, &target, &message).map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
-        Command::SetHeld { ticket, held, reason, reply } => {
-            let res = set_held(ledger, forge, &ticket, held, reason.as_deref()).map_err(|e| format!("{e:#}"));
+        Command::AnchorTicket { ticket, anchor, reason, reply } => {
+            let res = anchor_ticket(ledger, forge, host, &ticket, anchor, reason.as_deref()).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
         Command::GetPacket { ticket, reply } => {
@@ -501,7 +501,7 @@ fn waiting_on(ledger: &Ledger, blockers: &[TicketKey]) -> Result<Vec<TicketKey>>
 /// launched (a hold or a blocker can land mid-sweep).
 fn arm(ledger: &Ledger, forge: &dyn Forge, key: &TicketKey, merges: bool) -> Result<()> {
     let ticket = TicketRepo::get(ledger, key)?.ok_or_else(|| anyhow!("{}: not on the board", key.0))?;
-    anyhow::ensure!(!ticket.held, "{} is held — not arming (fleetc unhold it first)", key.0);
+    anyhow::ensure!(!ticket.held, "{} is anchored — not arming (fleetc weigh it first)", key.0);
     let open = reconcile::open_blockers(ledger, &ticket.blocked_by)?;
     if !open.is_empty() {
         let keys: Vec<&str> = open.iter().map(|b| b.0.as_str()).collect();
@@ -526,29 +526,43 @@ fn refresh(ledger: &Ledger, forge: &dyn Forge, ship: &Ship) {
     }
 }
 
-/// Hold or release a ticket. An armed MR merges on the forge's own say, past every fleet gate, so a
-/// hold also acts on the ticket's open MR: disarm it, clear its `swept` (the first pass after
-/// release re-sweeps: a fresh sailor re-arms), and mark it draft — a
-/// draft can't merge even if re-armed. Release marks it ready. Each forge step that fails is
-/// reported with what already happened, so the caller can react (e.g. a forge without drafts).
-fn set_held(ledger: &Ledger, forge: &dyn Forge, ticket: &TicketKey, held: bool, reason: Option<&str>) -> Result<()> {
-    TicketRepo::set_held(ledger, ticket, held, reason, &now_rfc3339())?;
-    if held {
-        tracing::warn!("hold {}: {}", ticket.0, reason.unwrap_or("(no reason given)"));
+/// Anchor a ticket — hold everything on it, whatever its stage — or weigh it (release it all). Each
+/// stop applies where its target exists: the ticket is held (off the frontier; `fleetc arm`
+/// refuses), its live cogs are anchored, and its open MR is disarmed + drafted. An armed MR merges
+/// on the forge's own say, past every fleet gate, hence the disarm; its `swept` clears so the first
+/// pass after release re-sweeps; a draft can't merge even if re-armed. Weighing readies the MR,
+/// then resumes the cogs. A forge step that fails is reported with what already happened, so the
+/// caller can react (e.g. a forge without drafts).
+fn anchor_ticket<H: SessionHost>(
+    ledger: &Ledger,
+    forge: &dyn Forge,
+    host: &H,
+    ticket: &TicketKey,
+    anchor: bool,
+    reason: Option<&str>,
+) -> Result<()> {
+    TicketRepo::set_held(ledger, ticket, anchor, reason, &now_rfc3339())?;
+    if anchor {
+        tracing::warn!("anchor {}: {}", ticket.0, reason.unwrap_or("(no reason given)"));
+        hold_sessions(ledger, host, Verb::Anchor, live_cogs_on(ledger, ticket)?)?;
     } else {
-        tracing::info!("unhold {}", ticket.0);
+        tracing::info!("weigh {}", ticket.0);
     }
     let open = ledger.armada()?.into_iter().find(|s| s.ticket.as_ref() == Some(ticket) && s.ended_at.is_none());
-    let Some(ship) = open else { return Ok(()) };
-    let iid = ship.iid;
-    if held {
-        forge.disarm(iid).with_context(|| format!("held, but disarming !{iid} failed"))?;
-        ShipRepo::set_swept(ledger, &ship.id, None)?;
-        forge.set_draft(iid, true).with_context(|| format!("held + disarmed, but couldn't mark !{iid} draft"))?;
-    } else {
-        forge.set_draft(iid, false).with_context(|| format!("released, but couldn't mark !{iid} ready"))?;
+    if let Some(ship) = open {
+        let iid = ship.iid;
+        if anchor {
+            forge.disarm(iid).with_context(|| format!("anchored, but disarming !{iid} failed"))?;
+            ShipRepo::set_swept(ledger, &ship.id, None)?;
+            forge.set_draft(iid, true).with_context(|| format!("anchored + disarmed, but couldn't mark !{iid} draft"))?;
+        } else {
+            forge.set_draft(iid, false).with_context(|| format!("weighed, but couldn't mark !{iid} ready"))?;
+        }
+        refresh(ledger, forge, &ship);
     }
-    refresh(ledger, forge, &ship);
+    if !anchor {
+        hold_sessions(ledger, host, Verb::Weigh, live_cogs_on(ledger, ticket)?)?;
+    }
     Ok(())
 }
 
@@ -706,7 +720,13 @@ fn control<H: SessionHost>(ledger: &Ledger, host: &H, verb: Verb, target: &Contr
 /// set it on the live cog of that kind on the ticket; sink has no gate (the ended row blocks the
 /// re-spawn). Then `signal` that same session. A no-live-cog match is a benign no-op.
 fn control_cog<H: SessionHost>(ledger: &Ledger, host: &H, verb: Verb, cog: CrewKind, ticket: &TicketKey) -> Result<()> {
-    for s in live_sessions_for(ledger, &ControlTarget::Cog { cog, ticket: ticket.clone() })? {
+    hold_sessions(ledger, host, verb, live_sessions_for(ledger, &ControlTarget::Cog { cog, ticket: ticket.clone() })?)
+}
+
+/// Apply a control verb to ticketed sessions, whose DB gate IS the session: anchor/weigh set or clear
+/// it, sink has none (the ended row blocks the re-spawn); then `signal` each.
+fn hold_sessions<H: SessionHost>(ledger: &Ledger, host: &H, verb: Verb, sessions: Vec<Session>) -> Result<()> {
+    for s in sessions {
         match verb {
             Verb::Anchor => SessionRepo::anchor(ledger, &s.id, &now_rfc3339())?,
             Verb::Weigh => SessionRepo::weigh(ledger, &s.id, &now_rfc3339())?,
@@ -1155,9 +1175,10 @@ mod tests {
     }
 
     #[test]
-    fn hold_disarms_and_drafts_the_open_mr_and_release_readies_it() {
-        // An armed MR merges on the forge's own say — so a hold disarms it, clears `swept` so the
-        // first pass after release re-sweeps (a fresh sailor re-arms), and drafts it.
+    fn anchoring_a_ticket_holds_it_stops_its_cog_and_drafts_its_mr_and_weigh_releases_all() {
+        // An armed MR merges on the forge's own say — so anchoring the ticket disarms it, clears
+        // `swept` so the first pass after weigh re-sweeps (a fresh sailor re-arms), and drafts it;
+        // its live cog is anchored too.
         let db = Ledger::in_memory().unwrap();
         sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InQa)]), "now").unwrap();
         let ship = Ship {
@@ -1178,20 +1199,38 @@ mod tests {
         let forge = FakeForge::default();
         let key = TicketKey("PROJ-1".into());
 
-        set_held(&db, &forge, &key, true, Some("late dependency")).unwrap();
-        assert_eq!(*forge.disarmed.borrow(), vec![7], "the hold disarmed !7");
-        assert_eq!(db.get_by_iid(7).unwrap().unwrap().swept, None, "swept cleared → re-sweep on release");
-        assert!(TicketRepo::get(&db, &key).unwrap().unwrap().held);
+        let mut sailor = Session {
+            id: SessionId(0),
+            kind: CrewKind::Sailor,
+            ticket: Some(key.clone()),
+            convoy: None,
+            worktree_path: "/wt".into(),
+            tmux_session: "sailor-PROJ-1".into(),
+            harness_session_id: None,
+            created_at: "t".into(),
+            ended_at: None,
+            anchored_at: None,
+        };
+        sailor.id = SessionRepo::start(&db, &sailor).unwrap().expect("session start");
+        let (host, anchored) = (FakeHost::new(), |db: &Ledger| SessionRepo::get(db, &sailor.id).unwrap().unwrap().anchored_at.is_some());
 
-        set_held(&db, &forge, &key, false, None).unwrap();
-        assert_eq!(forge.disarmed.borrow().len(), 1, "release doesn't disarm");
-        assert_eq!(*forge.drafted.borrow(), vec![(7, true), (7, false)], "hold drafts, release readies");
+        anchor_ticket(&db, &forge, &host, &key, true, Some("late dependency")).unwrap();
+        assert_eq!(*forge.disarmed.borrow(), vec![7], "anchoring disarmed !7");
+        assert_eq!(db.get_by_iid(7).unwrap().unwrap().swept, None, "swept cleared → re-sweep on weigh");
+        assert!(TicketRepo::get(&db, &key).unwrap().unwrap().held);
+        assert!(anchored(&db), "its sailor is anchored");
+
+        anchor_ticket(&db, &forge, &host, &key, false, None).unwrap();
+        assert_eq!(forge.disarmed.borrow().len(), 1, "weigh doesn't disarm");
+        assert_eq!(*forge.drafted.borrow(), vec![(7, true), (7, false)], "anchor drafts, weigh readies");
         assert!(!TicketRepo::get(&db, &key).unwrap().unwrap().held);
+        assert!(!anchored(&db), "its sailor resumes");
+        assert_eq!(host.sent.borrow().len(), 2, "the stop, then the resume, reached its pane");
 
         // A forge without drafts: the hold + disarm stand, and the caller hears what failed.
         let no_drafts = FakeForge { no_drafts: true, ..Default::default() };
-        let e = format!("{:#}", set_held(&db, &no_drafts, &key, true, None).unwrap_err());
-        assert!(e.contains("held + disarmed, but couldn't mark !7 draft"), "{e}");
+        let e = format!("{:#}", anchor_ticket(&db, &no_drafts, &host, &key, true, None).unwrap_err());
+        assert!(e.contains("anchored + disarmed, but couldn't mark !7 draft"), "{e}");
         assert!(TicketRepo::get(&db, &key).unwrap().unwrap().held, "the hold still stands");
         assert_eq!(*no_drafts.disarmed.borrow(), vec![7]);
     }
@@ -1274,7 +1313,7 @@ mod tests {
         sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::Done)]), "now").unwrap(); // the blocker lands
         assert!(open(&db).is_empty(), "every edge stays in ticket.blocked_by; none is open");
         TicketRepo::set_held(&db, &key, true, Some("late review"), "t").unwrap();
-        assert!(arm(&db, &forge, &key, true).unwrap_err().to_string().contains("is held"));
+        assert!(arm(&db, &forge, &key, true).unwrap_err().to_string().contains("is anchored"));
 
         TicketRepo::set_held(&db, &key, false, None, "t").unwrap();
         let e = arm(&db, &forge, &key, false).unwrap_err().to_string();

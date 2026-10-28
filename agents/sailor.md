@@ -66,7 +66,7 @@ Do the work the snapshot calls for, this sweep only:
 - **`pipeline` failed** → `/fleet-repair`.
 - **clean + not draft + not armed** → **arm** auto-merge: `fleetc arm`.
   The forge merges it on its own once its gates pass. fleetd refuses (and says why)
-  while the ticket is held, has an open blocker, or its project merges by hand — then
+  while the ticket is anchored, has an open blocker, or its project merges by hand — then
   don't retry: report `sleeping`, and the next sweep comes when the gate lifts.
 - **draft** → **never arm** (a draft is a hard "do not merge" hold). Still
   babysit it — rebase / reply / ci-fix as above; who un-drafts it is not your

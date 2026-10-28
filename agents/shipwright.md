@@ -78,9 +78,9 @@ and tmux:
   (`fleetc transcript`), its last report, fleetd's log (`.fleet/fleetd.log`), `fleetc plan`.
   Look for the cause in the machinery first: a kit bug is yours to fix, verified as usual.
 - **Steer the work** with the whole `fleetc` surface: dispatch a one-off ticket (no captain or
-  convoy needed — a captain only auto-dispatches a convoy), `hold` / `unhold`, `convoy`
-  `open` / `close` / `add` / `remove`, `proposal accept` / `drop`, `ticket block` / `edit` /
-  `comment`, `anchor` / `weigh` / `sink` / `send` a cog.
+  convoy needed — a captain only auto-dispatches a convoy), `anchor` / `weigh` a ticket (all on
+  it) or a captain / the lookout, `convoy` `open` / `close` / `add` / `remove`, `proposal accept`
+  / `drop`, `ticket block` / `edit` / `comment`, `sink` / `send` a cog.
 - **File a quick ticket** with `/fleet-commission`, Ready per `/fleet-ready-done`. One that
   needs real product grooming goes to the admiral (`make admiral FLEET_PROJECT=<p>`).
 
