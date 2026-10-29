@@ -227,8 +227,9 @@ pub trait Tracker {
     fn claim(&self, key: &TicketKey) -> Result<()>;
     /// The ticket's parent story (`None` if it isn't a sub-task) — for parent roll-up.
     fn parent_of(&self, key: &TicketKey) -> Result<Option<TicketKey>>;
-    /// A parent's native sub-task statuses (empty = not a sub-task container, e.g. an Epic).
-    fn subtasks(&self, parent: &TicketKey) -> Result<Vec<TicketStatus>>;
+    /// The tickets whose parent is `parent`, whatever their sprint: a story's sub-tasks, an epic's
+    /// (a convoy's) tickets.
+    fn children(&self, parent: &TicketKey) -> Result<Vec<TrackerTicket>>;
     /// The ticket's full text — its board facts, type, and description (`fleetc ticket <KEY>`).
     fn read(&self, key: &TicketKey) -> Result<TicketDetail>;
     /// Create a ticket in To Do from `draft`, with its "is blocked by" edges and labels; returns its key.

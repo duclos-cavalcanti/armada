@@ -130,8 +130,8 @@ whole fleet builds from, and you own and adjudicate them.
    board like any other.
 2. **Form convoys + hand them to the fleet.** Group related tickets (an epic, a stacked set) and
    `fleetc convoy open <KEY> --plan -` with its plan (`/fleet-ready-done`'s shape): the fabric
-   tying its tickets together, which otherwise lives only in this chat. Reconcile launches its
-   captain, which reads the plan with its slice. `convoy open` declares the convoy whole: to
+   tying its tickets together, which otherwise lives only in this chat. It pulls in the epic's
+   tickets, in a sprint or not; reconcile launches its captain, which reads the plan with its slice. `convoy open` declares the convoy whole: to
    amend the plan, open it again with the full plan (`--title` too); leaving `--plan` out clears it. A convoy is its epic's tickets plus
    any you add from elsewhere (`fleetc convoy add <KEY> <KEY-N>` — a dependency in another team's
    epic that can't be re-parented; `remove` returns it). A ticket is in one convoy at a time.

@@ -200,9 +200,8 @@ impl Tracker for JiraTracker {
         Ok(parent.and_then(|k| TicketKey::parse(&k).ok()))
     }
 
-    fn subtasks(&self, parent: &TicketKey) -> Result<Vec<TicketStatus>> {
-        // All issues whose parent is this one → just their statuses (the roll-up needs no more).
-        Ok(self.all_issues(&format!("parent = {}", parent.0))?.into_iter().map(|t| t.status).collect())
+    fn children(&self, parent: &TicketKey) -> Result<Vec<TrackerTicket>> {
+        self.all_issues(&format!("parent = {}", parent.0))
     }
 
     fn read(&self, key: &TicketKey) -> Result<TicketDetail> {

@@ -790,13 +790,13 @@ pub(crate) fn reap<T: Tracker + ?Sized, H: SessionHost>(
 
 /// converge's `rollup_parent`: a sub-task just reaped (Done); if ALL of its parent's sub-tasks are
 /// terminal, close the empty parent container (the parent carries no work of its own). A no-op for
-/// a non-sub-task (`parent_of` → None) or an Epic (`subtasks` empty — the guard). Fully live: the
+/// a non-sub-task (`parent_of` → None) or an Epic (`children` empty — the guard). Fully live: the
 /// completeness check must be authoritative, so it can't be cached off the sprint-scoped ledger.
 fn roll_up_parent<T: Tracker + ?Sized>(tracker: &T, child: &TicketKey) -> Result<()> {
     let Some(parent) = tracker.parent_of(child)? else { return Ok(()) };
-    let subs = tracker.subtasks(&parent)?;
+    let subs = tracker.children(&parent)?;
     let all_done =
-        !subs.is_empty() && subs.iter().all(|s| matches!(s, TicketStatus::Done | TicketStatus::Cancelled));
+        !subs.is_empty() && subs.iter().all(|s| matches!(s.status, TicketStatus::Done | TicketStatus::Cancelled));
     if all_done {
         tracker.transition(&parent, TicketStatus::Done)?;
     }
@@ -1770,8 +1770,16 @@ mod tests {
         fn parent_of(&self, _key: &TicketKey) -> Result<Option<TicketKey>> {
             Ok(self.parent.borrow().clone())
         }
-        fn subtasks(&self, _parent: &TicketKey) -> Result<Vec<TicketStatus>> {
-            Ok(self.subtasks.borrow().clone())
+        fn children(&self, _parent: &TicketKey) -> Result<Vec<TrackerTicket>> {
+            let child = |(i, status): (usize, &TicketStatus)| TrackerTicket {
+                key: TicketKey(format!("PROJ-{}", 900 + i)),
+                title: "t".into(),
+                status: *status,
+                assignee: None,
+                convoy: None,
+                blocked_by: vec![],
+            };
+            Ok(self.subtasks.borrow().iter().enumerate().map(child).collect())
         }
         fn read(&self, _: &TicketKey) -> Result<domain::TicketDetail> {
             unimplemented!()

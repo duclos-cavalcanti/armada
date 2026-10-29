@@ -4,7 +4,8 @@
 
 use anyhow::Result;
 use domain::ports::{ConvoyRepo, Forge, OrderRepo, SessionRepo, ShipRepo, TicketRepo, Tracker};
-use domain::{Ship, ShipId, ShipSnapshot, ShipState, TicketKey};
+use domain::{ConvoyKey, Ship, ShipId, ShipSnapshot, ShipState, TicketKey, TrackerTicket};
+use std::collections::HashSet;
 use ledger::Ledger;
 
 /// Fetch the board from the tracker and upsert each ticket,
@@ -16,30 +17,66 @@ pub fn sync_board(ledger: &Ledger, tracker: &dyn Tracker, now: &str) -> Result<u
     for t in &tickets {
         TicketRepo::sync(ledger, t, now)?;
     }
-    // Off the board (no sprint, or another team's), the fleet still tracks what it works (an
-    // order), what a convoy took on from another epic, and what those wait on: refresh them too, or
-    // their status and `is blocked by` edges go stale — a sailor would boot blind to its blocker,
-    // and the gate would never lift. A blocker syncs before its dependent, so the edge has its FK.
-    let mut done: std::collections::HashSet<TicketKey> = tickets.iter().map(|t| t.key.clone()).collect();
+    // Off the board (no sprint, or another team's), the fleet still tracks an open convoy's
+    // tickets, what it works (an order), and what those wait on: refresh them too, or their status
+    // and `is blocked by` edges go stale — a captain would miss a ticket, a sailor would boot blind
+    // to its blocker, and the gate would never lift.
+    let mut done: HashSet<TicketKey> = tickets.iter().map(|t| t.key.clone()).collect();
+    for convoy in ConvoyRepo::active(ledger)? {
+        if let Err(e) = sync_convoy_with(ledger, tracker, &convoy.key, &mut done, now) {
+            tracing::warn!("sync: convoy {} not refreshed: {e:#}", convoy.key.0);
+        }
+    }
     let tracked = OrderRepo::queue(ledger)?.into_iter().map(|o| o.ticket).chain(ledger.added_members()?);
     for key in tracked {
-        if !done.insert(key.clone()) {
+        if done.contains(&key) {
             continue;
         }
-        let refreshed = tracker.get(&key).and_then(|t| {
-            for b in t.blocked_by.iter().filter(|b| !done.contains(*b)).cloned().collect::<Vec<_>>() {
-                done.insert(b.clone());
-                if let Err(e) = tracker.get(&b).and_then(|bt| TicketRepo::sync(ledger, &bt, now)) {
-                    tracing::warn!("sync: blocker {} of {} not refreshed: {e:#}", b.0, key.0);
-                }
-            }
-            TicketRepo::sync(ledger, &t, now)
-        });
-        if let Err(e) = refreshed {
+        if let Err(e) = tracker.get(&key).and_then(|t| sync_with_blockers(ledger, tracker, &t, &mut done, now)) {
             tracing::warn!("sync: {} (off the board) not refreshed: {e:#}", key.0);
         }
     }
     Ok(count)
+}
+
+/// Pull the convoy's tickets (its epic's children, whatever their sprint) and their blockers into
+/// the ledger — `convoy open` runs it, so its captain starts on the whole convoy.
+pub fn sync_convoy(ledger: &Ledger, tracker: &dyn Tracker, convoy: &ConvoyKey, now: &str) -> Result<()> {
+    sync_convoy_with(ledger, tracker, convoy, &mut HashSet::new(), now)
+}
+
+fn sync_convoy_with(
+    ledger: &Ledger,
+    tracker: &dyn Tracker,
+    convoy: &ConvoyKey,
+    done: &mut HashSet<TicketKey>,
+    now: &str,
+) -> Result<()> {
+    for t in tracker.children(&TicketKey(convoy.0.clone()))? {
+        if !done.contains(&t.key) {
+            sync_with_blockers(ledger, tracker, &t, done, now)?;
+        }
+    }
+    Ok(())
+}
+
+/// Sync `t` after any blocker not yet synced this pass, so its `is blocked by` edges have their FK.
+fn sync_with_blockers(
+    ledger: &Ledger,
+    tracker: &dyn Tracker,
+    t: &TrackerTicket,
+    done: &mut HashSet<TicketKey>,
+    now: &str,
+) -> Result<()> {
+    done.insert(t.key.clone());
+    for b in &t.blocked_by {
+        if done.insert(b.clone()) {
+            if let Err(e) = tracker.get(b).and_then(|bt| TicketRepo::sync(ledger, &bt, now)) {
+                tracing::warn!("sync: blocker {} of {} not refreshed: {e:#}", b.0, t.key.0);
+            }
+        }
+    }
+    TicketRepo::sync(ledger, t, now)
 }
 
 /// Fetch the armada from the forge and upsert each ship (+ its snapshot). A ship's
@@ -300,8 +337,8 @@ mod tests {
         fn parent_of(&self, _: &TicketKey) -> Result<Option<TicketKey>> {
             Ok(None)
         }
-        fn subtasks(&self, _: &TicketKey) -> Result<Vec<TicketStatus>> {
-            Ok(vec![])
+        fn children(&self, parent: &TicketKey) -> Result<Vec<TrackerTicket>> {
+            Ok(self.0.iter().chain(&self.1).filter(|t| t.convoy.as_ref().is_some_and(|c| c.0 == parent.0)).cloned().collect())
         }
         fn read(&self, _: &TicketKey) -> Result<domain::TicketDetail> {
             unimplemented!()
@@ -376,6 +413,28 @@ mod tests {
         assert_eq!(t.status, Some(TicketStatus::InQa), "refreshed off the board");
         assert_eq!(t.blocked_by, vec![TicketKey("PROJ-4".into())], "its blocker synced first, so the edge holds");
         assert_eq!(TicketRepo::get(&db, &TicketKey("PROJ-4".into())).unwrap().unwrap().status, Some(TicketStatus::InQa));
+    }
+
+    #[test]
+    fn an_open_convoy_holds_its_epics_tickets_whatever_their_sprint() {
+        // PROJ-5 and PROJ-6 are the epic PROJ-280's tickets, in no sprint; PROJ-6 waits on PROJ-7,
+        // another epic's. Opening the convoy pulls them in, edges and all; each sync refreshes them.
+        let db = Ledger::in_memory().unwrap();
+        let epic = ConvoyKey("PROJ-280".into());
+        let child = |key: &str, status, blocked_by: Vec<&str>| TrackerTicket {
+            convoy: Some(epic.clone()),
+            blocked_by: blocked_by.into_iter().map(|b| TicketKey(b.into())).collect(),
+            ..tt(key, status)
+        };
+        let off = vec![child("PROJ-5", TicketStatus::Todo, vec![]), child("PROJ-6", TicketStatus::Todo, vec!["PROJ-7"]), tt("PROJ-7", TicketStatus::InQa)];
+        sync_convoy(&db, &FakeTracker(vec![], off), &epic, "now").unwrap();
+        let six = TicketRepo::get(&db, &TicketKey("PROJ-6".into())).unwrap().unwrap();
+        assert_eq!(six.blocked_by, vec![TicketKey("PROJ-7".into())], "its blocker came in first");
+        db.open(&epic, None, "now").unwrap();
+
+        let off = vec![child("PROJ-5", TicketStatus::Done, vec![]), child("PROJ-6", TicketStatus::Todo, vec!["PROJ-7"]), tt("PROJ-7", TicketStatus::InQa)];
+        sync_board(&db, &FakeTracker(vec![], off), "later").unwrap();
+        assert_eq!(TicketRepo::get(&db, &TicketKey("PROJ-5".into())).unwrap().unwrap().status, Some(TicketStatus::Done), "refreshed off the board");
     }
 
     #[test]

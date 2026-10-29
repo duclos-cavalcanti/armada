@@ -195,8 +195,8 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         }
         Command::OpenConvoy { key, title, plan, reply } => {
             let now = now_rfc3339();
-            let res = ledger
-                .open(&key, title.as_deref(), &now)
+            let res = sync::sync_convoy(ledger, tracker, &key, &now)
+                .and_then(|()| ledger.open(&key, title.as_deref(), &now))
                 .and_then(|()| ledger.set_plan(&key, plan.as_deref(), &now))
                 .map_err(|e| e.to_string());
             let _ = reply.send(res);
@@ -1054,8 +1054,8 @@ mod tests {
         fn parent_of(&self, _: &TicketKey) -> Result<Option<TicketKey>> {
             Ok(None)
         }
-        fn subtasks(&self, _: &TicketKey) -> Result<Vec<TicketStatus>> {
-            Ok(vec![])
+        fn children(&self, parent: &TicketKey) -> Result<Vec<TrackerTicket>> {
+            Ok(self.tickets.borrow().iter().filter(|t| t.convoy.as_ref().is_some_and(|c| c.0 == parent.0)).cloned().collect())
         }
         fn read(&self, key: &TicketKey) -> Result<domain::TicketDetail> {
             let labels = self.labels.borrow().iter().filter(|(k, _)| k == key).map(|(_, l)| l.clone()).collect();

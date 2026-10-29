@@ -206,9 +206,13 @@ impl Tracker for FsTracker {
         Ok(self.load(key)?.header.parent.as_deref().and_then(|p| TicketKey::parse(p).ok()))
     }
 
-    fn subtasks(&self, parent: &TicketKey) -> Result<Vec<TicketStatus>> {
+    fn children(&self, parent: &TicketKey) -> Result<Vec<TrackerTicket>> {
         let (good, _) = self.scan()?;
-        Ok(good.iter().filter(|(_, t)| t.header.parent.as_deref() == Some(&parent.0)).map(|(_, t)| t.header.status).collect())
+        Ok(good
+            .into_iter()
+            .filter(|(_, t)| t.header.parent.as_deref() == Some(&parent.0))
+            .map(|(key, t)| self.to_ticket(key, &t))
+            .collect())
     }
 
     fn read(&self, key: &TicketKey) -> Result<TicketDetail> {
@@ -377,10 +381,10 @@ mod tests {
     }
 
     #[test]
-    fn subtasks_are_the_tickets_naming_the_parent() {
+    fn children_are_the_tickets_naming_the_parent() {
         let child = |status: &str| format!("---\ntitle: c\ntype: task\nstatus: {status}\nparent: ARMT-1\n---\n");
         let (t, dir) = tracker("subtasks", &[("ARMT-1.md", ARMT_4), ("ARMT-2.md", &child("done")), ("ARMT-3.md", &child("in_qa"))]);
-        let mut subs = t.subtasks(&TicketKey("ARMT-1".into())).unwrap();
+        let mut subs: Vec<_> = t.children(&TicketKey("ARMT-1".into())).unwrap().into_iter().map(|c| c.status).collect();
         subs.sort_by_key(|s| s.as_str());
         assert_eq!(subs, vec![TicketStatus::Done, TicketStatus::InQa]);
         assert_eq!(t.parent_of(&TicketKey("ARMT-2".into())).unwrap(), Some(TicketKey("ARMT-1".into())));
