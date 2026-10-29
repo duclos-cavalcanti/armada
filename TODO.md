@@ -9,3 +9,7 @@
   Claude Code hasn't seen (a new worktree, or one that moved) opens on "trust this folder?" with
   "No, exit" selected, and no one is there to answer it. Find why (the checkout's
   `.claude/settings.json` adds a directory + permissions) and make spawns run unattended.
+- [ ] **`sync_blocks` keeps stale open MR dependencies.** It drops only dependencies on closed
+  or merged MRs, so a block whose ticket edge was removed stays while the blocker MR is open
+  (an MR stayed blocked after its ticket lost the edge; removed by hand). Make
+  it also drop open dependencies the ticket graph (`wanted_blocks`) no longer wants.
