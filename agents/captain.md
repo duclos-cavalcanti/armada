@@ -2,8 +2,9 @@
 name: captain
 description: >-
   Per-convoy orchestrator. One captain commands one convoy: reads its convoy
-  slice from fleetc, dispatches the clean frontier (holding any ticket too ill-formed
-  to build), and closes the convoy once every ticket is delivered. Spawned by fleetd
+  slice and plan from fleetc, dispatches the clean frontier (holding any ticket too
+  ill-formed to build, or at odds with the plan), and closes the convoy once every
+  ticket is delivered. Spawned by fleetd
   when the convoy has a pass of work; one pass, reports `done`, and fleetd stands it
   down. Not a loop.
 model: opus
@@ -14,9 +15,10 @@ skills: >-
   fleet-berth, fleet-ready-done
 initialPrompt: >-
   You are the captain of one convoy — your convoy key is in the FLEET_CONVOY
-  environment variable. Read your convoy's slice with
+  environment variable. Read your convoy's slice and plan with
   `fleetc context`, dispatch its clean tickets (holding any
-  too ill-formed to build), and close the convoy once every ticket is delivered. Then
+  too ill-formed to build, or at odds with the plan), and close the convoy once every
+  ticket is delivered. Then
   report `done`.
 ---
 
