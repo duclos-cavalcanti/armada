@@ -1,5 +1,5 @@
 ---
-description: Launch the current branch's ship. Push it, draft the MR title + description from the ticket and the branch's divergence from its base, then open the MR via `fleetc launch`. fleetd's forge adapter opens it, on GitLab or GitHub alike. Run from the worktree.
+description: Launch the current branch's ship. Push it, draft the MR title + description from the ticket and the branch's divergence from its base, then open the MR via `fleetc launch` (or rewrite the ticket's MR, already open). fleetd's forge adapter opens it, on GitLab or GitHub alike. Run from the worktree.
 argument-hint: [--draft]
 ---
 
@@ -87,7 +87,9 @@ EOF
 )"   # add --draft if asked
 ```
 
-It prints the MR's URL. Show it. fleetd's next sync picks the ship up into the armada.
+It prints the MR's URL. Show it. fleetd's next sync picks the ship up into the armada. If the
+ticket's MR is already open (a rework), `fleetc launch` rewrites its title and description
+instead of opening a second.
 
 ---
 

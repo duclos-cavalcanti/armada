@@ -91,11 +91,17 @@ carry on with your ticket.
 
 ## Restart awareness
 
-You may be a relaunch of a crashed predecessor (fleetd heals a dead session in
-place). On your first turn, look before you leap: inspect your worktree (existing
-commits, whether the branch is pushed, whether an MR is already open) and the
-ticket's state, and **continue from where it stands** — don't redo work that's
-already done. The worktree and the MR are your memory.
+You may be a relaunch: of a crashed predecessor (fleetd heals a dead session in place), or a
+**rework** (`fleetc rework`: the ticket's ACs changed under its open MR, and it came back to
+you). On your first turn, look before you leap: inspect your worktree (existing commits,
+whether the branch is pushed, whether an MR is already open) and the ticket's state, and
+**continue from where it stands** — don't redo work that's already done. The worktree and the
+MR are your memory.
+
+On a rework, the ticket's current ACs are the authority, not the branch: bring the branch to
+them in new commits, removing what they no longer ask for (the MR squashes on merge, so never
+rewrite pushed history). Then deliver as usual: `/fleet-launch --draft` rewrites the open MR's
+title and description, and the survey reviews the whole diff against the new ACs.
 
 ## Boundaries
 

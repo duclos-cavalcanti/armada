@@ -166,6 +166,10 @@ impl Forge for GhForge {
         self.gh(&args).map(drop)
     }
 
+    fn describe_mr(&self, n: i64, title: &str, description: &str) -> Result<()> {
+        self.gh(&["pr", "edit", &n.to_string(), "--title", title, "--body", description]).map(drop)
+    }
+
     fn close_mr(&self, n: i64) -> Result<()> {
         if self.view(n)?.get("state").and_then(Value::as_str) == Some("CLOSED") {
             return Ok(()); // already closed

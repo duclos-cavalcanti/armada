@@ -1785,6 +1785,9 @@ mod tests {
         fn open_mr(&self, _: &domain::MrDraft) -> Result<String> {
             Ok("https://x/1".into())
         }
+        fn describe_mr(&self, _: i64, _: &str, _: &str) -> Result<()> {
+            Ok(())
+        }
         fn ci(&self, _: i64) -> Result<domain::CiReport> {
             unimplemented!()
         }

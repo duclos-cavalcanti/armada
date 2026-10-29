@@ -188,6 +188,8 @@ pub trait Forge {
     /// Open a new MR from `draft` (the source branch is already pushed), assigned to the fleet's
     /// user. Returns its URL; the next sync picks the MR up into the armada.
     fn open_mr(&self, draft: &MrDraft) -> Result<String>;
+    /// Rewrite an open MR's title + description — a relaunch, after a rework changed its ticket.
+    fn describe_mr(&self, iid: i64, title: &str, description: &str) -> Result<()>;
     /// The MR's CI: its status and every failed job with its log tail (child pipelines included).
     fn ci(&self, iid: i64) -> Result<CiReport>;
     /// The ref an MR's head can be fetched by from `origin` (GitHub `pull/N/head`, GitLab

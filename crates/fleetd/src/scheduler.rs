@@ -461,7 +461,12 @@ fn drop_proposal(ledger: &Ledger, tracker: &dyn Tracker, id: &ProposalId) -> Res
 
 /// Launch a ship: open the MR for the worktree's branch. The target is the explicit one, else the
 /// ticket's order fork base (a stacked child targets its parent), else origin's default branch.
+/// A ticket whose MR is already open (a rework relaunching) gets it rewritten, not a second one.
 fn launch(ledger: &Ledger, forge: &dyn Forge, l: Launch) -> Result<String> {
+    if let Some(ship) = l.ticket.as_ref().map(|k| open_ship(ledger, k)).transpose()?.flatten() {
+        forge.describe_mr(ship.iid, &l.title, &l.description)?;
+        return Ok(ship.url);
+    }
     let source = crate::git::current_branch(&l.worktree)
         .ok_or_else(|| anyhow!("{} has no branch checked out", l.worktree))?;
     let base = match (&l.target, &l.ticket) {
@@ -1000,6 +1005,10 @@ mod tests {
             self.opened.borrow_mut().push(d.clone());
             Ok("https://forge/mr/1".into())
         }
+        fn describe_mr(&self, iid: i64, title: &str, _: &str) -> Result<()> {
+            self.noted.borrow_mut().push((iid, title.into()));
+            Ok(())
+        }
         fn request_review(&self, _: &TicketKey) -> Result<Vec<String>> {
             Ok(vec![])
         }
@@ -1403,6 +1412,26 @@ mod tests {
             [("chore/PROJ-2-child", "chore/PROJ-1-parent"), ("chore/PROJ-2-child", "main"), ("chore/PROJ-2-child", "release")],
             "order fork base, then the default branch, and an explicit target wins — origin/ stripped"
         );
+        drop(opened);
+
+        // Its MR already open (a rework relaunching): rewritten in place, no second MR.
+        let ship = Ship {
+            id: ShipId(0),
+            ticket: Some(TicketKey("PROJ-2".into())),
+            iid: 9,
+            url: "https://forge/mr/9".into(),
+            target: "main".into(),
+            source: "chore/PROJ-2-child".into(),
+            pilot: "me".into(),
+            created_at: "t".into(),
+            ended_at: None,
+            swept: None,
+            reviewed: None,
+        };
+        ShipRepo::upsert(&db, &ship).unwrap();
+        assert_eq!(launch(&db, &forge, req(Some(TicketKey("PROJ-2".into())), None)).unwrap(), "https://forge/mr/9");
+        assert_eq!(*forge.noted.borrow(), vec![(9, "PROJ-2: child".to_string())]);
+        assert_eq!(forge.opened.borrow().len(), 3, "no second MR");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

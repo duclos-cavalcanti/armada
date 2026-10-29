@@ -251,6 +251,14 @@ impl Forge for GlabForge {
         Ok(stdout.lines().rev().find(|l| l.trim_start().starts_with("http")).unwrap_or(stdout.trim()).trim().to_string())
     }
 
+    fn describe_mr(&self, iid: i64, title: &str, description: &str) -> Result<()> {
+        let (iid, repo) = (iid.to_string(), self.repo()?);
+        let args = ["mr", "update", &iid, "-R", &repo, "--title", title, "--description", description];
+        let out = Command::new("glab").args(args).output()?;
+        ensure!(out.status.success(), "glab mr update failed: {}", crate::preflight::one_line(&out.stderr));
+        Ok(())
+    }
+
     fn close_mr(&self, iid: i64) -> Result<()> {
         let mr: serde_json::Value =
             serde_json::from_str(&self.api(&format!("projects/{}/merge_requests/{iid}", self.project))?)?;
