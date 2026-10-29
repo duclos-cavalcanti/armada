@@ -32,8 +32,9 @@ use domain::ports::{
     ShipRepo, TicketRepo, Tracker,
 };
 use domain::{
-    Classification, ConvoyKey, CrewKind, EntityKind, EventKind, Liveness, Order, PipelineStatus,
-    Session, SessionId, Ship, ShipSnapshot, ShipState, Ticket, TicketKey, TicketStatus,
+    Classification, CogState, ConvoyKey, CrewKind, EntityKind, EventKind, Liveness, Order,
+    PipelineStatus, Report, Session, SessionId, Ship, ShipSnapshot, ShipState, Ticket, TicketKey,
+    TicketStatus, WorkerState,
 };
 use ledger::Ledger;
 use serde::Serialize;
@@ -47,6 +48,7 @@ pub enum Action {
     Handoff { ticket: String },                // builder done → Jira In QA + reap the builder
     Reap { ticket: String },                   // merged/terminal → end session + Jira Done
     Heal { ticket: String, kind: String },     // dead WARM session (worker/hand) → respawn in place
+    Wake { ticket: String },                   // a waiting worker's blockers all merged → resume it
     StandDown { ticket: String, kind: String }, // dead COLD session (sailor) → end it; re-spawn on change
     LaunchCaptain { convoy: String },          // active convoy with a pass of work + no live captain → launch
     StandDownCaptain { convoy: String },       // captain finished its pass / convoy gone → end its session
@@ -74,9 +76,10 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
         // A worker is frontier work — spawn only on a READY (To Do, blockers terminal) or STACKED
         // ticket. A hand is operator intent — spawn it wherever the operator dispatched it, whatever
         // the ticket's status (it's not frontier work; the operator drives it by hand).
+        // STACKED only for a real stack: the order forks off the parent's branch.
         let spawnable = !order.auto_impl
             || is_ready(ledger, &ticket)?
-            || matches!(classify(ledger, &ticket, &armada, stacks)?, Some(Classification::Stacked));
+            || stack_base(ledger, &ticket, &armada, stacks)?.is_some_and(|base| base == order.fork_from);
         if order.builder_due(&SessionRepo::for_ticket(ledger, &order.ticket)?) && spawnable {
             let kind = if order.auto_impl { CrewKind::Worker } else { CrewKind::Hand };
             actions.push(Action::Spawn { ticket: order.ticket.0.clone(), kind: kind.as_str().into() });
@@ -181,6 +184,18 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
             && cog.session.anchored_at.is_none()
         {
             actions.push(Action::StandDown { ticket: tkey.0.clone(), kind: "sailor".into() });
+            continue;
+        }
+        // A worker WAITING on its blockers (it can't conclude while one is open) is woken once they
+        // have all merged — healed first if it died meanwhile; the next tick wakes the healed cog.
+        if state == Some(CogState::Worker(WorkerState::Waiting)) && cog.session.anchored_at.is_none() {
+            let blockers = TicketRepo::get(ledger, tkey)?.map(|t| t.blocked_by).unwrap_or_default();
+            if open_blockers(ledger, &blockers)?.is_empty() {
+                actions.push(match cog.liveness {
+                    Liveness::Dead => Action::Heal { ticket: tkey.0.clone(), kind: "worker".into() },
+                    _ => Action::Wake { ticket: tkey.0.clone() },
+                });
+            }
             continue;
         }
         // Dead by liveness, with no deliberate-stop report → the host process is gone. A WARM
@@ -409,21 +424,29 @@ pub(crate) fn classify(ledger: &Ledger, ticket: &Ticket, armada: &[Ship], stacks
     if pending.is_empty() {
         return Ok(Some(Classification::Clean));
     }
-    // STACKED: exactly one non-terminal blocker, in-flight (an open ship to fork from) and itself
-    // one level deep (its own blockers all terminal — not a deeper stack). Else BLOCKED. A forge
-    // that can't stack (no MR dependencies) never stacks: the child waits for its parent to merge.
-    if stacks && pending.len() == 1 {
-        let parent = pending[0];
-        let in_flight = armada.iter().any(|s| s.ticket.as_ref() == Some(parent) && s.ended_at.is_none());
-        let one_level = match TicketRepo::get(ledger, parent)? {
-            Some(p) => blockers_terminal(ledger, &p.blocked_by)?,
-            None => false,
-        };
-        if in_flight && one_level {
-            return Ok(Some(Classification::Stacked));
-        }
+    if stack_base(ledger, ticket, armada, stacks)?.is_some() {
+        return Ok(Some(Classification::Stacked));
     }
     Ok(Some(Classification::Blocked))
+}
+
+/// The branch a STACKED ticket forks off (`origin/<parent's source>`), or `None` when it can't
+/// stack: it needs exactly one open blocker, already with its sailor (In QA: built, surveyed,
+/// handed off) on an open MR, and itself one level deep (its own blockers all terminal — not a
+/// deeper stack). A forge that can't stack (no MR dependencies) never stacks: the child waits.
+pub(crate) fn stack_base(ledger: &Ledger, ticket: &Ticket, armada: &[Ship], stacks: bool) -> Result<Option<String>> {
+    if !stacks || ticket.held || ticket.status != Some(TicketStatus::Todo) {
+        return Ok(None);
+    }
+    let [parent] = &open_blockers(ledger, &ticket.blocked_by)?[..] else { return Ok(None) };
+    let Some(p) = TicketRepo::get(ledger, parent)? else { return Ok(None) };
+    if p.status != Some(TicketStatus::InQa) || !blockers_terminal(ledger, &p.blocked_by)? {
+        return Ok(None);
+    }
+    Ok(armada
+        .iter()
+        .find(|s| s.ticket.as_ref() == Some(parent) && s.ended_at.is_none() && !s.source.is_empty())
+        .map(|s| format!("origin/{}", s.source)))
 }
 
 /// A convoy has a pass worth of captain work iff some ticket is READY but un-dispatched (there's a
@@ -513,6 +536,7 @@ fn execute<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
         Action::Handoff { ticket } => handoff(ledger, tracker, host, forge, ticket),
         Action::Reap { ticket } => reap(ledger, tracker, host, project, ticket),
         Action::Heal { ticket, kind } => heal(ledger, host, ticket, kind),
+        Action::Wake { ticket } => wake(ledger, host, ticket),
         Action::StandDown { ticket, kind } => stand_down(ledger, host, ticket, kind),
         Action::LaunchCaptain { convoy } => launch_captain(ledger, host, project, convoy),
         Action::StandDownCaptain { convoy } => stand_down_captain(ledger, host, convoy),
@@ -798,6 +822,25 @@ fn heal<H: SessionHost>(ledger: &Ledger, host: &H, ticket: &str, kind: &str) -> 
     host.spawn(&session.tmux_session, Path::new(&session.worktree_path), &cmd)?;
     Ok(())
 }
+
+/// Wake — a waiting worker's blockers have all merged: tell it to rebase, re-check and conclude,
+/// and record it as implementing again, so the next tick doesn't wake it twice.
+fn wake<H: SessionHost>(ledger: &Ledger, host: &H, ticket: &str) -> Result<()> {
+    let tkey = TicketKey(ticket.to_string());
+    let session = SessionRepo::for_ticket(ledger, &tkey)?
+        .into_iter()
+        .find(|s| s.kind == CrewKind::Worker && s.ended_at.is_none())
+        .ok_or_else(|| anyhow!("wake {ticket}: no live worker"))?;
+    host.send(&session.tmux_session, WAKE_MSG)?;
+    ledger.record(&Report {
+        session: session.id,
+        state: CogState::Worker(WorkerState::Implementing),
+        last_action: Some("woken: its blockers merged".into()),
+        reported_at: now_rfc3339(),
+    })
+}
+
+const WAKE_MSG: &str = "⚓ your blockers merged — /fleet-rechart onto your target, re-run the tests, survey again, then conclude.";
 
 /// StandDown — the cold-loop counterpart to heal: a cold cog (sailor) whose host process is gone
 /// has finished its one-shot watch (a clean exit and a crash look identical — both Dead), so end
@@ -1235,7 +1278,7 @@ mod tests {
                 iid,
                 url: "u".into(),
                 target: "master".into(),
-                source: String::new(),
+                source: format!("feature/{key}"),
                 pilot: "p".into(),
                 created_at: "t".into(),
                 ended_at: None,
@@ -1452,6 +1495,32 @@ mod tests {
     }
 
     #[test]
+    fn a_waiting_worker_is_woken_once_its_blockers_merge_and_healed_first_if_it_died() {
+        let db = db();
+        ticket(&db, "PROJ-2", TicketStatus::InQa, false, vec![]);
+        ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec!["PROJ-2"]);
+        order(&db, "PROJ-1", true);
+        let mut cog = live_cog(&db, CrewKind::Worker, "PROJ-1", Liveness::Idle);
+        report(&db, &cog, CogState::Worker(WorkerState::Waiting));
+        assert!(plan(&db, std::slice::from_ref(&cog), true).unwrap().is_empty(), "its blocker is open: it waits");
+        cog.liveness = Liveness::Dead;
+        assert!(plan(&db, std::slice::from_ref(&cog), true).unwrap().is_empty(), "nor healed while it waits");
+
+        ticket(&db, "PROJ-2", TicketStatus::Done, false, vec![]);
+        let heal = Action::Heal { ticket: "PROJ-1".into(), kind: "worker".into() };
+        assert_eq!(plan(&db, std::slice::from_ref(&cog), true).unwrap(), vec![heal], "dead: healed first");
+        cog.liveness = Liveness::Idle;
+        assert_eq!(plan(&db, std::slice::from_ref(&cog), true).unwrap(), vec![Action::Wake { ticket: "PROJ-1".into() }]);
+        wake(&db, &FakeHost::new(), "PROJ-1").unwrap();
+        assert_eq!(
+            ReportRepo::latest(&db, &cog.session.id).unwrap().map(|r| r.state),
+            Some(CogState::Worker(WorkerState::Implementing)),
+            "woken once: back to implementing"
+        );
+        assert!(plan(&db, &[cog], true).unwrap().is_empty());
+    }
+
+    #[test]
     fn blocked_until_the_blocker_is_terminal() {
         let db = db();
         ticket(&db, "PROJ-2", TicketStatus::InProgress, false, vec![]);
@@ -1463,18 +1532,21 @@ mod tests {
     }
 
     #[test]
-    fn spawns_a_stacked_ticket_off_its_in_flight_parent() {
-        // Child blocked by an IN-FLIGHT parent (open ship to fork from), one level deep → STACKED,
-        // so it spawns early off the parent's branch instead of waiting for the parent to merge.
+    fn spawns_a_stacked_ticket_only_off_its_parents_branch() {
+        // Child blocked by a parent already with its sailor (In QA, an open ship), one level deep →
+        // STACKED: it spawns early — but only when its order forks off the parent's branch.
         let db = db();
-        ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]); // parent, in-flight
+        let spawn = Action::Spawn { ticket: "PROJ-2".into(), kind: "worker".into() };
+        ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]); // parent, with its sailor
         ship(&db, 101, "PROJ-1", ShipState::Open); // its open MR — the fork base
         ticket(&db, "PROJ-2", TicketStatus::Todo, false, vec!["PROJ-1"]); // child blocked_by parent
-        order(&db, "PROJ-2", true);
-        assert!(
-            plan(&db, &[], true).unwrap().contains(&Action::Spawn { ticket: "PROJ-2".into(), kind: "worker".into() }),
-            "a dispatched STACKED child spawns off its in-flight parent"
-        );
+        order(&db, "PROJ-2", true); // forks off origin/master
+        assert!(!plan(&db, &[], true).unwrap().contains(&spawn), "off master it isn't stacked: it waits");
+        let stacked = Order { fork_from: "origin/feature/PROJ-1".into(), ..OrderRepo::get(&db, &TicketKey("PROJ-2".into())).unwrap().unwrap() };
+        OrderRepo::dispatch(&db, &stacked).unwrap();
+        assert!(plan(&db, &[], true).unwrap().contains(&spawn), "off the parent's branch it spawns");
+        ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]); // the parent, still building
+        assert!(!plan(&db, &[], true).unwrap().contains(&spawn), "a parent still building isn't stacked on");
     }
 
     #[test]
@@ -2498,9 +2570,13 @@ mod tests {
         let t11 = TicketRepo::get(&db, &TicketKey("PROJ-11".into())).unwrap().unwrap();
         assert_eq!(classify(&db, &t11, &armada(&db), true).unwrap(), Some(Classification::Blocked));
 
-        // STACKED — the single non-terminal parent is in-flight (an open ship) and one level deep.
-        ship(&db, 20, "PROJ-10", ShipState::Open); // now PROJ-10 has a branch to fork from
+        // Still BLOCKED — the parent has a branch, but its builder is still at work.
+        ship(&db, 20, "PROJ-10", ShipState::Open);
         let t11 = TicketRepo::get(&db, &TicketKey("PROJ-11".into())).unwrap().unwrap();
+        assert_eq!(classify(&db, &t11, &armada(&db), true).unwrap(), Some(Classification::Blocked));
+
+        // STACKED — the single open parent is with its sailor (In QA, an open ship), one level deep.
+        ticket(&db, "PROJ-10", TicketStatus::InQa, false, vec![]);
         assert_eq!(classify(&db, &t11, &armada(&db), true).unwrap(), Some(Classification::Stacked));
     }
 

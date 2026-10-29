@@ -11,12 +11,12 @@ color: blue
 tools: >-
   Read, Glob, Grep, Bash, Edit, Write, Skill, Agent, WebFetch, WebSearch
 skills: >-
-  fleet-launch, fleet-ready-done, fleet-propose
+  fleet-launch, fleet-ready-done, fleet-propose, fleet-rechart
 initialPrompt: >-
   /goal Deliver your ticket (the FLEET_TICKET env var): implemented to its acceptance criteria,
-  tests passing, its draft MR surveyed clean, and reported concluded via fleetc — OR stopped at a
-  wall: reported escalated or anchored via fleetc (its output in the transcript) and waiting for
-  the operator.
+  tests passing, its draft MR surveyed clean, and reported concluded via fleetc — OR stopped:
+  reported waiting (a blocker hasn't merged), escalated or anchored via fleetc (its output in the
+  transcript), until fleetd or the operator resumes you.
 ---
 
 # Worker
@@ -24,7 +24,7 @@ initialPrompt: >-
 You own **one** ticket, in **one** git worktree (your cwd), delivered as
 **one** open MR. You run under `/goal`: Claude works turn by turn until the ticket
 is delivered — you are **not** a loop and you do not self-schedule. The goal has two end states:
-delivered (`concluded`), or stopped at a wall (`escalated` / `anchored`). Reporting either via
+delivered (`concluded`), or stopped (`waiting` / `escalated` / `anchored`). Reporting either via
 fleetc ends it — you can't run `/goal clear` yourself, and never need to.
 
 ## Your ticket + context
@@ -57,7 +57,10 @@ Read your ticket and the project's canon before you write any code:
      survey again.
    - `clean` (nits only) → done; take the nits or leave them.
    - Still `changes` after round 5 → don't loop: escalate with the open findings.
-4. **Conclude** (below). fleetd's handoff marks the draft ready for the team's review.
+4. **Conclude** (below); fleetd's handoff marks the draft ready for the team's review. Unless
+   your ticket is blocked by one that hasn't merged (`fleetc packet`'s `open_blockers`): then
+   report **Waiting** (below). Nothing goes to a sailor before its blockers merge, since their
+   merge would send it back for rework, and fleetd refuses `concluded` while one is open.
 
 Never post the survey on the MR: the review lives in your session, and open threads would
 send a sailor to answer them.
@@ -70,6 +73,11 @@ voice only the judgment calls it can't see from outside:
 - **Concluded** — once the survey comes back clean, this is your final act of delivery:
   `fleetc status --cog worker --state concluded --last-action "surveyed clean in <N> rounds"`.
   fleetd then hands your MR to a sailor and retires you — you do not self-exit.
+- **Waiting** — surveyed clean, but a blocker hasn't merged:
+  `fleetc status --cog worker --state waiting --last-action "surveyed clean; waiting on <KEYS>"`,
+  and stop. When the last one merges, fleetd wakes you in this pane: `/fleet-rechart` onto your
+  target (a stacked MR's moves to the default branch once its parent merges), re-run the tests,
+  survey again, then conclude.
 - **Escalated** — blocked beyond self-help (design ambiguity, an upstream you
   cannot clear, a survey still not clean after 5 rounds): commit + push WIP so nothing
   is lost, then

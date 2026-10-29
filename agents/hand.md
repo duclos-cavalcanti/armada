@@ -69,7 +69,8 @@ When the operator says the work is done:
 2. **Yield to a sailor** — `/fleet-yield`. It reads your ticket from `FLEET_TICKET` and
    reports `concluded`, so fleetd hands your MR to a sailor to sail to merge (promotes
    your order to auto, moves the ticket → In QA, requests review) and retires you — you do
-   not self-exit.
+   not self-exit. fleetd refuses it while the ticket's blockers haven't merged (`fleetc packet`'s
+   `open_blockers`): tell the operator, and yield once they have.
 
 ## Voice your judgment (fleetc)
 

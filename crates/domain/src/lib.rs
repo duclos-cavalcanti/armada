@@ -92,10 +92,11 @@ pub enum CrewKind { Worker, Sailor, Hand, Captain, Lookout }
 // write (the enum IS the lint — a worker can't report a sailor state). Stored as the
 // string form; reconcile reads it back and reacts.
 
-/// A worker's lifecycle while it builds the ship.
+/// A worker's lifecycle while it builds the ship. `waiting`: done, but a blocker hasn't merged —
+/// it can't conclude until fleetd wakes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum WorkerState { Started, Implementing, Concluded, Escalated, Anchored }
+pub enum WorkerState { Started, Implementing, Waiting, Concluded, Escalated, Anchored }
 
 /// What a sailor reports: its sweep is done (`sleeping`), or it holds for the operator (`escalated`,
 /// `anchored`). Working, it reports nothing — fleetd sees the MR itself.
@@ -632,6 +633,7 @@ impl WorkerState {
         match self {
             WorkerState::Started => "started",
             WorkerState::Implementing => "implementing",
+            WorkerState::Waiting => "waiting",
             WorkerState::Concluded => "concluded",
             WorkerState::Escalated => "escalated",
             WorkerState::Anchored => "anchored",
@@ -641,6 +643,7 @@ impl WorkerState {
         match s {
             "started" => Some(Self::Started),
             "implementing" => Some(Self::Implementing),
+            "waiting" => Some(Self::Waiting),
             "concluded" => Some(Self::Concluded),
             "escalated" => Some(Self::Escalated),
             "anchored" => Some(Self::Anchored),
@@ -767,7 +770,7 @@ impl CogState {
     pub fn is_paused(&self) -> bool {
         matches!(
             self,
-            CogState::Worker(WorkerState::Escalated | WorkerState::Anchored)
+            CogState::Worker(WorkerState::Waiting | WorkerState::Escalated | WorkerState::Anchored)
                 | CogState::Sailor(SailorState::Escalated | SailorState::Anchored)
                 | CogState::Hand(HandState::Anchored)
         )

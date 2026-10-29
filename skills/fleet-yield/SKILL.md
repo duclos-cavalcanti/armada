@@ -30,7 +30,8 @@ ticketless hand: there's no sailor to yield to, so say so and stop.
 That `concluded` report is the whole handoff: fleetd promotes your (manual) order to
 auto, moves the ticket In Progress → In QA, requests the team's review, reaps you, and
 `LaunchSailor` engages a sailor **in this worktree** to sail the MR to merge. You do
-**not** self-exit — the report retires you.
+**not** self-exit — the report retires you. fleetd refuses it while a blocker hasn't merged
+(nothing goes to a sailor before then): tell the operator which, and yield once they have.
 
 ## Checklist
 

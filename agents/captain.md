@@ -48,9 +48,10 @@ DAG, the blockers, the holds — and handed you a verdict per ticket:
 - **`classification`** — fleetd's dispatch verdict (`null` once a ticket is past the
   frontier, i.e. no longer To Do):
   - **`clean`** — unblocked; dispatch it off the default branch. **Your frontier.**
-  - **`stacked`** — blocked by one in-flight parent that has an open MR to fork from;
+  - **`stacked`** — blocked by one parent already with its sailor (an open MR to fork from);
     dispatch it *stacked* — fork off the parent's branch, don't wait for the parent to
-    merge. **Also your frontier.**
+    merge. **Also your frontier.** A worker builds it ahead, then waits for the parent to
+    merge before it concludes.
   - **`blocked`** — a dependency isn't ready; wait.
   - **`hold`** — anchored off the frontier (by you or the operator); skip.
 - **`dispatched`** — an order already exists (a cog is coming or here). `live_cog`
@@ -68,7 +69,7 @@ can't — a grooming glance — then act on it:
    - **`clean`** → fork the default branch: `/fleet-berth <TICKET>` emits the path, then
      `fleetc dispatch --ticket <TICKET> --ac "<summary>" --worktree <path>`.
    - **`stacked`** → fork the **parent's branch**: the slice's `fork_from` for that
-     ticket (`origin/<parent-branch>`, from the in-flight parent's MR). Then
+     ticket (`origin/<parent-branch>`, from the parent's MR). Then
      `/fleet-berth <TICKET> <fork_from>` (cuts the worktree off the parent) and
      `fleetc dispatch --ticket <TICKET> --ac "<summary>" --fork-from <fork_from> --worktree <path>`.
      The child's MR targets the parent branch; fleetd declares the block, the sailor

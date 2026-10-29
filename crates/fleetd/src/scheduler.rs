@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::settings;
 use crate::tmux::TmuxHost;
 use crate::{context, now_rfc3339, reconcile, sync, Snapshot};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use domain::ports::{
     ConvoyRepo, EventLog, Forge, LookoutRepo, OrderRepo, ProposalRepo, ReportRepo, SessionHost, SessionRepo,
     ShipRepo, TicketRepo, Tracker,
@@ -639,16 +639,8 @@ fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Resul
             Some(s) => ShipRepo::snapshot(ledger, &s.id)?.map(|snap| snap.state),
             None => None,
         };
-        // A STACKED ticket forks off its in-flight parent: the blocker that has an open ship.
-        let fork_from = match classification {
-            Some(domain::Classification::Stacked) => t.blocked_by.iter().find_map(|b| {
-                armada
-                    .iter()
-                    .find(|s| s.ticket.as_ref() == Some(b) && s.ended_at.is_none() && !s.source.is_empty())
-                    .map(|s| format!("origin/{}", s.source))
-            }),
-            _ => None,
-        };
+        // A STACKED ticket forks off its parent's branch.
+        let fork_from = crate::reconcile::stack_base(ledger, &t, &armada, stacks)?;
         let waiting_on = waiting_on(ledger, &t.blocked_by)?;
         let held = if t.held { Some(ledger.held_reason(&t.key)?.unwrap_or_default()) } else { None };
         tickets.push(ConvoyTicketView {
@@ -879,6 +871,15 @@ fn record_status(ledger: &Ledger, target: &ControlTarget, state: CogState, last_
         .into_iter()
         .next()
         .ok_or_else(|| anyhow!("no live {} session{}", target.kind().as_str(), target.key()))?;
+    // Nothing goes to a sailor while a blocker is open: it would only be reworked once that merges.
+    if let (true, ControlTarget::Cog { ticket, .. }) = (state.is_concluded(), target) {
+        let blockers = TicketRepo::get(ledger, ticket)?.map(|t| t.blocked_by).unwrap_or_default();
+        let open = crate::reconcile::open_blockers(ledger, &blockers)?;
+        if !open.is_empty() {
+            let keys: Vec<&str> = open.iter().map(|k| k.0.as_str()).collect();
+            bail!("{} is blocked by {} (not merged) — it can't conclude until they merge", ticket.0, keys.join(", "));
+        }
+    }
     ledger.record(&Report {
         session: session.id,
         state,
@@ -1127,6 +1128,37 @@ mod tests {
         assert!(db.pending().unwrap().is_empty());
         assert_eq!(ProposalRepo::get(&db, &id).unwrap().unwrap().accepted_as, Some(key));
         assert!(accept_proposal(&db, &tracker, &id, None).is_err(), "an accepted proposal can't be accepted again");
+    }
+
+    #[test]
+    fn a_builder_cant_conclude_while_a_blocker_is_open() {
+        let db = Ledger::in_memory().unwrap();
+        let tracker = FakeTracker::new(vec![
+            tt("PROJ-2", TicketStatus::InQa),
+            TrackerTicket { blocked_by: vec![TicketKey("PROJ-2".into())], ..tt("PROJ-1", TicketStatus::InProgress) },
+        ]);
+        sync::sync_board(&db, &tracker, "now").unwrap();
+        let worker = Session {
+            id: SessionId(0),
+            kind: CrewKind::Worker,
+            ticket: Some(TicketKey("PROJ-1".into())),
+            convoy: None,
+            worktree_path: "/wt".into(),
+            tmux_session: "worker-PROJ-1".into(),
+            harness_session_id: None,
+            created_at: "t".into(),
+            ended_at: None,
+            anchored_at: None,
+        };
+        SessionRepo::start(&db, &worker).unwrap().expect("session start");
+        let me = ControlTarget::Cog { cog: CrewKind::Worker, ticket: TicketKey("PROJ-1".into()) };
+        let concluded = CogState::Worker(WorkerState::Concluded);
+        let e = record_status(&db, &me, concluded, None).unwrap_err().to_string();
+        assert!(e.contains("blocked by PROJ-2"), "{e}");
+        record_status(&db, &me, CogState::Worker(WorkerState::Waiting), None).unwrap();
+        tracker.transition(&TicketKey("PROJ-2".into()), TicketStatus::Done).unwrap();
+        sync::sync_board(&db, &tracker, "now").unwrap();
+        record_status(&db, &me, concluded, None).unwrap();
     }
 
     #[test]
