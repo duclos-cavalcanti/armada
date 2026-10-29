@@ -94,7 +94,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 ("Pipeline", 9),
                 ("Appr", 5),
                 ("Armed", 6),
-                ("Thr", 4),
+                ("Thr", 6),
                 ("Blocked on", 14),
                 ("Age", 6),
                 ("Merge status", 0),
@@ -227,7 +227,7 @@ fn landing_row(r: &LandingRow, up: bool) -> Line<'static> {
         _ => ("—".into(), dim()),
     };
     let (threads, threads_style) = match snap {
-        Some(s) => (s.open_threads.to_string(), if s.open_threads > 0 { yellow() } else { green() }),
+        Some(s) => (format!("{}/{}", s.open_threads, s.total_threads), if s.open_threads > 0 { yellow() } else { green() }),
         None => ("—".into(), dim()),
     };
     let (blocked, blocked_style) =
@@ -245,7 +245,7 @@ fn landing_row(r: &LandingRow, up: bool) -> Line<'static> {
         (pipe.0, 9, pipe.1),
         (appr, 5, appr_style),
         (armed, 6, armed_style),
-        (threads, 4, threads_style),
+        (threads, 6, threads_style),
         (blocked, 14, blocked_style),
         (fmt_age(age), 6, dim()),
         (merge_status, 0, Style::default()),

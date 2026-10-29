@@ -145,7 +145,8 @@ impl Forge for GlabForge {
         let v: serde_json::Value = serde_json::from_str(&json)?;
         let mut ship = mr_to_ship(&v, &self.ticket_prefix).context("could not map MR JSON to a ship")?;
         ship.approvals = self.approvals(iid)?; // separate endpoint, not on the MR body
-        ship.open_threads = self.review_state(iid)?.open_threads; // exact, not the list's 0/1
+        let review = self.review_state(iid)?; // exact, not the list's 0/1
+        (ship.open_threads, ship.total_threads) = (review.open_threads, review.total_threads);
         Ok(ship)
     }
 
@@ -154,6 +155,7 @@ impl Forge for GlabForge {
             self.api_paginate(&format!("projects/{}/merge_requests/{iid}/discussions", self.project))?;
         Ok(ReviewState {
             open_threads: count_open_threads(&discussions),
+            total_threads: count_threads(&discussions),
             threads: open_threads(&discussions),
             floating_notes: floating_notes(&discussions),
         })
@@ -383,6 +385,11 @@ fn count_open_threads(discussions: &[serde_json::Value]) -> i64 {
         .count() as i64
 }
 
+/// Every review thread, resolved or not: a discussion with a resolvable, non-system note.
+fn count_threads(discussions: &[serde_json::Value]) -> i64 {
+    discussions.iter().filter(|d| notes(d).any(|n| nbool(n, "resolvable") && !nbool(n, "system"))).count() as i64
+}
+
 /// The open threads themselves (the same predicate as the count): each discussion with an
 /// unresolved resolvable note, pointed at by its opening note.
 fn open_threads(discussions: &[serde_json::Value]) -> Vec<ReviewThread> {
@@ -489,6 +496,7 @@ fn mr_to_ship(m: &serde_json::Value, prefix: &str) -> Option<ForgeShip> {
             Some(false) => 1,
             _ => 0,
         },
+        total_threads: 0, // `snapshot` counts them
         // GitLab's authoritative merge-readiness — the sailor's land-decision signal.
         merge_status: m.get("detailed_merge_status").and_then(|v| v.as_str()).map(String::from),
         // `approvals` filled by `snapshot` (separate endpoint).

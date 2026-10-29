@@ -352,6 +352,9 @@ pub struct ShipSnapshot {
     pub head_sha: String,
     pub has_conflicts: bool,
     pub open_threads: i64,
+    /// Every review thread, resolved or not (`open_threads` of them still open).
+    #[serde(default)]
+    pub total_threads: i64,
     pub approvals: Approvals,
     pub armed: bool,
     pub on_merge_train: bool,
@@ -390,6 +393,9 @@ pub struct ForgeShip {
     pub head_sha: String,
     pub has_conflicts: bool,
     pub open_threads: i64,
+    /// Every review thread, resolved or not (`open_threads` of them still open).
+    #[serde(default)]
+    pub total_threads: i64,
     pub approvals: Approvals,
     pub armed: bool,
     pub on_merge_train: bool,
@@ -433,6 +439,9 @@ pub struct FailedJob {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewState {
     pub open_threads: i64,
+    /// Every review thread, resolved or not (`open_threads` of them still open).
+    #[serde(default)]
+    pub total_threads: i64,
     /// The open (unresolved, merge-blocking) threads themselves — what fleet-parley answers.
     #[serde(default)]
     pub threads: Vec<ReviewThread>,

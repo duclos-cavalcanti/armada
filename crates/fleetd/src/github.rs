@@ -115,7 +115,8 @@ impl Forge for GhForge {
 
     fn snapshot(&self, n: i64) -> Result<ForgeShip> {
         let mut ship = pr_to_ship(&self.view(n)?, &self.ticket_prefix).context("could not map PR JSON to a ship")?;
-        ship.open_threads = self.review_state(n)?.open_threads;
+        let review = self.review_state(n)?;
+        (ship.open_threads, ship.total_threads) = (review.open_threads, review.total_threads);
         Ok(ship)
     }
 
@@ -289,6 +290,7 @@ fn pr_to_ship(p: &Value, prefix: &str) -> Option<ForgeShip> {
         head_sha: s("headRefOid").to_string(),
         has_conflicts: s("mergeable") == "CONFLICTING",
         open_threads: 0,
+        total_threads: 0,
         approvals: approvals(s("reviewDecision"), approved),
         armed: p.get("autoMergeRequest").is_some_and(|a| !a.is_null()),
         on_merge_train: false,
@@ -399,7 +401,8 @@ fn merge_status(state: &str, decision: &str, pipeline: Option<PipelineStatus>) -
 /// comments and non-empty review bodies are the floating notes (they gate approval, not merge).
 fn review_state_from(pr: &Value) -> Result<ReviewState> {
     let nodes = |k: &str| pr.pointer(&format!("/{k}/nodes")).and_then(Value::as_array).cloned().unwrap_or_default();
-    let threads: Vec<ReviewThread> = nodes("reviewThreads")
+    let all = nodes("reviewThreads");
+    let threads: Vec<ReviewThread> = all
         .iter()
         .filter(|t| !t.get("isResolved").and_then(Value::as_bool).unwrap_or(true))
         .map(|t| {
@@ -423,7 +426,7 @@ fn review_state_from(pr: &Value) -> Result<ReviewState> {
     let mut floating_notes: Vec<FloatingNote> =
         nodes("comments").iter().chain(nodes("reviews").iter()).map(note).filter(|n| !n.body.trim().is_empty()).collect();
     floating_notes.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-    Ok(ReviewState { open_threads, threads, floating_notes })
+    Ok(ReviewState { open_threads, total_threads: all.len() as i64, threads, floating_notes })
 }
 
 #[cfg(test)]

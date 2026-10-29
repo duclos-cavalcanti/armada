@@ -111,15 +111,38 @@ impl Ledger {
 
 fn init(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
+    migrate(conn)?;
     conn.execute_batch(SCHEMA)?;
     stamp(conn, SCHEMA_VERSION, "ledger")
 }
 
-/// The ledger's schema version (SQLite `user_version`). There are no migrations: bump this when
-/// an existing table in `schema.sql` changes shape, so a ledger or an export from another version
-/// is refused by name instead of failing later on a missing column. A new table needs no bump:
-/// `CREATE TABLE IF NOT EXISTS` adds it to an older ledger the next time fleetd opens it.
-pub const SCHEMA_VERSION: i64 = 1;
+/// The steps that bring an older ledger up to `schema.sql`, in order: `MIGRATIONS[i]` takes v`i+1`
+/// to v`i+2`. When an existing table changes shape, change it in `schema.sql` (what a fresh ledger
+/// is built from) AND append its step here. A new table needs neither: `CREATE TABLE IF NOT
+/// EXISTS` adds it to an older ledger the next time fleetd opens it.
+const MIGRATIONS: &[&str] = &[
+    // v2: an MR's total review threads, beside its open ones.
+    "ALTER TABLE ship_snapshots ADD COLUMN total_threads INTEGER NOT NULL DEFAULT 0;",
+];
+
+/// The ledger's schema version (SQLite `user_version`): one past its last migration.
+pub const SCHEMA_VERSION: i64 = 1 + MIGRATIONS.len() as i64;
+
+/// Run the migrations an older ledger is missing, in one transaction, and stamp it current. A fresh
+/// ledger (`0`) has nothing to migrate; one newer than this build is left for `stamp` to refuse.
+fn migrate(conn: &Connection) -> Result<()> {
+    let found: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if found == 0 || found >= SCHEMA_VERSION {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+    for step in &MIGRATIONS[found as usize - 1..] {
+        tx.execute_batch(step)?;
+    }
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    tx.commit()?;
+    Ok(())
+}
 
 /// Stamp a fresh database with `version`; refuse one stamped with another. (`0` = never stamped.)
 pub(crate) fn stamp(conn: &Connection, version: i64, what: &str) -> Result<()> {
@@ -527,7 +550,30 @@ mod tests {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION + 1).unwrap();
         drop(conn);
         let e = Ledger::open(&path).err().unwrap().to_string();
-        assert!(e.contains("schema v2") && e.contains("expects v1"), "{e}");
+        let (newer, current) = (format!("schema v{}", SCHEMA_VERSION + 1), format!("expects v{SCHEMA_VERSION}"));
+        assert!(e.contains(&newer) && e.contains(&current), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_older_ledger_is_migrated_in_place() {
+        // A v1 ledger: ship_snapshots without total_threads.
+        let dir = std::env::temp_dir().join(format!("ledger-migrate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ledger.db").to_string_lossy().into_owned();
+        drop(Ledger::open(&path).unwrap());
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("ALTER TABLE ship_snapshots DROP COLUMN total_threads; PRAGMA user_version = 1;").unwrap();
+        drop(conn);
+
+        drop(Ledger::open(&path).unwrap());
+        assert_eq!(schema_version(&path).unwrap(), SCHEMA_VERSION, "stamped current");
+        let conn = Connection::open(&path).unwrap();
+        let has: bool = conn
+            .query_row("SELECT EXISTS (SELECT 1 FROM pragma_table_info('ship_snapshots') WHERE name = 'total_threads')", [], |r| r.get(0))
+            .unwrap();
+        assert!(has, "the column was added");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -916,6 +962,7 @@ fn row_to_snapshot(r: &rusqlite::Row) -> rusqlite::Result<ShipSnapshot> {
         head_sha: r.get("head_sha")?,
         has_conflicts: r.get::<_, i64>("has_conflicts")? != 0,
         open_threads: r.get("open_threads")?,
+        total_threads: r.get("total_threads")?,
         approvals: Approvals {
             current: r.get("approvals_current")?,
             required: r.get("approvals_required")?,
@@ -978,18 +1025,18 @@ impl ShipRepo for Ledger {
 
     fn sync_snapshot(&self, s: &ShipSnapshot) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO ship_snapshots(ship_id, title, state, head_sha, has_conflicts, open_threads,
+            "INSERT INTO ship_snapshots(ship_id, title, state, head_sha, has_conflicts, open_threads, total_threads,
                  approvals_current, approvals_required, armed, on_merge_train, pipeline, merge_status, synced_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT(ship_id) DO UPDATE SET
                title=excluded.title, state=excluded.state, head_sha=excluded.head_sha,
-               has_conflicts=excluded.has_conflicts, open_threads=excluded.open_threads,
+               has_conflicts=excluded.has_conflicts, open_threads=excluded.open_threads, total_threads=excluded.total_threads,
                approvals_current=excluded.approvals_current, approvals_required=excluded.approvals_required,
                armed=excluded.armed, on_merge_train=excluded.on_merge_train, pipeline=excluded.pipeline,
                merge_status=excluded.merge_status, synced_at=excluded.synced_at",
             params![
                 s.ship.0, s.title, s.state.as_str(), s.head_sha, s.has_conflicts as i64,
-                s.open_threads, s.approvals.current, s.approvals.required, s.armed as i64,
+                s.open_threads, s.total_threads, s.approvals.current, s.approvals.required, s.armed as i64,
                 s.on_merge_train as i64, s.pipeline.map(|p| p.as_str()), s.merge_status, s.synced_at,
             ],
         )?;
@@ -1524,6 +1571,7 @@ mod repo_tests {
             head_sha: "abc".into(),
             has_conflicts: true,
             open_threads: 2,
+            total_threads: 2,
             approvals: Approvals { current: 0, required: 1 },
             armed: false,
             on_merge_train: false,
