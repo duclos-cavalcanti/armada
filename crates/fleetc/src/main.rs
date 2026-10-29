@@ -28,7 +28,7 @@ fn socket() -> String {
 
 /// fleetc's usage: a header, then one line per verb form (`fleetc <verb> …`).
 const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project: the cwd's, or -C's — nearest folder with a fleet.toml; in a cog, an omitted ticket / --iid / --convoy is its own)\n  \
-     fleetc status   --cog <worker|sailor|hand|lookout> [--ticket <KEY-N>] --state <state> [--last-action <text>]\n  \
+     fleetc status   --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] --state <state> [--last-action <text>]\n  \
      fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
      fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
      fleetc convoy   open <KEY> [--title <text>] | close [<KEY>]\n  \
@@ -129,13 +129,14 @@ fn run() -> Result<()> {
 /// `fleetc status` — report a crew member's state. The per-cog enum is the lint: an
 /// invalid cog/state fails HERE, before anything touches the wire.
 fn status(args: &[String]) -> Result<()> {
-    let (mut cog, mut ticket, mut state, mut last_action) = (None, None, None, None);
+    let (mut cog, mut ticket, mut convoy, mut state, mut last_action) = (None, None, None, None, None);
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
         match flag.as_str() {
             "--cog" => cog = Some(take()?),
             "--ticket" => ticket = Some(take()?),
+            "--convoy" => convoy = Some(take()?),
             "--state" => state = Some(take()?),
             "--last-action" => last_action = Some(take()?),
             other => bail!("unknown flag: {other}"),
@@ -144,18 +145,18 @@ fn status(args: &[String]) -> Result<()> {
     let cog = cog.ok_or_else(|| anyhow!("--cog required"))?;
     let state = state.ok_or_else(|| anyhow!("--state required"))?;
     let kind = CrewKind::parse(&cog).ok_or_else(|| anyhow!("invalid --cog: {cog}"))?;
-    // The lookout is a singleton: fleetd finds it without a ticket.
-    let ticket = match (ticket.or_else(|| own("FLEET_TICKET")), kind) {
-        (Some(t), _) => Some(ticket_key(&t, "status")?),
-        (None, CrewKind::Lookout) => None,
-        (None, _) => bail!("--ticket required"),
+    // The cog's own key fills in: a captain's convoy, a ticketed cog's ticket; the lookout has none.
+    let (ticket, convoy) = match kind {
+        CrewKind::Captain => (ticket, convoy.or_else(|| own("FLEET_CONVOY"))),
+        CrewKind::Lookout => (ticket, convoy),
+        _ => (ticket.or_else(|| own("FLEET_TICKET")), convoy),
     };
+    validate_cog_target(kind.as_str(), ticket.as_deref(), convoy.as_deref(), "status")?;
     let parsed = CogState::parse(kind, &state)
         .ok_or_else(|| anyhow!("invalid state '{state}' for cog '{cog}'"))?;
 
     submit("/status", &wire::StatusReport {
-        cog: kind.as_str().into(),
-        ticket,
+        target: wire::CogTarget { cog: kind.as_str().into(), ticket, convoy },
         state: parsed.as_str().into(),
         last_action,
     })

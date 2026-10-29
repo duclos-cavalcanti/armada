@@ -60,7 +60,7 @@ type SettingsReply = std::sync::mpsc::Sender<std::result::Result<Vec<crate::sett
 /// scheduler. Fields are already validated (parsed into `domain` types) — the lint
 /// happened at the edge; this is the authoritative apply.
 pub enum Command {
-    RecordStatus { cog: CrewKind, ticket: Option<TicketKey>, state: CogState, last_action: Option<String>, reply: Reply },
+    RecordStatus { target: ControlTarget, state: CogState, last_action: Option<String>, reply: Reply },
     Dispatch { order: Order, reply: Reply },
     LaunchHand { worktree_path: String, reply: Reply }, // ticketless operator-driven hand, no order
     OpenConvoy { key: ConvoyKey, title: Option<String>, reply: Reply },
@@ -172,8 +172,8 @@ fn ensure_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey) -> Res
 
 fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Forge, cfg: &Config, cmd: Command) {
     match cmd {
-        Command::RecordStatus { cog, ticket, state, last_action, reply } => {
-            let res = record_status(ledger, cog, ticket.as_ref(), state, last_action)
+        Command::RecordStatus { target, state, last_action, reply } => {
+            let res = record_status(ledger, &target, state, last_action)
                 .map_err(|e| e.to_string());
             let _ = reply.send(res); // receiver may have hung up; nothing to do
         }
@@ -674,6 +674,23 @@ impl ControlTarget {
             CrewKind::Lookout => Ok(ControlTarget::Lookout),
         }
     }
+
+    pub fn kind(&self) -> CrewKind {
+        match self {
+            ControlTarget::Cog { cog, .. } => *cog,
+            ControlTarget::Captain { .. } => CrewKind::Captain,
+            ControlTarget::Lookout => CrewKind::Lookout,
+        }
+    }
+
+    /// The key for a message: ` for <ticket>`, ` for <convoy>`, or nothing (the lookout).
+    fn key(&self) -> String {
+        match self {
+            ControlTarget::Cog { ticket, .. } => format!(" for {}", ticket.0),
+            ControlTarget::Captain { convoy } => format!(" for {}", convoy.0),
+            ControlTarget::Lookout => String::new(),
+        }
+    }
 }
 
 /// The live session(s) a control/send verb targets — the ONE resolution shared by anchor/weigh/sink
@@ -804,21 +821,11 @@ fn signal<H: SessionHost>(ledger: &Ledger, host: &H, verb: Verb, s: &Session) ->
 
 /// Resolve the live session for `(ticket, cog)` and record its report. No live session
 /// = an anomaly (a cog reporting after it was reaped), surfaced as an error to the client.
-fn record_status(
-    ledger: &Ledger,
-    cog: CrewKind,
-    ticket: Option<&TicketKey>,
-    state: CogState,
-    last_action: Option<String>,
-) -> Result<()> {
-    // A ticket's cog is found by its ticket; without one, the live session of that kind (the lookout).
-    let live = match ticket {
-        Some(t) => SessionRepo::for_ticket(ledger, t)?.into_iter().filter(|s| s.ended_at.is_none()).collect(),
-        None => SessionRepo::live(ledger)?,
-    };
-    let session = live.into_iter().find(|s| s.kind == cog).ok_or_else(|| {
-        anyhow!("no live {} session{}", cog.as_str(), ticket.map(|t| format!(" for {}", t.0)).unwrap_or_default())
-    })?;
+fn record_status(ledger: &Ledger, target: &ControlTarget, state: CogState, last_action: Option<String>) -> Result<()> {
+    let session = live_sessions_for(ledger, target)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("no live {} session{}", target.kind().as_str(), target.key()))?;
     ledger.record(&Report {
         session: session.id,
         state,
@@ -1066,25 +1073,19 @@ mod tests {
     }
 
     #[test]
-    fn the_lookout_reports_without_a_ticket() {
+    fn a_ticketless_cog_reports_by_its_convoy_or_as_the_lookout() {
         let db = Ledger::in_memory().unwrap();
-        let lookout = Session {
-            id: SessionId(0),
-            kind: CrewKind::Lookout,
-            ticket: None,
-            convoy: None,
-            worktree_path: "/project".into(),
-            tmux_session: "lookout".into(),
-            harness_session_id: None,
-            created_at: "t".into(),
-            ended_at: None,
-            anchored_at: None,
-        };
-        let id = SessionRepo::start(&db, &lookout).unwrap().expect("session start");
+        ConvoyRepo::open(&db, &ConvoyKey("PROJ-100".into()), None, "t").unwrap();
+        let captain = start_ticketless(&db, CrewKind::Captain, Some("PROJ-100"), "captain-PROJ-100");
+        let lookout = start_ticketless(&db, CrewKind::Lookout, None, "lookout");
+        let cap = |c: &str| ControlTarget::Captain { convoy: ConvoyKey(c.into()) };
+        let done = CogState::Captain(CaptainState::Done);
+        assert!(record_status(&db, &cap("PROJ-200"), done, None).is_err(), "no captain on PROJ-200");
+        record_status(&db, &cap("PROJ-100"), done, None).unwrap();
+        assert_eq!(ReportRepo::latest(&db, &captain).unwrap().map(|r| r.state), Some(done));
         let reviewed = CogState::Lookout(LookoutState::Reviewed);
-        assert!(record_status(&db, CrewKind::Worker, None, reviewed, None).is_err(), "no live worker");
-        record_status(&db, CrewKind::Lookout, None, reviewed, None).unwrap();
-        assert_eq!(ReportRepo::latest(&db, &id).unwrap().map(|r| r.state), Some(reviewed));
+        record_status(&db, &ControlTarget::Lookout, reviewed, None).unwrap();
+        assert_eq!(ReportRepo::latest(&db, &lookout).unwrap().map(|r| r.state), Some(reviewed));
     }
 
     #[test]

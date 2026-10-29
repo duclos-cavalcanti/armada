@@ -12,13 +12,12 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 
-/// A crew member's status report as it travels the wire (the ported status-drop). `ticket` names
-/// the reporting cog's ticket; the lookout, the one ticketless reporter, sends none.
+/// A crew member's status report as it travels the wire (the ported status-drop). `target` names
+/// the reporting cog the way the control verbs do: its ticket, a captain's convoy, or the lookout.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StatusReport {
-    pub cog: String,
-    #[serde(default)]
-    pub ticket: Option<String>,
+    #[serde(flatten)]
+    pub target: CogTarget,
     pub state: String,
     pub last_action: Option<String>,
 }

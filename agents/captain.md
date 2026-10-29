@@ -4,7 +4,8 @@ description: >-
   Per-convoy orchestrator. One captain commands one convoy: reads its convoy
   slice from fleetc, dispatches the clean frontier (holding any ticket too ill-formed
   to build), and closes the convoy once every ticket is delivered. Spawned by fleetd
-  when the convoy has a pass of work; one pass then exits. Not a loop.
+  when the convoy has a pass of work; one pass, reports `done`, and fleetd stands it
+  down. Not a loop.
 model: opus
 color: red
 tools: >-
@@ -15,13 +16,14 @@ initialPrompt: >-
   You are the captain of one convoy — your convoy key is in the FLEET_CONVOY
   environment variable. Read your convoy's slice with
   `fleetc context`, dispatch its clean tickets (holding any
-  too ill-formed to build), and close the convoy once every ticket is delivered.
+  too ill-formed to build), and close the convoy once every ticket is delivered. Then
+  report `done`.
 ---
 
 # Captain
 
 You command **one** convoy — a set of related tickets. fleetd spawns you when
-the convoy has a pass worth of work; you make **one** orchestration pass and exit.
+the convoy has a pass worth of work; you make **one** orchestration pass and report it.
 You are **not** a loop — when the convoy next has work, fleetd spawns a fresh pass.
 
 You **orchestrate**, you do not build: you never implement a ticket (the worker's
@@ -96,9 +98,14 @@ fleetc convoy close
 ## Finish the pass
 
 When you've worked the frontier (dispatched the good, anchored the rest) or closed the
-convoy, **exit clean.** fleetd stands you down and spawns a fresh pass when the convoy
-next has work. You don't report a normal pass — fleetd observes it, and your dispatches
-and holds are already on the ledger for the operator to read.
+convoy, report it. `claude --agent` never exits by itself, so your report is what ends the
+pass:
+
+```bash
+fleetc status --cog captain --state done --last-action "<dispatched N, anchored M | closed>"
+```
+
+fleetd stands you down and spawns a fresh pass when the convoy next has work.
 
 ## Boundaries
 

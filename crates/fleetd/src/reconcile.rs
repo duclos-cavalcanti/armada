@@ -22,7 +22,7 @@
 //!   the iid + marks it reviewed at dispatch); it reviews one and reports `reviewed`, reconcile
 //!   stands it down, and the next tick takes the next ally.
 //! - captain:   one cold captain per ACTIVE convoy — launched when the convoy has a pass of work
-//!   (a ready-undispatched ticket, or all delivered → close), stood down when it finishes.
+//!   (a ready-undispatched ticket, or all delivered → close), stood down when it reports `done`.
 
 use crate::now_rfc3339;
 use crate::Cog;
@@ -198,20 +198,24 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
 
     // CAPTAIN — the port of converge's `reconcile_foremen`, keyed on the convoy (ex board file):
     // one captain per ACTIVE convoy, COLD-looped. Unlike a worker, a captain is a one-shot — it
-    // wakes, dispatches its convoy's ready tickets (or closes a fully-delivered convoy), reports,
-    // and exits. So "live" means alive by DERIVED liveness, not merely `ended_at` NULL — a Dead
-    // captain finished its pass. The DB `one_live_captain_per_convoy` lock backstops a double spawn.
+    // wakes, dispatches its convoy's ready tickets (or closes a fully-delivered convoy) and reports
+    // `done`. `claude --agent` never exits by itself, so that report (or a Dead process) ends the
+    // pass. The DB `one_live_captain_per_convoy` lock backstops a double spawn.
     let active = ConvoyRepo::active(ledger)?;
-    // STAND DOWN a captain that finished its pass (Dead) or has no active convoy left to command —
-    // unless the operator anchored it. Ending the session lets the trigger re-launch on more work.
+    // STAND DOWN a captain that finished its pass (`done` or Dead) or has no active convoy left to
+    // command — unless the operator anchored it. Ending the session lets the trigger re-launch on
+    // more work, in this same plan (the stand-down runs first and frees the slot).
+    let mut stood_down = Vec::new();
     for cog in cogs {
         if cog.session.kind != CrewKind::Captain || cog.session.ended_at.is_some() {
             continue;
         }
         let Some(convoy) = &cog.session.convoy else { continue };
         let convoy_active = active.iter().any(|c| &c.key == convoy);
-        if cog.session.anchored_at.is_none() && (cog.liveness == Liveness::Dead || !convoy_active) {
+        let done = ReportRepo::latest(ledger, &cog.session.id)?.is_some_and(|r| r.state.is_done());
+        if cog.session.anchored_at.is_none() && (done || cog.liveness == Liveness::Dead || !convoy_active) {
             actions.push(Action::StandDownCaptain { convoy: convoy.0.clone() });
+            stood_down.push(convoy);
         }
     }
     // LAUNCH a captain for an active convoy that has a pass worth of work (a ready-undispatched
@@ -227,6 +231,7 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
                 && c.session.ended_at.is_none()
                 && c.liveness != Liveness::Dead
                 && c.session.convoy.as_ref() == Some(&convoy.key)
+                && !stood_down.contains(&&convoy.key)
         });
         if !has_live_captain && convoy_has_work(ledger, &convoy.key)? {
             actions.push(Action::LaunchCaptain { convoy: convoy.key.0.clone() });
@@ -857,7 +862,7 @@ fn launch_captain<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, conv
 }
 
 /// StandDownCaptain — the cold-loop counterpart for captains (cf. `stand_down` for sailors): the
-/// captain finished its pass (Dead) or its convoy is gone, so end its session + kill its tmux
+/// captain finished its pass (reported `done`, or Dead) or its convoy is gone, so end its session + kill its tmux
 /// (best-effort — it may already be dead, a finish not an error). No Jira, no order: a captain owns
 /// neither. The trigger re-launches on the convoy's next pass worth of work.
 fn stand_down_captain<H: SessionHost>(ledger: &Ledger, host: &H, convoy: &str) -> Result<()> {
@@ -2760,6 +2765,26 @@ mod tests {
         assert_eq!(
             plan(&db, &[captain_cog("PROJ-100")], true).unwrap(),
             vec![Action::StandDownCaptain { convoy: "PROJ-100".into() }]
+        );
+    }
+
+    #[test]
+    fn a_captain_that_reported_done_stands_down_and_relaunches_on_waiting_work() {
+        // `claude --agent` doesn't self-exit: the captain's `done` report, not a dead tmux, ends its
+        // pass — and frees the convoy's slot for a fresh pass in the same plan.
+        let db = db();
+        db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
+        convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::Todo); // work waiting
+        let id = SessionRepo::start(&db, &captain_cog("PROJ-100").session).unwrap().expect("session start");
+        let cog = Cog { session: SessionRepo::get(&db, &id).unwrap().unwrap(), liveness: Liveness::Active };
+        assert!(plan(&db, std::slice::from_ref(&cog), true).unwrap().is_empty(), "mid-pass, it holds the slot");
+        report(&db, &cog, CogState::Captain(CaptainState::Done));
+        assert_eq!(
+            plan(&db, &[cog], true).unwrap(),
+            vec![
+                Action::StandDownCaptain { convoy: "PROJ-100".into() },
+                Action::LaunchCaptain { convoy: "PROJ-100".into() },
+            ]
         );
     }
 

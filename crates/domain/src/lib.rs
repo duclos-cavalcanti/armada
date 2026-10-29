@@ -114,10 +114,21 @@ pub enum HandState { Awaiting, Implementing, Concluded, Anchored }
 #[serde(rename_all = "snake_case")]
 pub enum LookoutState { Reviewed, Escalated }
 
+/// The captain's pass over its convoy: `done` (frontier worked, stand it down).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptainState { Done }
+
 /// A crew member's self-reported state, typed per cog. The `reports` table stores the
 /// string (`as_str`); readers widen it back with the session's `kind` via `parse`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CogState { Worker(WorkerState), Sailor(SailorState), Hand(HandState), Lookout(LookoutState) }
+pub enum CogState {
+    Worker(WorkerState),
+    Sailor(SailorState),
+    Hand(HandState),
+    Captain(CaptainState),
+    Lookout(LookoutState),
+}
 
 /// A ticket's workflow status — a cached mirror of the tracker (re-synced,
 /// never trusted past `synced_at`). The tracker adapter maps the vendor onto this.
@@ -675,6 +686,17 @@ impl LookoutState {
     }
 }
 
+impl CaptainState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CaptainState::Done => "done",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        (s == "done").then_some(Self::Done)
+    }
+}
+
 impl CogState {
     /// Which cog this state belongs to (the enum variant carries it).
     pub fn cog(&self) -> CrewKind {
@@ -682,6 +704,7 @@ impl CogState {
             CogState::Worker(_) => CrewKind::Worker,
             CogState::Sailor(_) => CrewKind::Sailor,
             CogState::Hand(_) => CrewKind::Hand,
+            CogState::Captain(_) => CrewKind::Captain,
             CogState::Lookout(_) => CrewKind::Lookout,
         }
     }
@@ -690,6 +713,7 @@ impl CogState {
             CogState::Worker(s) => s.as_str(),
             CogState::Sailor(s) => s.as_str(),
             CogState::Hand(s) => s.as_str(),
+            CogState::Captain(s) => s.as_str(),
             CogState::Lookout(s) => s.as_str(),
         }
     }
@@ -700,22 +724,25 @@ impl CogState {
             CrewKind::Worker => WorkerState::parse(s).map(CogState::Worker),
             CrewKind::Sailor => SailorState::parse(s).map(CogState::Sailor),
             CrewKind::Hand => HandState::parse(s).map(CogState::Hand),
+            CrewKind::Captain => CaptainState::parse(s).map(CogState::Captain),
             CrewKind::Lookout => LookoutState::parse(s).map(CogState::Lookout),
-            // A captain commands its convoy and writes no status drop (its output is the convoy's
-            // close), so no CogState.
-            CrewKind::Captain => None,
         }
     }
     /// A builder's happy terminal — MR open + reviewed, ready to hand to a sailor.
     pub fn is_concluded(&self) -> bool {
         matches!(self, CogState::Worker(WorkerState::Concluded) | CogState::Hand(HandState::Concluded))
     }
-    /// A cold cog's clean finish — a sailor swept (`sleeping`), the lookout `reviewed` — now
-    /// idling. The self-reported counterpart to a Dead process: reconcile stands it down (graceful
-    /// reap) so its trigger re-launches on the next change. `claude --agent` does not self-exit,
+    /// A cold cog's clean finish — a sailor swept (`sleeping`), a captain `done`, the lookout
+    /// `reviewed` — now idling. The self-reported counterpart to a Dead process: reconcile stands it
+    /// down (graceful reap) so its trigger re-launches on the next change. `claude --agent` does not self-exit,
     /// so this report — not a dead tmux — is what signals the clean finish.
     pub fn is_done(&self) -> bool {
-        matches!(self, CogState::Sailor(SailorState::Sleeping) | CogState::Lookout(LookoutState::Reviewed))
+        matches!(
+            self,
+            CogState::Sailor(SailorState::Sleeping)
+                | CogState::Captain(CaptainState::Done)
+                | CogState::Lookout(LookoutState::Reviewed)
+        )
     }
     /// A DELIBERATE non-terminal hold (an escalation, an anchor).
     /// reconcile must not heal or stand down a cog reporting this even when its liveness is Dead —

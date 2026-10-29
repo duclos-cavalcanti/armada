@@ -10,7 +10,7 @@
 use crate::scheduler::{Command, ControlTarget};
 use crate::Snapshot;
 use anyhow::Result;
-use domain::{CogState, ConvoyKey, CrewKind, Order, TicketKey};
+use domain::{CogState, ConvoyKey, Order, TicketKey};
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
@@ -122,30 +122,21 @@ fn handle_status(request: &str, cmds: &Sender<Command>) -> String {
         Ok(d) => d,
         Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
     };
-    let kind = match CrewKind::parse(&dto.cog) {
-        Some(k) => k,
-        None => return http_response("400 Bad Request", "text/plain", &format!("invalid cog: {}", dto.cog)),
+    let cog = dto.target.cog.clone();
+    let target = match ControlTarget::from_wire(dto.target) {
+        Ok(t) => t,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &e),
     };
-    let state = match CogState::parse(kind, &dto.state) {
+    let state = match CogState::parse(target.kind(), &dto.state) {
         Some(s) => s,
         None => {
-            let msg = format!("invalid state '{}' for cog '{}'", dto.state, dto.cog);
+            let msg = format!("invalid state '{}' for cog '{cog}'", dto.state);
             return http_response("400 Bad Request", "text/plain", &msg);
         }
     };
-
-    // The lookout is a singleton: its report needs no ticket to find its session; every other cog's does.
-    let ticket = match (dto.ticket.as_deref().map(parse_ticket).transpose(), kind) {
-        (Err(r), _) => return r,
-        (Ok(None), k) if k != CrewKind::Lookout => {
-            return http_response("400 Bad Request", "text/plain", &format!("{} reports need a ticket", dto.cog));
-        }
-        (Ok(t), _) => t,
-    };
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
     let cmd = Command::RecordStatus {
-        cog: kind,
-        ticket,
+        target,
         state,
         last_action: dto.last_action,
         reply: reply_tx,
