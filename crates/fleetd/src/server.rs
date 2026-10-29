@@ -257,7 +257,7 @@ fn handle_convoy(request: &str, cmds: &Sender<Command>, open: bool) -> String {
     };
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
     let cmd = if open {
-        Command::OpenConvoy { key, title: dto.title, reply: reply_tx }
+        Command::OpenConvoy { key, title: dto.title, plan: dto.plan, reply: reply_tx }
     } else {
         Command::CloseConvoy { key, reply: reply_tx }
     };

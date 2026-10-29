@@ -63,6 +63,15 @@ CREATE TABLE IF NOT EXISTS convoys (
     anchored_at TEXT                                  -- operator anchor (hold the captain); NULL = under way
 );
 
+-- A convoy's plan — the fabric tying its tickets together (outcome, sequencing, the invariants
+-- across them, the rulings made), whatever the tracker. Set by `convoy open --plan`; no row = no
+-- plan. The captain reads it with its slice.
+CREATE TABLE IF NOT EXISTS convoy_plans (
+    convoy     TEXT PRIMARY KEY REFERENCES convoys(key),
+    body       TEXT NOT NULL CHECK (length(trim(body, char(32, 9, 10, 13))) > 0),  -- blank ≠ no plan
+    updated_at TEXT NOT NULL
+);
+
 -- Convoy membership the fleet sets beyond the tracker's grouping. A ticket's convoy is the one it was
 -- added to here, else its epic's (`tickets.convoy`) — and only one (the PK): a convoy can take on a
 -- ticket from another epic it depends on, which can't be re-parented, and that ticket leaves its

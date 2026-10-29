@@ -78,6 +78,9 @@ pub trait ConvoyRepo {
     /// Open a convoy (operator fact) — idempotent create; re-opening a closed convoy clears
     /// `ended_at`. Appends `ConvoyOpened`.
     fn open(&self, key: &ConvoyKey, title: Option<&str>, now: &str) -> Result<()>;
+    /// Set the convoy's plan (`Some`) or clear it (`None`).
+    fn set_plan(&self, key: &ConvoyKey, plan: Option<&str>, at: &str) -> Result<()>;
+    fn plan(&self, key: &ConvoyKey) -> Result<Option<String>>;
     /// Close a convoy (the captain's "all delivered" judgment) — sets `ended_at`, which
     /// reconcile reads to reap the captain. Appends `ConvoyClosed`.
     fn close(&self, key: &ConvoyKey, at: &str) -> Result<()>;

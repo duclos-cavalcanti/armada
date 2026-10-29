@@ -738,6 +738,20 @@ mod tests {
     }
 
     #[test]
+    fn a_convoy_plan_is_set_replaced_and_cleared_and_never_blank() {
+        let db = Ledger::in_memory().unwrap();
+        let k = ConvoyKey("PROJ-100".into());
+        db.open(&k, None, "t1").unwrap();
+        assert_eq!(db.plan(&k).unwrap(), None, "no plan until one is given");
+        db.set_plan(&k, Some("ship the seed"), "t2").unwrap();
+        db.set_plan(&k, Some("ship the seed, then the quorums"), "t3").unwrap();
+        assert_eq!(db.plan(&k).unwrap().as_deref(), Some("ship the seed, then the quorums"));
+        assert!(db.set_plan(&k, Some("  \n"), "t4").is_err(), "a blank plan is refused");
+        db.set_plan(&k, None, "t5").unwrap();
+        assert_eq!(db.plan(&k).unwrap(), None);
+    }
+
+    #[test]
     fn convoy_reopen_clears_ended_at() {
         let db = Ledger::in_memory().unwrap();
         let k = ConvoyKey("PROJ-100".into());
@@ -1205,6 +1219,25 @@ impl ConvoyRepo for Ledger {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    fn set_plan(&self, key: &ConvoyKey, plan: Option<&str>, at: &str) -> Result<()> {
+        match plan {
+            Some(body) => self.conn.execute(
+                "INSERT INTO convoy_plans(convoy, body, updated_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(convoy) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at",
+                params![key.0, body, at],
+            )?,
+            None => self.conn.execute("DELETE FROM convoy_plans WHERE convoy = ?1", params![key.0])?,
+        };
+        Ok(())
+    }
+
+    fn plan(&self, key: &ConvoyKey) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT body FROM convoy_plans WHERE convoy = ?1", params![key.0], |r| r.get(0))
+            .optional()?)
     }
 
     fn active(&self) -> Result<Vec<Convoy>> {

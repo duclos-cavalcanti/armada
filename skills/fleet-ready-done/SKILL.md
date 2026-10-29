@@ -41,6 +41,25 @@ wins. This covers *what* a good ticket and a finished MR are, not the process ar
   An epic is its convoy; a ticket from another epic it depends on (one it can't re-parent) joins
   with `fleetc convoy add <EPIC> <KEY>` — a ticket is in one convoy.
 
+## The convoy plan
+
+A convoy (`fleetc convoy open <KEY> --plan <file|->`) may carry a plan: what ties its tickets
+together, for the captain that dispatches them. Kept short:
+
+```markdown
+## Outcome
+<What the convoy delivers once every ticket lands.>
+
+## Sequence
+<The order its tickets land in, and why. The "is blocked by" edges enforce it; this explains it.>
+
+## Invariants
+- <A rule every ticket in it keeps.>
+
+## Rulings
+- <date — the decision, who made it, the tickets it binds.>
+```
+
 ## Drafting a ticket
 
 How `/fleet-commission` (files it) and `/fleet-propose` (a cog files it as a proposal for the operator)

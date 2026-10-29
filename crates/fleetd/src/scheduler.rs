@@ -63,7 +63,7 @@ pub enum Command {
     RecordStatus { target: ControlTarget, state: CogState, last_action: Option<String>, reply: Reply },
     Dispatch { order: Order, reply: Reply },
     LaunchHand { worktree_path: String, reply: Reply }, // ticketless operator-driven hand, no order
-    OpenConvoy { key: ConvoyKey, title: Option<String>, reply: Reply },
+    OpenConvoy { key: ConvoyKey, title: Option<String>, plan: Option<String>, reply: Reply },
     CloseConvoy { key: ConvoyKey, reply: Reply },
     Anchor { target: ControlTarget, reply: Reply },
     Weigh { target: ControlTarget, reply: Reply },
@@ -193,8 +193,12 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
                 .map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
-        Command::OpenConvoy { key, title, reply } => {
-            let res = ledger.open(&key, title.as_deref(), &now_rfc3339()).map_err(|e| e.to_string());
+        Command::OpenConvoy { key, title, plan, reply } => {
+            let now = now_rfc3339();
+            let res = ledger
+                .open(&key, title.as_deref(), &now)
+                .and_then(|()| ledger.set_plan(&key, plan.as_deref(), &now))
+                .map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
         Command::CloseConvoy { key, reply } => {
@@ -659,7 +663,7 @@ fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Resul
             held,
         });
     }
-    Ok(ConvoyView { convoy: convoy.clone(), tickets })
+    Ok(ConvoyView { convoy: convoy.clone(), plan: ConvoyRepo::plan(ledger, convoy)?, tickets })
 }
 
 /// Compose a cog's work-packet from the ledger: its dispatch order, its open ship + the ship's

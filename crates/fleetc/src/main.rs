@@ -31,7 +31,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc status   --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] --state <state> [--last-action <text>]\n  \
      fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
      fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
-     fleetc convoy   open <KEY> [--title <text>] | close [<KEY>]\n  \
+     fleetc convoy   open <KEY> [--title <text>] [--plan <file|->] | close [<KEY>]   (the plan ties its tickets together; omitted: none)\n  \
      fleetc convoy   <add|remove> <KEY> <KEY-N>   (a ticket joins the convoy — its only one — or an added one leaves)\n  \
      fleetc anchor   <KEY-N> [--reason <why>]   (hold everything on it: off the frontier, its cogs stopped, its MR disarmed + drafted)\n  \
      fleetc anchor   --cog <captain|lookout> [--convoy <KEY>]   (stop a ticketless cog)\n  \
@@ -228,21 +228,23 @@ fn hand(args: &[String]) -> Result<()> {
 fn convoy(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("open") => {
-            let (mut key, mut title) = (None, None);
+            let (mut key, mut title, mut plan) = (None, None, None);
             let mut it = args[1..].iter();
             while let Some(a) = it.next() {
+                let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{a} needs a value"));
                 match a.as_str() {
-                    "--title" => title = Some(it.next().cloned().ok_or_else(|| anyhow!("--title needs a value"))?),
+                    "--title" => title = Some(take()?),
+                    "--plan" => plan = Some(plan_text(&take()?)?),
                     other => key = Some(other.to_string()),
                 }
             }
             let key = convoy_key(&key.ok_or_else(|| anyhow!("convoy open needs <KEY>"))?, "convoy open")?;
-            submit("/convoy-open", &wire::ConvoyCmd { key, title })
+            submit("/convoy-open", &wire::ConvoyCmd { key, title, plan })
         }
         Some("close") => {
             let key = args.get(1).cloned().or_else(|| own("FLEET_CONVOY")).ok_or_else(|| anyhow!("convoy close needs <KEY>"))?;
             let key = convoy_key(&key, "convoy close")?;
-            submit("/convoy-close", &wire::ConvoyCmd { key, title: None })
+            submit("/convoy-close", &wire::ConvoyCmd { key, title: None, plan: None })
         }
         Some(verb @ ("add" | "remove")) => {
             let [convoy, ticket] = &args[1..] else { bail!("usage: fleetc convoy {verb} <KEY> <KEY-N>") };
@@ -250,8 +252,20 @@ fn convoy(args: &[String]) -> Result<()> {
             let cmd = wire::ConvoyMemberCmd { convoy: convoy_key(convoy, &what)?, ticket: ticket_key(ticket, &what)? };
             post_and_print(&format!("/convoy-{verb}"), &cmd)
         }
-        _ => bail!("usage: fleetc convoy <open|close> <KEY> [--title <text>] | <add|remove> <KEY> <KEY-N>"),
+        _ => bail!("usage: fleetc convoy open <KEY> [--title <text>] [--plan <file|->] | close [<KEY>] | <add|remove> <KEY> <KEY-N>"),
     }
+}
+
+/// A convoy plan's text: the file at `path`, or stdin for `-`. An empty plan is a mistake, not "none".
+fn plan_text(path: &str) -> Result<String> {
+    let text = match path {
+        "-" => body_text(path.into())?,
+        _ => std::fs::read_to_string(path).map_err(|e| anyhow!("--plan {path}: {e}"))?,
+    };
+    if text.trim().is_empty() {
+        bail!("--plan {path} is empty — omit --plan for no plan");
+    }
+    Ok(text)
 }
 
 /// `fleetc anchor <KEY-N> [--reason <why>]` — hold everything on the ticket, whatever its stage: off

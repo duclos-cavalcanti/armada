@@ -291,6 +291,9 @@ pub enum Classification {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConvoyView {
     pub convoy: ConvoyKey,
+    /// The convoy's plan — what ties its tickets together (`convoy open --plan`); `None`: no plan.
+    #[serde(default)]
+    pub plan: Option<String>,
     pub tickets: Vec<ConvoyTicketView>,
 }
 
