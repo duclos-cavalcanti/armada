@@ -17,7 +17,7 @@ use domain::ports::{
     ShipRepo, TicketRepo, Tracker,
 };
 use domain::{
-    CogState, ConvoyKey, ConvoyTicketView, ConvoyView, CrewKind, EntityKind, EventKind,
+    CogState, ConvoyKey, ConvoyTicketView, ConvoyView, CrewKind, EntityKind, EventKind, HandState,
     LivenessThresholds, MrDraft, Order, Packet, Proposal, ProposalId, Proposed, Report, Session, Ship, ShipState, TicketDraft,
     TicketKey, TicketStatus,
 };
@@ -878,12 +878,17 @@ fn record_status(ledger: &Ledger, target: &ControlTarget, state: CogState, last_
         .next()
         .ok_or_else(|| anyhow!("no live {} session{}", target.kind().as_str(), target.key()))?;
     // Nothing goes to a sailor while a blocker is open: it would only be reworked once that merges.
-    if let (true, ControlTarget::Cog { ticket, .. }) = (state.is_concluded(), target) {
+    // A hand's `done` closes the ticket outright: same gate, and only with no MR to land.
+    let done = state == CogState::Hand(HandState::Done);
+    if let (true, ControlTarget::Cog { ticket, .. }) = (state.is_concluded() || done, target) {
         let blockers = TicketRepo::get(ledger, ticket)?.map(|t| t.blocked_by).unwrap_or_default();
         let open = crate::reconcile::open_blockers(ledger, &blockers)?;
         if !open.is_empty() {
             let keys: Vec<&str> = open.iter().map(|k| k.0.as_str()).collect();
             bail!("{} is blocked by {} (not merged) — it can't conclude until they merge", ticket.0, keys.join(", "));
+        }
+        if done && open_ship(ledger, ticket)?.is_some() {
+            bail!("{} has an open MR — yield it to a sailor (/fleet-yield), not done", ticket.0);
         }
     }
     ledger.record(&Report {
@@ -1165,6 +1170,47 @@ mod tests {
         tracker.transition(&TicketKey("PROJ-2".into()), TicketStatus::Done).unwrap();
         sync::sync_board(&db, &tracker, "now").unwrap();
         record_status(&db, &me, concluded, None).unwrap();
+    }
+
+    #[test]
+    fn a_hand_is_done_only_with_no_mr_to_land() {
+        let db = Ledger::in_memory().unwrap();
+        sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]), "now").unwrap();
+        let key = TicketKey("PROJ-1".into());
+        let hand = Session {
+            id: SessionId(0),
+            kind: CrewKind::Hand,
+            ticket: Some(key.clone()),
+            convoy: None,
+            worktree_path: "/wt".into(),
+            tmux_session: "hand-PROJ-1".into(),
+            harness_session_id: None,
+            created_at: "t".into(),
+            ended_at: None,
+            anchored_at: None,
+        };
+        SessionRepo::start(&db, &hand).unwrap().expect("session start");
+        let ship = Ship {
+            id: ShipId(0),
+            ticket: Some(key.clone()),
+            iid: 7,
+            url: "u".into(),
+            target: "master".into(),
+            source: "chore/PROJ-1".into(),
+            pilot: "me".into(),
+            created_at: "t".into(),
+            ended_at: None,
+            swept: None,
+            reviewed: None,
+        };
+        ShipRepo::upsert(&db, &ship).unwrap();
+        let me = ControlTarget::Cog { cog: CrewKind::Hand, ticket: key.clone() };
+        let done = CogState::Hand(HandState::Done);
+        let e = record_status(&db, &me, done, None).unwrap_err().to_string();
+        assert!(e.contains("open MR"), "{e}");
+        let id = db.armada().unwrap()[0].id.clone();
+        ShipRepo::retire(&db, &id, "t").unwrap();
+        record_status(&db, &me, done, None).unwrap();
     }
 
     #[test]

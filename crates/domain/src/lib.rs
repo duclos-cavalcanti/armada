@@ -104,10 +104,11 @@ pub enum WorkerState { Started, Implementing, Waiting, Concluded, Escalated, Anc
 #[serde(rename_all = "snake_case")]
 pub enum SailorState { Sleeping, Escalated, Anchored }
 
-/// A hand's lifecycle (ad-hoc, operator-driven).
+/// A hand's lifecycle (ad-hoc, operator-driven). `concluded` yields its MR to a sailor; `done`
+/// closes a ticket whose work needed no MR (fleetd moves it to Done).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum HandState { Awaiting, Implementing, Concluded, Anchored }
+pub enum HandState { Awaiting, Implementing, Concluded, Done, Anchored }
 
 /// The lookout's pass over one allied MR: `reviewed` (done, stand it down) or `escalated` (wait
 /// for the operator in its pane).
@@ -679,6 +680,7 @@ impl HandState {
             HandState::Awaiting => "awaiting",
             HandState::Implementing => "implementing",
             HandState::Concluded => "concluded",
+            HandState::Done => "done",
             HandState::Anchored => "anchored",
         }
     }
@@ -687,6 +689,7 @@ impl HandState {
             "awaiting" => Some(Self::Awaiting),
             "implementing" => Some(Self::Implementing),
             "concluded" => Some(Self::Concluded),
+            "done" => Some(Self::Done),
             "anchored" => Some(Self::Anchored),
             _ => None,
         }

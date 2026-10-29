@@ -481,7 +481,7 @@ fn state_style(state: &str) -> Style {
     match state {
         "escalated" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         "anchored" => Style::default().fg(Color::Magenta),
-        "concluded" | "merged" => green(),
+        "concluded" | "done" | "merged" => green(),
         "sleeping" | "unmanned" | "·" => dim(),
         _ => Style::default(),
     }

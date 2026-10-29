@@ -32,7 +32,7 @@ use domain::ports::{
     ShipRepo, TicketRepo, Tracker,
 };
 use domain::{
-    Classification, CogState, ConvoyKey, CrewKind, EntityKind, EventKind, Liveness, Order,
+    Classification, CogState, ConvoyKey, CrewKind, EntityKind, EventKind, HandState, Liveness, Order,
     PipelineStatus, Report, Session, SessionId, Ship, ShipSnapshot, ShipState, Ticket, TicketKey,
     TicketStatus, WorkerState,
 };
@@ -162,6 +162,11 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
             continue;
         }
         let state = ReportRepo::latest(ledger, &cog.session.id)?.map(|r| r.state);
+        // A hand that reported `done` (work with no MR) → close the ticket as a merge would.
+        if state == Some(CogState::Hand(HandState::Done)) {
+            actions.push(Action::Reap { ticket: tkey.0.clone() });
+            continue;
+        }
         // A builder that reported `concluded` → hand off to a sailor (unless one's live).
         if matches!(cog.session.kind, CrewKind::Worker | CrewKind::Hand)
             && state.is_some_and(|s| s.is_concluded())
@@ -2129,6 +2134,23 @@ mod tests {
             "the hand's order is promoted to auto → LaunchSailor will engage a sailor",
         );
         assert_eq!(tracker.moves.borrow().as_slice(), &[("PROJ-1".to_string(), TicketStatus::InQa)]);
+        assert_eq!(host.killed.borrow().as_slice(), &["hand-PROJ-1".to_string()], "the hand is reaped");
+    }
+
+    #[test]
+    fn a_hand_done_with_no_mr_closes_its_ticket() {
+        // Work off the line (no MR): the hand reports done → reap: Jira Done, the hand ended.
+        let db = db();
+        ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
+        order_wt(&db, "PROJ-1", false, Some("/wt/PROJ-1"));
+        let h = live_cog(&db, CrewKind::Hand, "PROJ-1", Liveness::Quiet);
+        report(&db, &h, CogState::Hand(HandState::Done));
+        assert_eq!(plan(&db, std::slice::from_ref(&h), true).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
+
+        let tracker = FakeTracker::new();
+        let host = FakeHost::new();
+        tick(&db, &tracker, &host, &FakeForge::new(), &[h], "/project", false).unwrap();
+        assert_eq!(tracker.moves.borrow().as_slice(), &[("PROJ-1".to_string(), TicketStatus::Done)]);
         assert_eq!(host.killed.borrow().as_slice(), &["hand-PROJ-1".to_string()], "the hand is reaped");
     }
 

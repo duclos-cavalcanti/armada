@@ -61,7 +61,14 @@ push back on, or leave. Fix what they direct, and survey again when they ask.
 
 ## Conclude (only when they say so)
 
-When the operator says the work is done:
+When the operator says the work is done, the ticket ends one of two ways.
+
+**Work with no MR** (done off the line: a console change, a runbook step, nothing to merge):
+`fleetc status --cog hand --state done --last-action "<what was done>"`. fleetd moves the ticket
+to Done and retires you. It refuses while the ticket has an open MR (yield it instead) or open
+blockers.
+
+**Work with an MR:**
 
 1. **Open the MR** for the branch (ready, not draft) — `/fleet-launch`, following the
    repo's MR conventions. Review is the operator's call: a survey when they ask for one,
@@ -78,6 +85,7 @@ fleetd *observes* your liveness and your MR on its own — never report those. Y
 *escalate*: the operator is already at your workstation. You voice only:
 
 - **Concluded** — the conclude handoff above.
+- **Done** — the work needed no MR: the ticket closes.
 - **Anchored** — if you receive an `⚓ anchor` message, stop: commit + push any WIP so
   nothing is lost, `fleetc status --cog hand --state anchored`, then
   stop. On `⚓ weigh anchor`, resume.
