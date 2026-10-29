@@ -75,7 +75,8 @@ git checkout .claude/settings.json
 
 ```bash
 make preflight FLEET_PROJECT=<name>   # check the setup (runtime state, checkout, CLI auth, tmux + claude); `make run` gates on it
-make run FLEET_PROJECT=<name>         # start project <name>'s fleetd in the background (unless it's up), then open its dashboard
+make run FLEET_PROJECT=<name>         # restart project <name>'s fleetd, then open its dashboard
+make restart FLEET_PROJECT=<name>     # rebuild fleetd + reinstall fleetc, (re)start fleetd in the background
 make stop FLEET_PROJECT=<name>        # stop that project's fleet daemon
 make dashboard FLEET_PROJECT=<name>   # build + run the TUI dashboard
 make admiral FLEET_PROJECT=<name>     # talk to the project's admiral (its product expert; reads the kit, never edits it)

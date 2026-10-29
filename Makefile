@@ -10,7 +10,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install uninstall .project preflight run stop dashboard admiral export
+.PHONY: help install uninstall .project preflight run restart stop dashboard admiral export
 
 help:                            ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / { printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -29,13 +29,15 @@ uninstall:                       ## Uninstall the kit and remove fleetc
 preflight: .project              ## Check the project's setup: runtime state, checkout, forge + tracker CLIs, tmux + claude
 	cargo run -q -p fleetd -- -C projects/$(FLEET_PROJECT) preflight
 
-run: .project                    ## Build fleetd + reinstall fleetc, (re)start fleetd in the background, open its dashboard
+run: restart                     ## Restart fleetd (see restart), then open its dashboard
+	@$(MAKE) --no-print-directory dashboard
+
+restart: .project                ## Build fleetd + reinstall fleetc, (re)start fleetd in the background
 	@pids=$$(pgrep -x fleetd | paste -sd, -); if [ -n "$$pids" ] && ps -o args= -p "$$pids" | grep -v '/fleetd -C projects/$(FLEET_PROJECT)$$'; then echo "↑ another project's fleetd is up — make stop FLEET_PROJECT=<it> first"; exit 1; fi
 	@cargo build -q -p fleetd
 	@cargo install -q --path crates/fleetc --force --target-dir target
 	@$(MAKE) --no-print-directory stop
 	@nohup target/debug/fleetd -C projects/$(FLEET_PROJECT) </dev/null >/dev/null 2>&1 &
-	@$(MAKE) --no-print-directory dashboard
 
 export: .project                 ## Snapshot the project's ledger to projects/<name>/exports/<name>-<UTC stamp>.db (safe while running)
 	cargo run -q -p fleetc -- -C projects/$(FLEET_PROJECT) export "projects/$(FLEET_PROJECT)/exports/$(FLEET_PROJECT)-$$(date -u +%Y%m%dT%H%M%SZ).db"
