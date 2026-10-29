@@ -62,7 +62,7 @@ pub fn sailor_label(sailor: Option<&CogRow>) -> String {
 /// How far a dispatched ticket has got.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
-    /// No builder at work and no ship yet.
+    /// Its builder is due — none at work yet, and any MR it has waits (a rework).
     Waiting,
     /// A worker / hand is building it.
     Implementation,
@@ -196,14 +196,21 @@ impl Fleet {
 
         let orders = OrderRepo::queue(&db)?;
         let ordered: HashSet<&TicketKey> = orders.iter().map(|o| &o.ticket).collect();
+        // Back in the line for a builder (dispatched, or reworked): its MR waits, sailor-less.
+        let mut due = HashSet::new();
+        for o in &orders {
+            if o.builder_due(&SessionRepo::for_ticket(&db, &o.ticket)?) {
+                due.insert(&o.ticket);
+            }
+        }
         let ships = ShipRepo::armada(&db)?;
         let mut armada = Vec::new();
         let mut landing = Vec::new();
         for ship in &ships {
             let snapshot = ShipRepo::snapshot(&db, &ship.id)?;
             let sailor = match &ship.ticket {
-                Some(t) => last_sailor(&db, t)?.map(&cog).transpose()?,
-                None => None,
+                Some(t) if !due.contains(t) => last_sailor(&db, t)?.map(&cog).transpose()?,
+                _ => None, // an ally, or a ticket waiting for its builder: no sailor this round
             };
             armada.push(ShipRow {
                 ship: ship.clone(),
@@ -211,8 +218,8 @@ impl Fleet {
                 sailor: sailor_label(sailor.as_ref()),
             });
             let Some(ticket) = &ship.ticket else { continue }; // an ally: Ships tab only
-            if building.contains(ticket) {
-                continue; // its builder is still at work: it shows in phase 2
+            if building.contains(ticket) || due.contains(ticket) {
+                continue; // its builder is at work or due: it shows in phase 1 or 2
             }
             if sailor.is_none() && !ordered.contains(ticket) {
                 continue; // a ticketed MR the fleet never took on (a teammate's): Ships tab only
@@ -236,7 +243,7 @@ impl Fleet {
         for order in orders.iter().cloned() {
             let phase = if building.contains(&order.ticket) {
                 Phase::Implementation
-            } else if sailing.contains(&order.ticket) {
+            } else if sailing.contains(&order.ticket) && !due.contains(&order.ticket) {
                 Phase::Merge
             } else {
                 Phase::Waiting

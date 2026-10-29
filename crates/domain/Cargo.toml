@@ -8,3 +8,4 @@ description = "fleet domain — pure entities + enums (the ledger's shape). No s
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
+time = { version = "0.3", features = ["parsing"] }

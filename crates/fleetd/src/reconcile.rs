@@ -77,7 +77,7 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
         let spawnable = !order.auto_impl
             || is_ready(ledger, &ticket)?
             || matches!(classify(ledger, &ticket, &armada, stacks)?, Some(Classification::Stacked));
-        if builder_due(ledger, &order)? && spawnable {
+        if order.builder_due(&SessionRepo::for_ticket(ledger, &order.ticket)?) && spawnable {
             let kind = if order.auto_impl { CrewKind::Worker } else { CrewKind::Hand };
             actions.push(Action::Spawn { ticket: order.ticket.0.clone(), kind: kind.as_str().into() });
         }
@@ -357,20 +357,6 @@ pub(crate) fn is_ready(ledger: &Ledger, ticket: &Ticket) -> Result<bool> {
         return Ok(false);
     }
     blockers_terminal(ledger, &ticket.blocked_by)
-}
-
-/// A builder is due on `order`: no cog has started on its ticket since it was dispatched (or
-/// re-dispatched by `fleetc rework`).
-fn builder_due(ledger: &Ledger, order: &Order) -> Result<bool> {
-    let ordered = parse_time(&order.created_at);
-    Ok(SessionRepo::for_ticket(ledger, &order.ticket)?.iter().all(|s| match (parse_time(&s.created_at), ordered) {
-        (Some(started), Some(ordered)) => started < ordered,
-        _ => s.created_at < order.created_at, // unparseable (test fixtures): compare as text
-    }))
-}
-
-fn parse_time(at: &str) -> Option<time::OffsetDateTime> {
-    time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).ok()
 }
 
 /// Every blocker in `blockers` is terminal (Done/Cancelled) — the DAG-ready predicate shared by

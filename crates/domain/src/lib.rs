@@ -569,8 +569,8 @@ pub struct Event {
     pub payload: serde_json::Value,
 }
 
-/// A dispatch order — the queue (operational intent). `launched` is derived
-/// (a session exists); `auto_impl` defaults true.
+/// A dispatch order — the queue (operational intent). Its builder is due until a cog starts on
+/// the ticket (`builder_due`); `auto_impl` defaults true.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Order {
     pub ticket: TicketKey,
@@ -582,6 +582,20 @@ pub struct Order {
     /// captain's /fleet-berth); reconcile reads it at spawn and never creates it.
     pub worktree_path: Option<String>,
     pub created_at: Timestamp,
+}
+
+impl Order {
+    /// A builder is due: no cog among the ticket's `sessions` started since the order was
+    /// dispatched (or re-dispatched by `fleetc rework`) — so the ticket waits for one, whatever
+    /// MR it already has.
+    pub fn builder_due(&self, sessions: &[Session]) -> bool {
+        let at = |t: &str| time::OffsetDateTime::parse(t, &time::format_description::well_known::Rfc3339).ok();
+        let ordered = at(&self.created_at);
+        sessions.iter().all(|s| match (at(&s.created_at), ordered) {
+            (Some(started), Some(ordered)) => started < ordered,
+            _ => s.created_at < self.created_at, // unparseable (test fixtures): compare as text
+        })
+    }
 }
 
 // ── SQL string mapping for the CHECK-constrained enums ──────────────────────────
@@ -1015,5 +1029,40 @@ mod liveness_tests {
         let want = format!("{home}/.claude/projects/-wt-feature-PROJ-1-Some-Thing-x/abc-123.jsonl");
         assert_eq!(s.transcript().unwrap().to_string_lossy(), want);
         assert_eq!(Session { harness_session_id: None, ..s }.transcript(), None, "pre-capture: no id");
+    }
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+
+    #[test]
+    fn a_builder_is_due_until_a_cog_starts_after_the_order() {
+        let order = |at: &str| Order {
+            ticket: TicketKey("PROJ-1".into()),
+            auto_impl: true,
+            fork_from: "origin/main".into(),
+            ac_summary: "s".into(),
+            park_at: None,
+            worktree_path: Some("/wt".into()),
+            created_at: at.into(),
+        };
+        let session = |at: &str| Session {
+            id: SessionId(1),
+            kind: CrewKind::Sailor,
+            ticket: Some(TicketKey("PROJ-1".into())),
+            convoy: None,
+            worktree_path: "/wt".into(),
+            tmux_session: "sailor-PROJ-1".into(),
+            harness_session_id: None,
+            created_at: at.into(),
+            ended_at: None,
+            anchored_at: None,
+        };
+        let sailed = [session("2026-10-28T10:00:00.5Z")];
+        assert!(order("2026-10-28T10:00:00Z").builder_due(&[]), "dispatched, nothing launched yet");
+        assert!(!order("2026-10-28T10:00:00Z").builder_due(&sailed), "a cog started after it");
+        // Reworked: re-dated past every session. Compared as times — as text, ".5Z" sorts after ".52Z".
+        assert!(order("2026-10-28T10:00:00.52Z").builder_due(&sailed));
     }
 }
