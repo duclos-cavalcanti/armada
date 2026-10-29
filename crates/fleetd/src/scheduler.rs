@@ -70,6 +70,7 @@ pub enum Command {
     Sink { target: ControlTarget, reply: Reply },
     Send { target: ControlTarget, message: String, reply: Reply }, // push an operator message to the cog's pane
     AnchorTicket { ticket: TicketKey, anchor: bool, reason: Option<String>, reply: Reply }, // hold everything on it, or release it
+    Rework { ticket: TicketKey, hand: bool, reply: Reply }, // send it back down the line to a builder
     GetPacket { ticket: TicketKey, reply: PacketReply }, // a read: the cog's composed work-packet
     GetConvoyView { convoy: ConvoyKey, reply: ConvoyReply }, // a read: the captain's convoy slice
     GetReview { iid: i64, reply: ReviewReply }, // a read: an MR's fresh review surface (forge)
@@ -218,6 +219,10 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         }
         Command::AnchorTicket { ticket, anchor, reason, reply } => {
             let res = anchor_ticket(ledger, forge, host, &ticket, anchor, reason.as_deref()).map_err(|e| format!("{e:#}"));
+            let _ = reply.send(res);
+        }
+        Command::Rework { ticket, hand, reply } => {
+            let res = rework(ledger, tracker, forge, host, &ticket, hand).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
         Command::GetPacket { ticket, reply } => {
@@ -520,6 +525,48 @@ fn arm(ledger: &Ledger, forge: &dyn Forge, key: &TicketKey, merges: bool) -> Res
 
 /// Re-read a ship the fleet just changed on the forge (armed, disarmed, drafted), so the ledger — and
 /// the dashboard — show it now, not at the next sync. Best-effort: the sync catches up regardless.
+/// The ticket's open MR, if it has one.
+fn open_ship(ledger: &Ledger, ticket: &TicketKey) -> Result<Option<Ship>> {
+    Ok(ledger.armada()?.into_iter().find(|s| s.ticket.as_ref() == Some(ticket) && s.ended_at.is_none()))
+}
+
+/// Keep an MR from merging: disarm it, clear `swept` so the next sweep re-arms, and draft it.
+fn hold_ship(ledger: &Ledger, forge: &dyn Forge, ship: &Ship) -> Result<()> {
+    let iid = ship.iid;
+    forge.disarm(iid).with_context(|| format!("disarming !{iid} failed"))?;
+    ShipRepo::set_swept(ledger, &ship.id, None)?;
+    forge.set_draft(iid, true).with_context(|| format!("disarmed, but couldn't mark !{iid} draft"))
+}
+
+/// Rework a ticket whose ACs changed under its MR: send it back down the line. A worker re-enters
+/// at To Do (its spawn claims it back, once the blockers are Done); a hand starts at once, wherever
+/// the ticket is. Its live cogs are sunk and its MR held as a draft; the order is re-dated, so
+/// reconcile launches the builder in the same worktree, on the same branch and MR.
+fn rework<H: SessionHost>(
+    ledger: &Ledger,
+    tracker: &dyn Tracker,
+    forge: &dyn Forge,
+    host: &H,
+    ticket: &TicketKey,
+    hand: bool,
+) -> Result<()> {
+    OrderRepo::get(ledger, ticket)?.ok_or_else(|| anyhow!("{} was never dispatched: fleetc dispatch it", ticket.0))?;
+    let status = TicketRepo::get(ledger, ticket)?.and_then(|t| t.status);
+    if let Some(s @ (TicketStatus::Done | TicketStatus::Cancelled)) = status {
+        anyhow::bail!("{} is {} — nothing to rework", ticket.0, s.as_str());
+    }
+    if !hand {
+        tracker.transition(ticket, TicketStatus::Todo)?; // first: a refused move changes nothing
+        TicketRepo::sync(ledger, &tracker.get(ticket)?, &now_rfc3339())?;
+    }
+    hold_sessions(ledger, host, Verb::Sink, live_cogs_on(ledger, ticket)?)?;
+    if let Some(ship) = open_ship(ledger, ticket)? {
+        hold_ship(ledger, forge, &ship)?;
+        refresh(ledger, forge, &ship);
+    }
+    OrderRepo::rework(ledger, ticket, !hand, &now_rfc3339())
+}
+
 fn refresh(ledger: &Ledger, forge: &dyn Forge, ship: &Ship) {
     if let Err(e) = reconcile::fresh_snapshot(ledger, forge, ship) {
         tracing::warn!("!{} not refreshed: {e:#}", ship.iid);
@@ -548,14 +595,11 @@ fn anchor_ticket<H: SessionHost>(
     } else {
         tracing::info!("weigh {}", ticket.0);
     }
-    let open = ledger.armada()?.into_iter().find(|s| s.ticket.as_ref() == Some(ticket) && s.ended_at.is_none());
-    if let Some(ship) = open {
-        let iid = ship.iid;
+    if let Some(ship) = open_ship(ledger, ticket)? {
         if anchor {
-            forge.disarm(iid).with_context(|| format!("anchored, but disarming !{iid} failed"))?;
-            ShipRepo::set_swept(ledger, &ship.id, None)?;
-            forge.set_draft(iid, true).with_context(|| format!("anchored + disarmed, but couldn't mark !{iid} draft"))?;
+            hold_ship(ledger, forge, &ship).context("anchored")?;
         } else {
+            let iid = ship.iid;
             forge.set_draft(iid, false).with_context(|| format!("weighed, but couldn't mark !{iid} ready"))?;
         }
         refresh(ledger, forge, &ship);
@@ -1176,6 +1220,85 @@ mod tests {
     }
 
     #[test]
+    fn rework_sends_the_ticket_back_to_a_builder_in_its_worktree_once_its_blockers_are_done() {
+        let db = Ledger::in_memory().unwrap();
+        let blocked = TrackerTicket { blocked_by: vec![TicketKey("PROJ-2".into())], ..tt("PROJ-1", TicketStatus::InQa) };
+        let tracker = FakeTracker::new(vec![blocked, tt("PROJ-2", TicketStatus::InProgress)]);
+        sync::sync_board(&db, &tracker, "now").unwrap();
+        let key = TicketKey("PROJ-1".into());
+        let forge = FakeForge::default();
+        let host = FakeHost::new();
+        let e = rework(&db, &tracker, &forge, &host, &key, false).unwrap_err().to_string();
+        assert!(e.contains("never dispatched"), "{e}");
+
+        let at = "2026-01-01T00:00:00Z";
+        let order = Order {
+            ticket: key.clone(),
+            auto_impl: true,
+            fork_from: "origin/master".into(),
+            ac_summary: "s".into(),
+            park_at: None,
+            worktree_path: Some("/wt".into()),
+            created_at: at.into(),
+        };
+        OrderRepo::dispatch(&db, &order).unwrap();
+        let ship = Ship {
+            id: ShipId(0),
+            ticket: Some(key.clone()),
+            iid: 7,
+            url: "u".into(),
+            target: "master".into(),
+            source: String::new(),
+            pilot: "me".into(),
+            created_at: at.into(),
+            ended_at: None,
+            swept: None,
+            reviewed: None,
+        };
+        ShipRepo::upsert(&db, &ship).unwrap();
+        let sailor = Session {
+            id: SessionId(0),
+            kind: CrewKind::Sailor,
+            ticket: Some(key.clone()),
+            convoy: None,
+            worktree_path: "/wt".into(),
+            tmux_session: "sailor-PROJ-1".into(),
+            harness_session_id: None,
+            created_at: at.into(),
+            ended_at: None,
+            anchored_at: None,
+        };
+        SessionRepo::start(&db, &sailor).unwrap().expect("session start");
+
+        rework(&db, &tracker, &forge, &host, &key, false).unwrap();
+        assert_eq!(TicketRepo::get(&db, &key).unwrap().unwrap().status, Some(TicketStatus::Todo), "back in the line");
+        assert!(live_cogs_on(&db, &key).unwrap().is_empty(), "its sailor is sunk");
+        assert_eq!(*host.killed.borrow(), vec!["sailor-PROJ-1".to_string()]);
+        assert_eq!((forge.disarmed.borrow().clone(), forge.drafted.borrow().clone()), (vec![7], vec![(7, true)]));
+        assert!(OrderRepo::get(&db, &key).unwrap().unwrap().created_at.as_str() > at, "the order is re-dated");
+        // The worker waits for its blocker, and no sailor launches on a ticket back in To Do.
+        assert!(reconcile::plan(&db, &[], true).unwrap().is_empty());
+        tracker.transition(&TicketKey("PROJ-2".into()), TicketStatus::Done).unwrap();
+        sync::sync_board(&db, &tracker, "now").unwrap();
+        assert_eq!(
+            reconcile::plan(&db, &[], true).unwrap(),
+            vec![reconcile::Action::Spawn { ticket: "PROJ-1".into(), kind: "worker".into() }]
+        );
+
+        // --hand: no move, a manual order, a hand at once — blockers or not.
+        tracker.transition(&key, TicketStatus::InQa).unwrap();
+        tracker.transition(&TicketKey("PROJ-2".into()), TicketStatus::InProgress).unwrap();
+        sync::sync_board(&db, &tracker, "now").unwrap();
+        rework(&db, &tracker, &forge, &host, &key, true).unwrap();
+        assert_eq!(TicketRepo::get(&db, &key).unwrap().unwrap().status, Some(TicketStatus::InQa));
+        assert!(!OrderRepo::get(&db, &key).unwrap().unwrap().auto_impl);
+        assert_eq!(
+            reconcile::plan(&db, &[], true).unwrap(),
+            vec![reconcile::Action::Spawn { ticket: "PROJ-1".into(), kind: "hand".into() }]
+        );
+    }
+
+    #[test]
     fn anchoring_a_ticket_holds_it_stops_its_cog_and_drafts_its_mr_and_weigh_releases_all() {
         // An armed MR merges on the forge's own say — so anchoring the ticket disarms it, clears
         // `swept` so the first pass after weigh re-sweeps (a fresh sailor re-arms), and drafts it;
@@ -1231,7 +1354,7 @@ mod tests {
         // A forge without drafts: the hold + disarm stand, and the caller hears what failed.
         let no_drafts = FakeForge { no_drafts: true, ..Default::default() };
         let e = format!("{:#}", anchor_ticket(&db, &no_drafts, &host, &key, true, None).unwrap_err());
-        assert!(e.contains("anchored + disarmed, but couldn't mark !7 draft"), "{e}");
+        assert!(e.contains("anchored: disarmed, but couldn't mark !7 draft"), "{e}");
         assert!(TicketRepo::get(&db, &key).unwrap().unwrap().held, "the hold still stands");
         assert_eq!(*no_drafts.disarmed.borrow(), vec![7]);
     }

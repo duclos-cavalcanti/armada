@@ -77,6 +77,15 @@ pub struct TicketAnchor {
     pub reason: Option<String>,
 }
 
+/// Rework a ticket (`POST /rework`, `fleetc rework <KEY>`): send it back down the line against its
+/// changed ACs — a worker, or a `hand`, picks it up again in its worktree, on its branch and MR.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TicketRework {
+    pub ticket: String,
+    #[serde(default)]
+    pub hand: bool,
+}
+
 /// Launch a ship — open the MR for the branch checked out in `worktree` (`POST /launch`). The
 /// target is `target`, else the ticket's order fork base, else origin's default branch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

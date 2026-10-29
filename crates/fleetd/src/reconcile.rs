@@ -71,14 +71,13 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
             Some(t) => t,
             None => continue,
         };
-        let has_session = !SessionRepo::for_ticket(ledger, &order.ticket)?.is_empty();
         // A worker is frontier work — spawn only on a READY (To Do, blockers terminal) or STACKED
         // ticket. A hand is operator intent — spawn it wherever the operator dispatched it, whatever
         // the ticket's status (it's not frontier work; the operator drives it by hand).
         let spawnable = !order.auto_impl
             || is_ready(ledger, &ticket)?
             || matches!(classify(ledger, &ticket, &armada, stacks)?, Some(Classification::Stacked));
-        if !has_session && spawnable {
+        if builder_due(ledger, &order)? && spawnable {
             let kind = if order.auto_impl { CrewKind::Worker } else { CrewKind::Hand };
             actions.push(Action::Spawn { ticket: order.ticket.0.clone(), kind: kind.as_str().into() });
         }
@@ -119,13 +118,18 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool) -> Result<Vec<Action>> 
             // ticket is blocked (the forge-neutral merge order, for forges without MR dependencies).
             // The blocked bit rides the fingerprint, so the blocker landing is itself a change: it
             // launches the sweep that arms.
+            // Gated too: a ticket back in To Do (a rework) or with a builder at work is the builder's
+            // — one cog in a worktree at a time; the handoff brings the sailor back.
             let auto = OrderRepo::get(ledger, tkey)?.is_some_and(|o| o.auto_impl && o.worktree_path.is_some());
-            let held = TicketRepo::get(ledger, tkey)?.is_some_and(|t| t.held);
-            let live_sailor = SessionRepo::for_ticket(ledger, tkey)?
-                .iter()
-                .any(|s| s.kind == CrewKind::Sailor && s.ended_at.is_none());
+            let ticket = TicketRepo::get(ledger, tkey)?;
+            let held = ticket.as_ref().is_some_and(|t| t.held);
+            let todo = ticket.as_ref().is_some_and(|t| t.status == Some(TicketStatus::Todo));
+            let live: Vec<CrewKind> =
+                SessionRepo::for_ticket(ledger, tkey)?.into_iter().filter(|s| s.ended_at.is_none()).map(|s| s.kind).collect();
+            let live_sailor = live.contains(&CrewKind::Sailor);
+            let live_builder = live.iter().any(|k| matches!(k, CrewKind::Worker | CrewKind::Hand));
             let changed = Some(ship_fingerprint(&snap, has_open_blocker(ledger, tkey)?)) != ship.swept;
-            if auto && !held && !live_sailor && (needs_work(&snap) || changed) {
+            if auto && !held && !todo && !live_sailor && !live_builder && (needs_work(&snap) || changed) {
                 actions.push(Action::LaunchSailor { ticket: tkey.0.clone() });
             }
         }
@@ -353,6 +357,20 @@ pub(crate) fn is_ready(ledger: &Ledger, ticket: &Ticket) -> Result<bool> {
         return Ok(false);
     }
     blockers_terminal(ledger, &ticket.blocked_by)
+}
+
+/// A builder is due on `order`: no cog has started on its ticket since it was dispatched (or
+/// re-dispatched by `fleetc rework`).
+fn builder_due(ledger: &Ledger, order: &Order) -> Result<bool> {
+    let ordered = parse_time(&order.created_at);
+    Ok(SessionRepo::for_ticket(ledger, &order.ticket)?.iter().all(|s| match (parse_time(&s.created_at), ordered) {
+        (Some(started), Some(ordered)) => started < ordered,
+        _ => s.created_at < order.created_at, // unparseable (test fixtures): compare as text
+    }))
+}
+
+fn parse_time(at: &str) -> Option<time::OffsetDateTime> {
+    time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).ok()
 }
 
 /// Every blocker in `blockers` is terminal (Done/Cancelled) — the DAG-ready predicate shared by

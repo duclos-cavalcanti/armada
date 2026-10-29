@@ -66,6 +66,9 @@ pub trait ShipRepo {
 pub trait OrderRepo {
     /// Submit an order to the dispatch queue (upsert; one active order per ticket).
     fn dispatch(&self, o: &Order) -> Result<()>;
+    /// Re-issue a ticket's order for a rework — a worker (`auto_impl`) or a hand — re-dated `at`,
+    /// so a builder is due again in its worktree. Errors when the ticket has no order.
+    fn rework(&self, key: &TicketKey, auto_impl: bool, at: &str) -> Result<()>;
     fn get(&self, key: &TicketKey) -> Result<Option<Order>>;
     fn queue(&self) -> Result<Vec<Order>>;
     fn cancel(&self, key: &TicketKey) -> Result<()>;

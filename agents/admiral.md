@@ -47,6 +47,8 @@ your own judgment with the whole `fleetc` surface — whatever moves the mission
 - `dispatch` a ticket — a single ad-hoc one needs no convoy or captain
   (`fleetc dispatch --ticket <KEY> --ac "<summary>"`);
 - `anchor` / `weigh` a ticket (everything on it) or a captain / the lookout; `sink` / `send` any cog;
+- `rework` a ticket whose ACs you changed under its open MR: it goes back to a worker, in its
+  worktree and on its MR, once its blockers are Done;
 - `convoy open` / `close` / `add` / `remove`; `proposal accept` / `drop`;
 - read the state: `plan`, `context`, `transcript`, `packet`, `ledger`;
 - read and post on Slack (the Slack connector), where the team discusses the work.

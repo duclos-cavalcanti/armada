@@ -38,6 +38,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc weigh    <KEY-N> | --cog <captain|lookout> [--convoy <KEY>]   (release what anchor held)\n  \
      fleetc sink     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (scuttle — hard teardown)\n  \
      fleetc send     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] <message>   (message into the cog's pane)\n  \
+     fleetc rework   <KEY-N> [--hand]   (its ACs changed: back to a worker — or a hand — in its worktree, on its MR)\n  \
      fleetc decommission <KEY-N> --reason <why> [--yes]   (withdraw it for good: close its MR, cancel it with the reason, reap its cogs + worktree)\n  \
      fleetc packet   [<KEY-N>]        (the cog's work-packet: order + ship + ticket)\n  \
      fleetc context  [--convoy <KEY>] [--format table]   (a captain's convoy slice)\n  \
@@ -97,6 +98,7 @@ fn run() -> Result<()> {
         Some("sink") => sink(&args[1..]),
         Some("send") => send(&args[1..]),
         Some("decommission") => decommission(&args[1..]),
+        Some("rework") => rework(&args[1..]),
         Some("packet") => packet(&args[1..]),
         Some("context") => context(&args[1..]),
         Some("plan") => plan(&args[1..]),
@@ -293,6 +295,21 @@ fn ticketless_target(args: &[String], verb: &str) -> Result<wire::CogTarget> {
 /// teardown (end the session + kill the tmux). Its own verb — sinking a ship is not casual.
 fn sink(args: &[String]) -> Result<()> {
     submit("/sink", &require_cog_target(args, "sink")?)
+}
+
+/// `fleetc rework <KEY-N> [--hand]` — send a ticket whose ACs changed back down the line: fleetd
+/// sinks its cogs, drafts its MR, and launches a worker in its worktree once its blockers are Done
+/// (moving it back to To Do), or a hand at once. The operator's call — a cog can't.
+fn rework(args: &[String]) -> Result<()> {
+    if own("FLEET_TICKET").is_some() {
+        bail!("a cog doesn't rework tickets — escalate, and the operator decides");
+    }
+    let (key, hand) = match args {
+        [key] => (key, false),
+        [key, flag] if flag == "--hand" => (key, true),
+        _ => bail!("usage: fleetc rework <KEY-N> [--hand]"),
+    };
+    submit("/rework", &wire::TicketRework { ticket: ticket_key(key, "rework")?, hand })
 }
 
 /// `fleetc decommission <KEY-N> --reason <why> [--yes]` — withdraw a ticket from the fleet for good:

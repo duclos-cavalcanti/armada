@@ -1034,6 +1034,28 @@ impl OrderRepo for Ledger {
         Ok(())
     }
 
+    fn rework(&self, key: &TicketKey, auto_impl: bool, at: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let n = tx.execute(
+            "UPDATE orders SET auto_impl = ?2, created_at = ?3 WHERE ticket = ?1",
+            params![key.0, auto_impl as i64, at],
+        )?;
+        anyhow::ensure!(n == 1, "{} has no order to rework (dispatch it)", key.0);
+        tx.execute(
+            "INSERT INTO events(created_at, kind, entity_kind, entity_ref, payload_json)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                at,
+                EventKind::Dispatched.as_str(),
+                EntityKind::Ticket.as_str(),
+                key.0,
+                serde_json::json!({ "auto_impl": auto_impl, "rework": true }).to_string(),
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     fn get(&self, key: &TicketKey) -> Result<Option<Order>> {
         Ok(self
             .conn
