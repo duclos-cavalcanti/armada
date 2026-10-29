@@ -312,6 +312,9 @@ pub struct ConvoyTicketView {
     pub waiting_on: Vec<TicketKey>,
     /// Why it's held, when it is (the hold's reason; `""` when none was given).
     pub held: Option<String>,
+    /// The operator works it by hand (`convoy add --hand`): dispatch it to a hand, not a worker.
+    #[serde(default)]
+    pub hand: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -275,11 +275,11 @@ fn handle_convoy(request: &str, cmds: &Sender<Command>, open: bool) -> String {
 fn handle_convoy_member(request: &str, cmds: &Sender<Command>, add: bool) -> String {
     let parsed = parse_body::<wire::ConvoyMemberCmd>(request).and_then(|dto| {
         let convoy = ConvoyKey::parse(&dto.convoy).map_err(|e| http_response("400 Bad Request", "text/plain", &e.to_string()))?;
-        Ok((convoy, parse_ticket(&dto.ticket)?))
+        Ok((convoy, parse_ticket(&dto.ticket)?, dto.hand))
     });
     match parsed {
-        Ok((convoy, ticket)) if add => relay(cmds, |reply| Command::AddToConvoy { convoy, ticket, reply }),
-        Ok((convoy, ticket)) => relay(cmds, |reply| Command::RemoveFromConvoy { convoy, ticket, reply }),
+        Ok((convoy, ticket, hand)) if add => relay(cmds, |reply| Command::AddToConvoy { convoy, ticket, hand, reply }),
+        Ok((convoy, ticket, _)) => relay(cmds, |reply| Command::RemoveFromConvoy { convoy, ticket, reply }),
         Err(r) => r,
     }
 }

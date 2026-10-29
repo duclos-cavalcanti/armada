@@ -82,6 +82,13 @@ CREATE TABLE IF NOT EXISTS convoy_members (
     added_at TEXT NOT NULL
 );
 
+-- Tickets the operator works by hand (`convoy add --hand`): the captain dispatches them to a hand,
+-- not a worker.
+CREATE TABLE IF NOT EXISTS hand_tickets (
+    ticket    TEXT PRIMARY KEY REFERENCES tickets(key),
+    marked_at TEXT NOT NULL
+);
+
 -- The singleton lookout's own control row. The allied-ship review cog is ticketless + convoyless, so
 -- it has no existing row to hang a hold on — this one-row table IS its home. `anchored_at` =
 -- operator anchor on the review loop (NULL = under way), which reconcile's lookout launch gate

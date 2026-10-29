@@ -32,7 +32,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
      fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
      fleetc convoy   open <KEY> [--title <text>] [--plan <file|->] | close [<KEY>]   (the plan ties its tickets together; omitted: none)\n  \
-     fleetc convoy   <add|remove> <KEY> <KEY-N>   (a ticket joins the convoy — its only one — or an added one leaves)\n  \
+     fleetc convoy   add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N>   (a ticket joins the convoy — its only one, for a hand with --hand — or an added one leaves)\n  \
      fleetc anchor   <KEY-N> [--reason <why>]   (hold everything on it: off the frontier, its cogs stopped, its MR disarmed + drafted)\n  \
      fleetc anchor   --cog <captain|lookout> [--convoy <KEY>]   (stop a ticketless cog)\n  \
      fleetc weigh    <KEY-N> | --cog <captain|lookout> [--convoy <KEY>]   (release what anchor held)\n  \
@@ -224,7 +224,8 @@ fn hand(args: &[String]) -> Result<()> {
 /// `fleetc convoy open <KEY> [--title <t>]` — the operator opens a convoy (→ a captain gets
 /// staffed). `fleetc convoy close <KEY>` — the captain's "all delivered" sign-off (→ reconcile
 /// reaps the captain next tick). `fleetc convoy add|remove <KEY> <KEY-N>` — a ticket joins the
-/// convoy beyond its epic's children (one convoy per ticket), or an added one leaves.
+/// convoy beyond its epic's children (one convoy per ticket), or an added one leaves; `add --hand`
+/// marks it for a hand (without: for a worker).
 fn convoy(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("open") => {
@@ -247,12 +248,14 @@ fn convoy(args: &[String]) -> Result<()> {
             submit("/convoy-close", &wire::ConvoyCmd { key, title: None, plan: None })
         }
         Some(verb @ ("add" | "remove")) => {
-            let [convoy, ticket] = &args[1..] else { bail!("usage: fleetc convoy {verb} <KEY> <KEY-N>") };
+            let hand = verb == "add" && args.iter().any(|a| a == "--hand");
+            let rest: Vec<&String> = args[1..].iter().filter(|a| !(hand && *a == "--hand")).collect();
+            let [convoy, ticket] = rest[..] else { bail!("usage: fleetc convoy add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N>") };
             let what = format!("convoy {verb}");
-            let cmd = wire::ConvoyMemberCmd { convoy: convoy_key(convoy, &what)?, ticket: ticket_key(ticket, &what)? };
+            let cmd = wire::ConvoyMemberCmd { convoy: convoy_key(convoy, &what)?, ticket: ticket_key(ticket, &what)?, hand };
             post_and_print(&format!("/convoy-{verb}"), &cmd)
         }
-        _ => bail!("usage: fleetc convoy open <KEY> [--title <text>] [--plan <file|->] | close [<KEY>] | <add|remove> <KEY> <KEY-N>"),
+        _ => bail!("usage: fleetc convoy open <KEY> [--title <text>] [--plan <file|->] | close [<KEY>] | add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N>"),
     }
 }
 

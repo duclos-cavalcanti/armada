@@ -135,6 +135,7 @@ whole fleet builds from, and you own and adjudicate them.
    amend the plan, open it again with the full plan (`--title` too); leaving `--plan` out clears it. A convoy is its epic's tickets plus
    any you add from elsewhere (`fleetc convoy add <KEY> <KEY-N>` — a dependency in another team's
    epic that can't be re-parented; `remove` returns it). A ticket is in one convoy at a time.
+   `--hand` (on any ticket, the epic's own too) has the captain dispatch it to the operator's hand.
    True sequencing is `is blocked by` edges, so the captain's frontier reflects the order. Sign a
    delivered convoy off with `fleetc convoy close <KEY>` (or let its captain close it).
 3. **Report, cited and terse.** One recommendation per item: the issue in a sentence, the doc

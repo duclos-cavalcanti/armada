@@ -268,6 +268,22 @@ impl TicketRepo for Ledger {
         Ok(())
     }
 
+    fn set_hand(&self, key: &TicketKey, hand: bool, at: &str) -> Result<()> {
+        if hand {
+            self.conn.execute(
+                "INSERT INTO hand_tickets(ticket, marked_at) VALUES (?1, ?2) ON CONFLICT(ticket) DO NOTHING",
+                params![key.0, at],
+            )?;
+        } else {
+            self.conn.execute("DELETE FROM hand_tickets WHERE ticket = ?1", params![key.0])?;
+        }
+        Ok(())
+    }
+
+    fn is_hand(&self, key: &TicketKey) -> Result<bool> {
+        Ok(self.conn.query_row("SELECT EXISTS (SELECT 1 FROM hand_tickets WHERE ticket = ?1)", params![key.0], |r| r.get(0))?)
+    }
+
     fn set_held(&self, key: &TicketKey, held: bool, reason: Option<&str>, at: &str) -> Result<()> {
         // Flip held + log TicketHeld(reason)/TicketReleased (CDC, same txn). Only a real change
         // (held != current) touches a row; a no-op (already in that state) logs nothing.

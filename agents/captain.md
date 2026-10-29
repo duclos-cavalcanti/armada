@@ -41,8 +41,8 @@ fleetc context
 ```
 
 The slice is `{ convoy, tickets: [ { key, status, classification, dispatched,
-live_cog, ship_state, fork_from } ] }` (`fork_from` is set on a `stacked` ticket: its
-parent's branch). fleetd has already done the deterministic work — the
+live_cog, ship_state, fork_from, hand } ] }` (`fork_from` is set on a `stacked` ticket: its
+parent's branch; `hand`: the operator works it). fleetd has already done the deterministic work — the
 DAG, the blockers, the holds — and handed you a verdict per ticket:
 
 - **`classification`** — fleetd's dispatch verdict (`null` once a ticket is past the
@@ -75,7 +75,8 @@ can't — a grooming glance — then act on it:
      The child's MR targets the parent branch; fleetd declares the block, the sailor
      keeps it rebased on the parent, and it unwinds onto the default branch when the parent merges —
      all automatic.
-   - A worker is the default; your one policy call is `--hand` (operator-driven, no worker).
+   - **`hand`** → add `--hand` to the dispatch (`--ac` optional): the operator works it, not a
+     worker. Skip the grooming glance; they drive it.
 3. **Too ill-formed to build** (no clear ACs, ambiguous scope) → **anchor it**, don't
    dispatch guesswork: `fleetc anchor <TICKET> --reason "<what's missing>"`. The reason
    shows wherever the ticket does (`fleetc ticket`, `fleetc context`, the dashboard),

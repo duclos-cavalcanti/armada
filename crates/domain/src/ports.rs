@@ -26,6 +26,9 @@ pub trait TicketRepo {
     /// ticket off the dispatch frontier. Logs `TicketHeld`(with `reason`)/`TicketReleased`
     /// CDC in the same txn; a no-op change (already in that state) logs nothing.
     fn set_held(&self, key: &TicketKey, held: bool, reason: Option<&str>, at: &str) -> Result<()>;
+    /// Mark the ticket for a hand (`true`: the captain dispatches it to one) or for a worker.
+    fn set_hand(&self, key: &TicketKey, hand: bool, at: &str) -> Result<()>;
+    fn is_hand(&self, key: &TicketKey) -> Result<bool>;
     /// Upsert the tracker-sourced fields (title/assignee/status/convoy + synced_at),
     /// PRESERVING our own `held` + `created_at`. Inserts with defaults if new.
     fn sync(&self, t: &TrackerTicket, now: &str) -> Result<()>;

@@ -90,7 +90,7 @@ pub enum Command {
     Propose { from: Option<TicketKey>, proposed: Proposed, reply: UrlReply }, // hold a cog's proposal → its id
     AcceptProposal { id: ProposalId, convoy: Option<ConvoyKey>, reply: UrlReply }, // an action: accept it → its key (a new one is filed)
     DropProposal { id: ProposalId, reply: UrlReply },
-    AddToConvoy { convoy: ConvoyKey, ticket: TicketKey, reply: UrlReply }, // → what it says (and what it left)
+    AddToConvoy { convoy: ConvoyKey, ticket: TicketKey, hand: bool, reply: UrlReply }, // → what it says (and what it left)
     RemoveFromConvoy { convoy: ConvoyKey, ticket: TicketKey, reply: UrlReply },
     Decommission { ticket: TicketKey, reason: String, reply: UrlReply }, // an action: close MR, cancel, reap → what it did
     SetSetting { key: String, value: String, reply: Reply }, // live-config overwrite (validated here)
@@ -291,8 +291,12 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         Command::AcceptProposal { id, convoy, reply } => {
             let _ = reply.send(accept_proposal(ledger, tracker, &id, convoy).map(|k| k.0).map_err(|e| format!("{e:#}")));
         }
-        Command::AddToConvoy { convoy, ticket, reply } => {
-            let _ = reply.send(add_to_convoy(ledger, tracker, &convoy, &ticket).map_err(|e| format!("{e:#}")));
+        Command::AddToConvoy { convoy, ticket, hand, reply } => {
+            let res = add_to_convoy(ledger, tracker, &convoy, &ticket).and_then(|said| {
+                TicketRepo::set_hand(ledger, &ticket, hand, &now_rfc3339())?;
+                Ok(if hand { format!("{said}, for a hand") } else { said })
+            });
+            let _ = reply.send(res.map_err(|e| format!("{e:#}")));
         }
         Command::RemoveFromConvoy { convoy, ticket, reply } => {
             let res = ConvoyRepo::remove_member(ledger, &convoy, &ticket);
@@ -643,6 +647,7 @@ fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Resul
         let fork_from = crate::reconcile::stack_base(ledger, &t, &armada, stacks)?;
         let waiting_on = waiting_on(ledger, &t.blocked_by)?;
         let held = if t.held { Some(ledger.held_reason(&t.key)?.unwrap_or_default()) } else { None };
+        let hand = TicketRepo::is_hand(ledger, &t.key)?;
         tickets.push(ConvoyTicketView {
             key: t.key,
             status: t.status,
@@ -653,6 +658,7 @@ fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Resul
             fork_from,
             waiting_on,
             held,
+            hand,
         });
     }
     Ok(ConvoyView { convoy: convoy.clone(), plan: ConvoyRepo::plan(ledger, convoy)?, tickets })
@@ -1928,6 +1934,19 @@ mod tests {
         let b = view.tickets.iter().find(|x| x.key == TicketKey("PROJ-2".into())).unwrap();
         assert_eq!(b.classification, None, "Done is past the frontier");
         assert_eq!(b.status, Some(TicketStatus::Done));
+    }
+
+    #[test]
+    fn a_ticket_added_for_a_hand_shows_so_in_its_convoy_view() {
+        let db = Ledger::in_memory().unwrap();
+        let tracker = FakeTracker::new(vec![tt("PROJ-1", TicketStatus::Todo)]);
+        let (convoy, key) = (ConvoyKey("PROJ-100".into()), TicketKey("PROJ-1".into()));
+        let hand = |db: &Ledger| build_convoy_view(db, &convoy, true).unwrap().tickets.iter().find(|t| t.key == key).map(|t| t.hand);
+        add_to_convoy(&db, &tracker, &convoy, &key).unwrap();
+        TicketRepo::set_hand(&db, &key, true, "now").unwrap();
+        assert_eq!(hand(&db), Some(true), "for a hand");
+        TicketRepo::set_hand(&db, &key, false, "now").unwrap();
+        assert_eq!(hand(&db), Some(false), "added again without --hand: for a worker");
     }
 
     #[test]
