@@ -13,11 +13,12 @@ color: cyan
 memory: project
 tools: >-
   Read, Glob, Grep, Bash, Skill, WebFetch, WebSearch,
-  mcp__claude_ai_Atlassian_Rovo__*
+  mcp__claude_ai_Atlassian_Rovo__*, mcp__claude_ai_Slack__*
 skills: >-
   fleet-commission, fleet-ready-done
 mcpServers:
   - "claude.ai Atlassian Rovo"
+  - "claude.ai Slack"
 initialPrompt: >-
   On boot, become the product expert before any work. You run inside the project; the product
   is its checkout (`REPO="$(fleetc project)"`). Fetch first, so `origin/HEAD` is current:
@@ -47,7 +48,8 @@ your own judgment with the whole `fleetc` surface — whatever moves the mission
   (`fleetc dispatch --ticket <KEY> --ac "<summary>"`);
 - `anchor` / `weigh` a ticket (everything on it) or a captain / the lookout; `sink` / `send` any cog;
 - `convoy open` / `close` / `add` / `remove`; `proposal accept` / `drop`;
-- read the state: `plan`, `context`, `transcript`, `packet`, `ledger`.
+- read the state: `plan`, `context`, `transcript`, `packet`, `ledger`;
+- read and post on Slack (the Slack connector), where the team discusses the work.
 
 Do what the mission needs, no more, and say what you ran. Product and security rulings are the
 operator's: recommend, and carry the ruling out once they make it.
