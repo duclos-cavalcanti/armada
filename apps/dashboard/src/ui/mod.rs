@@ -118,7 +118,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 f.proposals.len(),
                 f.held.len()
             ),
-            Some(header(&[("What", 9), ("Id", 5), ("Ticket", 12), ("From", 12), ("Convoy", 12), ("Age", 6), ("Detail", 0)])),
+            Some(header(&[("Id", 5), ("Ticket", 12), ("From", 12), ("Convoy", 12), ("Age", 6), ("Detail", 0)])),
             f.proposals.iter().map(proposal_row).chain(f.held.iter().map(|t| held_row(t, &f.held_reasons))).collect(),
         ),
         Pane::Log => (
@@ -339,16 +339,15 @@ fn convoy_row(c: &Convoy, f: &crate::source::Fleet) -> Line<'static> {
     ])
 }
 
-/// Proposals · a proposal: accept or drop it. An existing ticket shows its key (a new one has
-/// none until it's filed).
+/// Proposals · a proposal: accept or drop it. A draft held before proposals were filed on propose
+/// has no ticket yet.
 fn proposal_row(p: &Proposal) -> Line<'static> {
     let key = |k: Option<&String>| k.cloned().unwrap_or_else(|| "—".into());
-    let (what, ticket, detail) = match &p.proposed {
-        Proposed::New(d) => ("new", "—".to_string(), format!("{}: {}", d.kind, d.title)),
-        Proposed::Existing { ticket, why, .. } => ("existing", ticket.0.clone(), why.clone()),
+    let (ticket, detail) = match &p.proposed {
+        Proposed::New(d) => ("—".to_string(), format!("{}: {}", d.kind, d.title)),
+        Proposed::Existing { ticket, why, .. } => (ticket.0.clone(), why.clone()),
     };
     cells(vec![
-        (what.into(), 9, Style::default().fg(Color::Cyan)),
         (format!("#{}", p.id.0), 5, Style::default()),
         (ticket, 12, Style::default()),
         (key(p.from_ticket.as_ref().map(|k| &k.0)), 12, Style::default()),
@@ -362,7 +361,6 @@ fn proposal_row(p: &Proposal) -> Line<'static> {
 fn held_row(t: &Ticket, reasons: &HashMap<String, String>) -> Line<'static> {
     let reason = reasons.get(&t.key.0).map(String::as_str).filter(|r| !r.is_empty()).unwrap_or("(no reason given)");
     cells(vec![
-        ("anchored".into(), 9, Style::default().fg(Color::Magenta)),
         ("—".into(), 5, dim()),
         (t.key.0.clone(), 12, Style::default()),
         ("—".into(), 12, dim()),
