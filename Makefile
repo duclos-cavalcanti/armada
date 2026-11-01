@@ -3,14 +3,14 @@
 # The kit is the fleet: one self-ticking daemon (fleetd) + its client (fleetc).
 # `install.sh` gates the Brewfile, stows agents/skills (+ the .claude config) and installs fleetc;
 # `fleet.sh` builds + runs a project's fleet. A project is a folder, projects/<name>/ (its
-# fleet.toml + .fleet/ state + checkout): every fleet target takes FLEET_PROJECT=<name> (only help / install / uninstall / notes / serve don't). Run from
+# fleet.toml + .fleet/ state + checkout): every fleet target takes FLEET_PROJECT=<name> (only help / install / uninstall / notes / serve-* don't). Run from
 # the repo: `make <target> FLEET_PROJECT=<name>` — or `export FLEET_PROJECT=<name>` once per shell.
 #
 # `make` with no target prints the help summary.
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install uninstall notes serve preflight run restart stop dashboard snapshot import
+.PHONY: help install uninstall notes serve-fleet serve-slides preflight run restart stop dashboard snapshot import
 
 help:                            ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / { printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -27,11 +27,11 @@ notes:                           ## Fetch the Obsidian vault's Excalidraw plugin
 demos/node_modules demos/fleet/node_modules:
 	npm ci --prefix $(@D)
 
-serve: demos/node_modules demos/fleet/node_modules  ## Serve the fleet viewer (:5173) + the slides (:5174), until Ctrl-C
-	@trap 'kill 0' INT TERM; \
-	npm --prefix demos/fleet run dev -- --port 5173 & \
-	npm --prefix demos run dev -- --port 5174 --no-skills-check & \
-	wait
+serve-fleet: demos/fleet/node_modules  ## Serve the fleet viewer on :5173, until Ctrl-C
+	npm --prefix demos/fleet run dev -- --port 5173
+
+serve-slides: demos/node_modules       ## Serve the slides on :5174, until Ctrl-C
+	npm --prefix demos run dev -- --port 5174 --no-skills-check
 
 preflight:                       ## Check the project's setup: runtime state, checkout, forge + tracker CLIs, tmux + claude
 	@./fleet.sh preflight

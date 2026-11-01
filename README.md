@@ -81,7 +81,8 @@ make stop FLEET_PROJECT=<name>        # stop that project's fleet daemon
 make dashboard FLEET_PROJECT=<name>   # build + run the TUI dashboard
 make snapshot FLEET_PROJECT=<name>    # snapshot the project's ledger → projects/<name>/exports/<name>-<UTC stamp>.db
 make import FILE=<snapshot> FLEET_PROJECT=<name>   # restore a ledger snapshot (the fleet must be stopped)
-make serve                            # serve the fleet viewer (:5173) + the slides (:5174), until Ctrl-C
+make serve-fleet                      # serve the fleet viewer on :5173, until Ctrl-C
+make serve-slides                     # serve the slides on :5174, until Ctrl-C
 ```
 
 `export FLEET_PROJECT=<name>` once per shell and the `FLEET_PROJECT=` on each target can go.
