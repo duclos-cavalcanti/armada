@@ -836,7 +836,8 @@ fn export(args: &[String]) -> Result<()> {
 }
 
 /// `fleetc import <file>` — restore a ledger snapshot into the project's `.fleet/`. Refused while
-/// fleetd is running for this project, or when the file's schema version isn't this build's.
+/// fleetd is running for this project, or when the file's schema is newer than this build's (an
+/// older one is fine: fleetd migrates it on open).
 fn import(args: &[String]) -> Result<()> {
     let [file] = args else { bail!("usage: fleetc import <file>") };
     import_into(project_dir(), std::path::Path::new(file))
@@ -856,8 +857,8 @@ fn import_into(project: &wire::Project, file: &std::path::Path) -> Result<()> {
     let found = ledger::schema_version(&file.to_string_lossy())
         .map_err(|e| anyhow!("{}: not a ledger snapshot ({e})", file.display()))?;
     anyhow::ensure!(
-        found == ledger::SCHEMA_VERSION,
-        "{} is ledger schema v{found}, this build reads v{} — use a matching build",
+        (1..=ledger::SCHEMA_VERSION).contains(&found),
+        "{} is ledger schema v{found}, this build reads up to v{} — use a matching build",
         file.display(),
         ledger::SCHEMA_VERSION
     );
@@ -1439,6 +1440,21 @@ mod tests {
         let other = rusqlite_version(&export, ledger::SCHEMA_VERSION + 1);
         let e = import_into(&p, &export).unwrap_err().to_string();
         assert!(e.contains(&format!("schema v{other}")), "{e}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn import_takes_an_older_snapshot_and_opening_it_migrates() {
+        let (p, root) = project("older");
+        let export = root.join("snapshot.db");
+        ledger::snapshot(&p.ledger(), &export.to_string_lossy()).unwrap();
+        let v1 = "ALTER TABLE ship_snapshots DROP COLUMN total_threads; PRAGMA user_version = 1;";
+        assert!(std::process::Command::new("sqlite3").arg(&export).arg(v1).status().unwrap().success());
+
+        import_into(&p, &export).unwrap();
+        assert_eq!(ledger::schema_version(&p.ledger()).unwrap(), 1);
+        drop(ledger::Ledger::open(&p.ledger()).unwrap());
+        assert_eq!(ledger::schema_version(&p.ledger()).unwrap(), ledger::SCHEMA_VERSION);
         let _ = std::fs::remove_dir_all(root);
     }
 
