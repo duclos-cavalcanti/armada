@@ -1,26 +1,24 @@
 # Armada — operator entry points.
 #
 # The kit is the fleet: one self-ticking daemon (fleetd) + its client (fleetc).
-# `install.sh` gates the Brewfile and stows agents/skills (+ the .claude config); `cargo` builds
-# the binaries. A project is a folder, projects/<name>/ (its fleet.toml + .fleet/ state + checkout):
-# every fleet target takes FLEET_PROJECT=<name> (only help / install / uninstall / notes / serve don't). Run from
+# `install.sh` gates the Brewfile, stows agents/skills (+ the .claude config) and installs fleetc;
+# `fleet.sh` builds + runs a project's fleet. A project is a folder, projects/<name>/ (its
+# fleet.toml + .fleet/ state + checkout): every fleet target takes FLEET_PROJECT=<name> (only help / install / uninstall / notes / serve don't). Run from
 # the repo: `make <target> FLEET_PROJECT=<name>` — or `export FLEET_PROJECT=<name>` once per shell.
 #
 # `make` with no target prints the help summary.
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install uninstall notes serve .project preflight run restart stop dashboard export
+.PHONY: help install uninstall notes serve preflight run restart stop dashboard snapshot import
 
 help:                            ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / { printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 install:                         ## Install the kit (Brewfile + stow) and fleetc onto PATH
 	./install.sh
-	cargo install -q --path crates/fleetc --force --target-dir target
 
 uninstall:                       ## Uninstall the kit and remove fleetc
-	-cargo uninstall fleetc
 	./install.sh --uninstall
 
 notes:                           ## Fetch the Obsidian vault's Excalidraw plugin, at the version its manifest pins
@@ -35,29 +33,23 @@ serve: demos/node_modules demos/fleet/node_modules  ## Serve the fleet viewer (:
 	npm --prefix demos run dev -- --port 5174 --no-skills-check & \
 	wait
 
-.project:
-	@if [ -z "$(FLEET_PROJECT)" ]; then echo "FLEET_PROJECT=<name> required (or export it) — one of: $$(command ls projects | tr '\n' ' ')"; exit 1; fi
+preflight:                       ## Check the project's setup: runtime state, checkout, forge + tracker CLIs, tmux + claude
+	@./fleet.sh preflight
 
-preflight: .project              ## Check the project's setup: runtime state, checkout, forge + tracker CLIs, tmux + claude
-	cargo run -q -p fleetd -- -C projects/$(FLEET_PROJECT) preflight
+run:                             ## Restart fleetd (see restart), then open its dashboard
+	@./fleet.sh run
 
-run: restart                     ## Restart fleetd (see restart), then open its dashboard
-	@$(MAKE) --no-print-directory dashboard
+restart:                         ## Build fleetd + reinstall fleetc, (re)start fleetd in the background
+	@./fleet.sh restart
 
-restart: .project                ## Build fleetd + reinstall fleetc, (re)start fleetd in the background
-	@pids=$$(pgrep -x fleetd | paste -sd, -); if [ -n "$$pids" ] && ps -o args= -p "$$pids" | grep -v '/fleetd -C projects/$(FLEET_PROJECT)$$'; then echo "↑ another project's fleetd is up — make stop FLEET_PROJECT=<it> first"; exit 1; fi
-	@cargo build -q -p fleetd
-	@cargo install -q --path crates/fleetc --force --target-dir target
-	@$(MAKE) --no-print-directory stop
-	@nohup target/debug/fleetd -C projects/$(FLEET_PROJECT) </dev/null >/dev/null 2>&1 &
+stop:                            ## Stop the project's fleet daemon (waits up to 5s for it to exit)
+	@./fleet.sh stop
 
-export: .project                 ## Snapshot the project's ledger to projects/<name>/exports/<name>-<UTC stamp>.db (safe while running)
-	cargo run -q -p fleetc -- -C projects/$(FLEET_PROJECT) export "projects/$(FLEET_PROJECT)/exports/$(FLEET_PROJECT)-$$(date -u +%Y%m%dT%H%M%SZ).db"
+dashboard:                       ## Build + run the TUI dashboard over the project (cargo run --release)
+	@./fleet.sh dashboard
 
-stop: .project                   ## Stop the project's fleet daemon (waits up to 5s for it to exit)
-	@pkill -f '/fleetd -C projects/$(FLEET_PROJECT)$$' || { echo "fleetd not running ($(FLEET_PROJECT))"; exit 0; }; \
-	for _ in $$(seq 25); do pgrep -f '/fleetd -C projects/$(FLEET_PROJECT)$$' >/dev/null || { echo "fleetd stopped ($(FLEET_PROJECT))"; exit 0; }; sleep 0.2; done; \
-	echo "fleetd ($(FLEET_PROJECT)) still running after 5s"; exit 1
+snapshot:                        ## Snapshot the project's ledger to projects/<name>/exports/<name>-<UTC stamp>.db (safe while running)
+	@./fleet.sh snapshot
 
-dashboard: .project              ## Build + run the TUI dashboard over the project (cargo run --release)
-	cargo run --release -p dashboard -- -C projects/$(FLEET_PROJECT)
+import:                          ## Restore a ledger snapshot: FILE=<snapshot> (the fleet must be stopped)
+	@./fleet.sh import "$(FILE)"

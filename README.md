@@ -79,7 +79,8 @@ make run FLEET_PROJECT=<name>         # restart project <name>'s fleetd, then op
 make restart FLEET_PROJECT=<name>     # rebuild fleetd + reinstall fleetc, (re)start fleetd in the background
 make stop FLEET_PROJECT=<name>        # stop that project's fleet daemon
 make dashboard FLEET_PROJECT=<name>   # build + run the TUI dashboard
-make export FLEET_PROJECT=<name>      # snapshot the project's ledger → projects/<name>/exports/<name>-<UTC stamp>.db
+make snapshot FLEET_PROJECT=<name>    # snapshot the project's ledger → projects/<name>/exports/<name>-<UTC stamp>.db
+make import FILE=<snapshot> FLEET_PROJECT=<name>   # restore a ledger snapshot (the fleet must be stopped)
 make serve                            # serve the fleet viewer (:5173) + the slides (:5174), until Ctrl-C
 ```
 
@@ -97,8 +98,8 @@ project they refuse to run. One fleet runs at a time. To switch, let the cogs fi
 folder, so you come back to it exactly as you left it.
 
 `.fleet/` is live SQLite; to keep or move a project's state, snapshot its ledger with
-`fleetc export <file>` (a consistent copy, safe beside a running fleet) and restore it with
-`fleetc import <file>` (with the fleet stopped).
+`make snapshot` (a consistent copy, safe beside a running fleet) and restore it with
+`make import` (with the fleet stopped).
 
 ### 4. Notes (optional)
 
@@ -127,7 +128,8 @@ armada/
 ├── harness/     apply.sh + gitignored per-deployment settings profiles
 ├── demos/       architecture decks (open-slide)
 ├── Brewfile     dependency manifest
-├── install.sh   install / --uninstall (gates on Brewfile + stows)
+├── install.sh   install / --uninstall (gates on Brewfile + stows + installs fleetc)
+├── fleet.sh     start, stop and watch a project's fleet (`make` wraps it)
 ├── Makefile     one-word wrappers (run `make` for the cheat sheet)
 ├── TODO.md      the forward backlog
 ├── KNOWN_ISSUES.md  accepted edge cases + workarounds

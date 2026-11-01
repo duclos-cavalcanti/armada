@@ -13,6 +13,7 @@
 #   ./install.sh -H|--harness pi     install agents/ + skills/ for a named harness
 #   ./install.sh --home <dir>        override the harness home dir
 #   ./install.sh -u|--uninstall      uninstall (unstow) — the mirror of install
+#   ./install.sh --fleetc            build fleetc and put it on PATH (a claude install does this too)
 #   ./install.sh --notes             fetch the Obsidian vault's Excalidraw plugin
 #   ./install.sh -h|--help           this help
 #
@@ -127,6 +128,11 @@ unstow_claude_global() {
         .claude
 }
 
+# ---- fleetc: the fleet's client, onto PATH ----
+install_fleetc() {
+    cargo install -q --path "$REPO/crates/fleetc" --force --target-dir "$REPO/target"
+}
+
 # ---- The Obsidian vault's Excalidraw plugin ----
 # Its code isn't tracked; its manifest.json is, and pins the version.
 notes() {
@@ -148,6 +154,7 @@ install() {
     stow_skills
     if [[ "$HARNESS" == "claude" ]]; then
         stow_claude_global
+        install_fleetc
     fi
 }
 
@@ -155,13 +162,14 @@ uninstall() {
     resolve_harness
     echo "uninstalling agents/ + skills/ from $HARNESS_HOME (harness: $HARNESS)"
     if [[ "$HARNESS" == "claude" ]]; then
+        cargo uninstall fleetc || true
         unstow_claude_global
     fi
     unstow_skills
     unstow_agents
 }
 
-usage() { sed -n '11,17p' "${BASH_SOURCE[0]}" | sed 's/^#[[:space:]]*//;s/^#//'; }
+usage() { sed -n '11,18p' "${BASH_SOURCE[0]}" | sed 's/^#[[:space:]]*//;s/^#//'; }
 
 main() {
     local mode=install
@@ -169,6 +177,7 @@ main() {
         case "$1" in
             install)            mode=install ;;
             -u|--uninstall)     mode=uninstall ;;
+            --fleetc)           mode=install_fleetc ;;
             --notes)            mode=notes ;;
             -H|--harness)       HARNESS="${2:?--harness needs a value}"; shift ;;
             --home)             HOME_OVERRIDE="${2:?--home needs a value}"; shift ;;
