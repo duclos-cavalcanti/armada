@@ -6,6 +6,7 @@
     - frameworks
     - etc
 - Skip preamble and summaries, unless explicitly asked for.
+- Lead with the answer. Report verification in one line. Include a caveat only if it changes a decision.
 - When unsure, ask — don't guess.
 - **Default reply length: 2–5 sentences.** No section headers, no tables, no multi-paragraph framing unless the user asks for depth or the topic genuinely needs structure. Bullets sparingly — only when listing 3+ distinct items. Long-form is opt-in.
 - Match the user's register: if they asked a quick question, answer quick. Escalate to structure only when complexity warrants it.
