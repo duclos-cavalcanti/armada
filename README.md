@@ -127,7 +127,7 @@ armada/
 ├── .claude/     Claude config (settings, CLAUDE.md, scripts), stowed to ~/.claude/
 ├── .obsidian/   the Obsidian vault's config (notes on the repo); `make notes` fetches its plugin
 ├── harness/     apply.sh + gitignored per-deployment settings profiles
-├── demos/       architecture decks (open-slide)
+├── demos/       architecture decks (open-slide) + the fleet viewer (React Flow)
 ├── Brewfile     dependency manifest
 ├── install.sh   install / --uninstall (gates on Brewfile + stows + installs fleetc)
 ├── fleet.sh     start, stop and watch a project's fleet (`make` wraps it)
