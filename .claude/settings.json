@@ -73,6 +73,7 @@
     "lua-lsp@claude-plugins-official": true
   },
   "effortLevel": "high",
+  "outputStyle": "Concise",
   "autoUpdatesChannel": "latest",
   "tui": "fullscreen",
   "voice": {
