@@ -100,6 +100,18 @@ folder, so you come back to it exactly as you left it.
 `fleetc export <file>` (a consistent copy, safe beside a running fleet) and restore it with
 `fleetc import <file>` (with the fleet stopped).
 
+### 4. Notes (optional)
+
+The repo root is an Obsidian vault, with Excalidraw for drawings:
+
+```bash
+brew install --cask obsidian
+make notes                            # fetch the Excalidraw plugin, at the version its manifest pins
+```
+
+Then pick the repo root under **Open folder as vault**. To upgrade Excalidraw, update it in Obsidian
+and commit its `manifest.json`; every clone follows on its next `make notes`.
+
 ---
 
 ## Layout
@@ -111,6 +123,7 @@ armada/
 ├── agents/      the cogs + standing collaborators, stowed to ~/.claude/agents/
 ├── skills/      the kit's skills, stowed to ~/.claude/skills/
 ├── .claude/     Claude config (settings, CLAUDE.md, scripts), stowed to ~/.claude/
+├── .obsidian/   the Obsidian vault's config (notes on the repo); `make notes` fetches its plugin
 ├── harness/     apply.sh + gitignored per-deployment settings profiles
 ├── demos/       architecture decks (open-slide)
 ├── Brewfile     dependency manifest

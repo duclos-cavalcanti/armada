@@ -13,6 +13,7 @@
 #   ./install.sh -H|--harness pi     install agents/ + skills/ for a named harness
 #   ./install.sh --home <dir>        override the harness home dir
 #   ./install.sh -u|--uninstall      uninstall (unstow) — the mirror of install
+#   ./install.sh --notes             fetch the Obsidian vault's Excalidraw plugin
 #   ./install.sh -h|--help           this help
 #
 # LAYOUT (repo root = source of truth):
@@ -126,6 +127,18 @@ unstow_claude_global() {
         .claude
 }
 
+# ---- The Obsidian vault's Excalidraw plugin ----
+# Its code isn't tracked; its manifest.json is, and pins the version.
+notes() {
+    local dir="$REPO/.obsidian/plugins/obsidian-excalidraw-plugin" version f
+    version="$(jq -r .version "$dir/manifest.json")"
+    for f in main.js styles.css; do
+        curl -fsSL -o "$dir/$f" \
+            "https://github.com/zsviczian/obsidian-excalidraw-plugin/releases/download/$version/$f"
+    done
+    echo "excalidraw $version → $dir"
+}
+
 # ---- Direction drivers ----
 install() {
     check_prereqs
@@ -148,7 +161,7 @@ uninstall() {
     unstow_agents
 }
 
-usage() { sed -n '11,16p' "${BASH_SOURCE[0]}" | sed 's/^#[[:space:]]*//;s/^#//'; }
+usage() { sed -n '11,17p' "${BASH_SOURCE[0]}" | sed 's/^#[[:space:]]*//;s/^#//'; }
 
 main() {
     local mode=install
@@ -156,6 +169,7 @@ main() {
         case "$1" in
             install)            mode=install ;;
             -u|--uninstall)     mode=uninstall ;;
+            --notes)            mode=notes ;;
             -H|--harness)       HARNESS="${2:?--harness needs a value}"; shift ;;
             --home)             HOME_OVERRIDE="${2:?--home needs a value}"; shift ;;
             -h|--help)          usage; exit 0 ;;
@@ -167,7 +181,7 @@ main() {
     REPO="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
     REPO="$(cd "$REPO" && pwd -P)"
 
-    if [[ "$mode" == "uninstall" ]]; then uninstall; else install; fi
+    "$mode"
 }
 
 main "$@"

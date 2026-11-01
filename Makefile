@@ -3,14 +3,14 @@
 # The kit is the fleet: one self-ticking daemon (fleetd) + its client (fleetc).
 # `install.sh` gates the Brewfile and stows agents/skills (+ the .claude config); `cargo` builds
 # the binaries. A project is a folder, projects/<name>/ (its fleet.toml + .fleet/ state + checkout):
-# every fleet target takes FLEET_PROJECT=<name> (only help / install / uninstall don't). Run from
+# every fleet target takes FLEET_PROJECT=<name> (only help / install / uninstall / notes don't). Run from
 # the repo: `make <target> FLEET_PROJECT=<name>` — or `export FLEET_PROJECT=<name>` once per shell.
 #
 # `make` with no target prints the help summary.
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install uninstall .project preflight run restart stop dashboard admiral export
+.PHONY: help install uninstall notes .project preflight run restart stop dashboard admiral export
 
 help:                            ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / { printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -22,6 +22,9 @@ install:                         ## Install the kit (Brewfile + stow) and fleetc
 uninstall:                       ## Uninstall the kit and remove fleetc
 	-cargo uninstall fleetc
 	./install.sh --uninstall
+
+notes:                           ## Fetch the Obsidian vault's Excalidraw plugin, at the version its manifest pins
+	./install.sh --notes
 
 .project:
 	@if [ -z "$(FLEET_PROJECT)" ]; then echo "FLEET_PROJECT=<name> required (or export it) — one of: $$(command ls projects | tr '\n' ' ')"; exit 1; fi
