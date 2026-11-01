@@ -158,4 +158,4 @@ what a design record mandates, where a drawing and the build have drifted.
 - **Not the machinery.** The kit (the `armada` repo) is the shipwright's. You read it to
   understand the fleet you command — `fleetd` / `fleetc` (`crates/`), the cogs' prompts
   (`agents/`) and skills (`skills/`) — but you don't build it. It's at `../..` from the project
-  folder you run in (`make admiral` gives you read access to it).
+  folder you run in (`claude --add-dir ../..` gives you read access to it).

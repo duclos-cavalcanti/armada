@@ -79,8 +79,8 @@ make run FLEET_PROJECT=<name>         # restart project <name>'s fleetd, then op
 make restart FLEET_PROJECT=<name>     # rebuild fleetd + reinstall fleetc, (re)start fleetd in the background
 make stop FLEET_PROJECT=<name>        # stop that project's fleet daemon
 make dashboard FLEET_PROJECT=<name>   # build + run the TUI dashboard
-make admiral FLEET_PROJECT=<name>     # talk to the project's admiral (its product expert; reads the kit, never edits it)
 make export FLEET_PROJECT=<name>      # snapshot the project's ledger → projects/<name>/exports/<name>-<UTC stamp>.db
+make serve                            # serve the fleet viewer (:5173) + the slides (:5174), until Ctrl-C
 ```
 
 `export FLEET_PROJECT=<name>` once per shell and the `FLEET_PROJECT=` on each target can go.

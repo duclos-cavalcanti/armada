@@ -83,7 +83,7 @@ and tmux:
   `open` / `close` / `add` / `remove`, `proposal accept` / `drop`, `ticket block` / `edit` /
   `comment`, `sink` / `send` a cog.
 - **File a quick ticket** with `/fleet-commission`, Ready per `/fleet-ready-done`. One that
-  needs real product grooming goes to the admiral (`make admiral FLEET_PROJECT=<p>`).
+  needs real product grooming goes to the admiral (`cd projects/<p> && claude --agent admiral --add-dir ../..`).
 
 Each action is the operator's order, stated or plainly implied by the unblock they asked
 for. Say what you ran.

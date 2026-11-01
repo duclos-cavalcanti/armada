@@ -3,14 +3,14 @@
 # The kit is the fleet: one self-ticking daemon (fleetd) + its client (fleetc).
 # `install.sh` gates the Brewfile and stows agents/skills (+ the .claude config); `cargo` builds
 # the binaries. A project is a folder, projects/<name>/ (its fleet.toml + .fleet/ state + checkout):
-# every fleet target takes FLEET_PROJECT=<name> (only help / install / uninstall / notes don't). Run from
+# every fleet target takes FLEET_PROJECT=<name> (only help / install / uninstall / notes / serve don't). Run from
 # the repo: `make <target> FLEET_PROJECT=<name>` — or `export FLEET_PROJECT=<name>` once per shell.
 #
 # `make` with no target prints the help summary.
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install uninstall notes .project preflight run restart stop dashboard admiral export
+.PHONY: help install uninstall notes serve .project preflight run restart stop dashboard export
 
 help:                            ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / { printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -25,6 +25,15 @@ uninstall:                       ## Uninstall the kit and remove fleetc
 
 notes:                           ## Fetch the Obsidian vault's Excalidraw plugin, at the version its manifest pins
 	./install.sh --notes
+
+demos/node_modules demos/fleet/node_modules:
+	npm ci --prefix $(@D)
+
+serve: demos/node_modules demos/fleet/node_modules  ## Serve the fleet viewer (:5173) + the slides (:5174), until Ctrl-C
+	@trap 'kill 0' INT TERM; \
+	npm --prefix demos/fleet run dev -- --port 5173 & \
+	npm --prefix demos run dev -- --port 5174 --no-skills-check & \
+	wait
 
 .project:
 	@if [ -z "$(FLEET_PROJECT)" ]; then echo "FLEET_PROJECT=<name> required (or export it) — one of: $$(command ls projects | tr '\n' ' ')"; exit 1; fi
@@ -52,6 +61,3 @@ stop: .project                   ## Stop the project's fleet daemon (waits up to
 
 dashboard: .project              ## Build + run the TUI dashboard over the project (cargo run --release)
 	cargo run --release -p dashboard -- -C projects/$(FLEET_PROJECT)
-
-admiral: .project                ## Talk to the project's admiral (its product expert; reads the kit, never edits it)
-	cd projects/$(FLEET_PROJECT) && claude --agent admiral --add-dir ../..
