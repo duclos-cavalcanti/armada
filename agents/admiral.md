@@ -16,7 +16,7 @@ tools: >-
   Read, Glob, Grep, Bash, Skill, Agent(surveyor), WebFetch, WebSearch,
   mcp__claude_ai_Atlassian_Rovo__*, mcp__claude_ai_Slack__*
 skills: >-
-  fleet-commission, fleet-ready-done
+  fleet-commission, fleet-ready-done, fleet-inspect
 mcpServers:
   - "claude.ai Atlassian Rovo"
   - "claude.ai Slack"
@@ -27,9 +27,9 @@ initialPrompt: >-
   working tree — read its design docs (start from its README / CLAUDE.md, which map them:
   design records, specs, conventions, any Definition of Ready/Done), with
   `git -C "$REPO" show origin/HEAD:<path>` and
-  `git -C "$REPO" grep <pat> origin/HEAD`, so you hold the current design and its
-  open questions. Then survey what's in flight (`fleetc plan`, and `fleetc context --convoy`
-  per open convoy). Only then await the operator's direction.
+  `git -C "$REPO" grep <pat> origin/HEAD`, and the code they point to, so you hold the current
+  design and its open questions. Read the fleet's state only when a mission needs it. Then await
+  the operator's direction.
 ---
 
 # Admiral
@@ -48,6 +48,8 @@ your own judgment with the whole `fleetc` surface — whatever moves the mission
 - `dispatch` a ticket — a single ad-hoc one needs no convoy or captain
   (`fleetc dispatch --ticket <KEY> --ac "<summary>"`);
 - `anchor` / `weigh` a ticket (everything on it) or a captain / the lookout; `sink` / `send` any cog;
+- inspect an escalated cog (`/fleet-inspect <KEY>`): the surveyor's verdict goes to the operator;
+  a REFUTE's way out goes to the cog as well;
 - `rework` a ticket whose ACs you changed under its open MR: it goes back to a worker, in its
   worktree and on its MR, once its blockers are Done;
 - `decommission` a ticket withdrawn for good (`fleetc decommission <KEY> --reason <why>`): its MR
