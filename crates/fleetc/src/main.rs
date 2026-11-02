@@ -318,7 +318,7 @@ fn sink(args: &[String]) -> Result<()> {
 /// sinks its cogs, drafts its MR, and launches a worker in its worktree once its blockers are Done
 /// (moving it back to To Do), or a hand at once. The operator's call — a cog can't.
 fn rework(args: &[String]) -> Result<()> {
-    if own("FLEET_TICKET").is_some() {
+    if in_cog() {
         bail!("a cog doesn't rework tickets — escalate, and the operator decides");
     }
     let (key, hand) = match args {
@@ -334,7 +334,7 @@ fn rework(args: &[String]) -> Result<()> {
 /// reaps its cogs, worktree and order. The operator's call — a cog can't — and it asks first, showing
 /// what will go, unless `--yes`. fleetd refuses once its MR has merged.
 fn decommission(args: &[String]) -> Result<()> {
-    if std::env::var("FLEET_TICKET").is_ok_and(|t| !t.is_empty()) {
+    if in_cog() {
         bail!("a cog doesn't decommission tickets — the operator does (propose it instead)");
     }
     let usage = "usage: fleetc decommission <KEY-N> --reason <why> [--yes]";
@@ -475,6 +475,13 @@ fn require_ticket(args: &[String], verb: &str) -> Result<String> {
 /// classifier, which may block it).
 fn own(var: &str) -> Option<String> {
     std::env::var(var).ok().filter(|v| !v.is_empty())
+}
+
+/// Run by a cog fleetd spawned: each carries what it serves — a worker, sailor or hand its
+/// ticket, a captain its convoy, the lookout its ship. The operator's sessions (the admiral, the
+/// shipwright) carry none. A guard against slips, not a wall: a cog could unset it.
+fn in_cog() -> bool {
+    ["FLEET_TICKET", "FLEET_CONVOY", "FLEET_SHIP"].iter().any(|v| own(v).is_some())
 }
 
 /// A ticket verb's `<KEY-N>`: the first arg, else the cog's own ticket.
@@ -1053,8 +1060,8 @@ fn render_ticket(d: &serde_json::Value) -> String {
 /// `fleetc ticket new --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]`
 /// — create a ticket in To Do; `--body -` reads the description from stdin. Prints the new key.
 fn ticket_new(args: &[String]) -> Result<()> {
-    // A cog (fleetd sets its FLEET_TICKET) never files: the operator decides what reaches the tracker.
-    if std::env::var("FLEET_TICKET").is_ok_and(|t| !t.is_empty()) {
+    // A cog never files: the operator decides what reaches the tracker.
+    if in_cog() {
         bail!("a cog doesn't file tickets — propose it for the operator: fleetc propose … (/fleet-propose)");
     }
     post_and_print("/ticket-new", &draft_flags(args, "ticket new")?)

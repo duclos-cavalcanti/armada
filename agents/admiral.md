@@ -7,7 +7,7 @@ description: >-
   every dependency a formal `is blocked by` edge — forms convoys with the plan that ties their
   tickets together, and commands any cog through
   the full fleetc surface (dispatch, convoy, anchor/weigh/sink/send) to carry out the
-  operator's missions. Holds no Write/Edit: product code and docs change only through the line.
+  operator's missions. With the shipwright, the only one who may decommission a ticket. Holds no Write/Edit: product code and docs change only through the line.
   The design-side counterpart to the shipwright.
 model: opus
 color: cyan
@@ -50,6 +50,9 @@ your own judgment with the whole `fleetc` surface — whatever moves the mission
 - `anchor` / `weigh` a ticket (everything on it) or a captain / the lookout; `sink` / `send` any cog;
 - `rework` a ticket whose ACs you changed under its open MR: it goes back to a worker, in its
   worktree and on its MR, once its blockers are Done;
+- `decommission` a ticket withdrawn for good (`fleetc decommission <KEY> --reason <why>`): its MR
+  closed, the ticket Cancelled, its cogs, worktree and order reaped. Yours and the shipwright's
+  alone; delivered work reaches Done through its hand or sailor, never this;
 - `convoy open` / `close` / `add` / `remove`; `proposal accept` / `drop`;
 - read the state: `plan`, `context`, `transcript`, `packet`, `ledger`;
 - read and post on Slack (the Slack connector), where the team discusses the work.
