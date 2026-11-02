@@ -126,6 +126,8 @@ pub struct Fleet {
     pub held_reasons: HashMap<String, String>,
     pub armada: Vec<ShipRow>,
     pub convoys: Vec<Convoy>,
+    /// Each open convoy's latest captain launch (its key → when), if it ever had one.
+    pub captain_launched: HashMap<String, String>,
     /// Work cogs found mid-ticket, waiting on the operator to accept or drop it.
     pub proposals: Vec<Proposal>,
     /// Tickets anchored in an open convoy and never dispatched — a captain judged them not Ready, and
@@ -260,6 +262,12 @@ impl Fleet {
         }
 
         let convoys = ConvoyRepo::active(&db)?;
+        let mut captain_launched = HashMap::new();
+        for c in &convoys {
+            if let Some(at) = db.last_captain_launch(&c.key)? {
+                captain_launched.insert(c.key.0.clone(), at);
+            }
+        }
         let held = board
             .iter()
             .filter(|t| t.held && !ordered.contains(&t.key))
@@ -278,6 +286,7 @@ impl Fleet {
             held_reasons,
             armada,
             convoys,
+            captain_launched,
             held,
             // A ledger older than the proposals table has none — fleetd adds it on its next start.
             proposals: db.pending().unwrap_or_default(),

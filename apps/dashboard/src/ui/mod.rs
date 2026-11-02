@@ -109,7 +109,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
         ),
         Pane::Convoys => (
             format!(" Convoys · {} open · enter captain · t ticket ", f.convoys.len()),
-            Some(header(&[("Convoy", 12), ("Captain", 8), ("Open", 6), ("Title", 0)])),
+            Some(header(&[("Convoy", 12), ("Captain", 8), ("Launched", 9), ("Open", 6), ("Title", 0)])),
             f.convoys.iter().map(|c| convoy_row(c, f)).collect(),
         ),
         Pane::Proposals => (
@@ -331,9 +331,11 @@ fn convoy_row(c: &Convoy, f: &crate::source::Fleet) -> Line<'static> {
         None => ("off".into(), 7, dim()),
     };
     let anchor = if c.anchored_at.is_some() { "⚓ " } else { "" };
+    let launched = fmt_age(f.captain_launched.get(&c.key.0).and_then(|at| age_of(at)));
     cells(vec![
         (c.key.0.clone(), 12, Style::default()),
         (live.0, 8, live.2),
+        (launched, 9, dim()),
         (format!("{open}/{}", members.len()), 6, Style::default()),
         (format!("{anchor}{}", c.title.as_deref().unwrap_or("")), 0, Style::default()),
     ])

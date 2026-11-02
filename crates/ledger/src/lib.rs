@@ -54,6 +54,16 @@ impl Ledger {
             .optional()?)
     }
 
+    /// When the convoy's latest captain was launched (`None`: never). A captain runs cold, one pass
+    /// per launch, so this is how recently its convoy was looked at.
+    pub fn last_captain_launch(&self, convoy: &ConvoyKey) -> Result<Option<String>> {
+        Ok(self.conn.query_row(
+            "SELECT max(created_at) FROM sessions WHERE kind = 'captain' AND convoy = ?1",
+            params![convoy.0],
+            |r| r.get(0),
+        )?)
+    }
+
     /// Why a ticket is held: the reason on its latest `TicketHeld` event (`""` when the hold gave
     /// none; `None` when it was never held). The hold itself is the ticket's `held` flag.
     pub fn held_reason(&self, key: &TicketKey) -> Result<Option<String>> {
@@ -716,6 +726,17 @@ mod tests {
         assert_eq!(got.kind, CrewKind::Captain);
         assert!(got.ticket.is_none(), "a captain carries no ticket");
         assert_eq!(got.convoy, Some(ConvoyKey("PROJ-100".into())));
+    }
+
+    #[test]
+    fn a_convoys_last_captain_launch_is_its_newest_session() {
+        let db = Ledger::in_memory().unwrap();
+        let convoy = ConvoyKey("PROJ-100".into());
+        assert_eq!(db.last_captain_launch(&convoy).unwrap(), None, "never launched");
+        let first = db.start(&Session { created_at: "2026-01-01T00:00:00Z".into(), ..captain_on("PROJ-100") }).unwrap().unwrap();
+        SessionRepo::end(&db, &first, "2026-01-01T00:05:00Z").unwrap();
+        db.start(&Session { created_at: "2026-01-02T00:00:00Z".into(), ..captain_on("PROJ-100") }).unwrap().unwrap();
+        assert_eq!(db.last_captain_launch(&convoy).unwrap().as_deref(), Some("2026-01-02T00:00:00Z"));
     }
 
     #[test]
