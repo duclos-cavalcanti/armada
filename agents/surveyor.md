@@ -113,6 +113,12 @@ fleetc ledger "SELECT ticket FROM ticket_blocks WHERE blocked_by = '<KEY>'"   # 
 fleetc transcript --cog <kind> --ticket <KEY>   # the transcript's path: read its tail, then back to the cause
 ```
 
+**Read the transcript back to the cause.** The escalation is the cog's conclusion; the
+transcript is how it got there. Read past the tail until you reach what it tried and why that
+failed, the same turns its claims rest on. A verdict without that read is a guess, and a REFUTE
+never rests on one: you must show the way out was there and the cog missed it, not that it
+looks easy now.
+
 Read the worktree's code where the escalation points (`git -C <worktree> log` / `diff`, its
 files), and the canon it cites. Check each of the cog's claims ("X only exists on !N", "the
 ticket says Y") against the source; a claim that fails is itself a REFUTE.
