@@ -138,6 +138,7 @@ impl FsTracker {
             assignee: t.header.assignee.clone(),
             convoy: t.header.convoy.as_deref().and_then(|c| ConvoyKey::parse(c).ok()),
             blocked_by: keys(&t.header.blocked_by),
+            labels: t.header.labels.clone(),
         }
     }
 }
@@ -223,7 +224,6 @@ impl Tracker for FsTracker {
             ticket: self.to_ticket(key.clone(), &t),
             held: None,
             location: self.path(key).to_string_lossy().into_owned(),
-            labels: t.header.labels.clone(),
         })
     }
 
@@ -370,10 +370,10 @@ mod tests {
         let d = t.read(&key).unwrap();
         assert_eq!((d.kind.as_str(), d.description.as_str()), ("story", "## Outcome\n\nmul works.\n"));
         assert_eq!((d.ticket.status, d.ticket.blocked_by.clone()), (TicketStatus::Todo, vec![TicketKey("ARMT-4".into())]));
-        assert_eq!(d.labels, vec!["fleet-proposed".to_string()]);
+        assert_eq!(d.ticket.labels, vec!["fleet-proposed".to_string()]);
         t.label(&key, "fleet-proposed", false).unwrap();
         t.label(&key, "fleet-proposed", false).unwrap(); // idempotent
-        assert!(t.read(&key).unwrap().labels.is_empty());
+        assert!(t.read(&key).unwrap().ticket.labels.is_empty());
         t.edit(&key, "## Outcome\n\nmul and div work.").unwrap();
         let d = t.read(&key).unwrap();
         assert_eq!((d.description.as_str(), d.ticket.title.as_str()), ("## Outcome\n\nmul and div work.\n", "Add mul"), "the body only");

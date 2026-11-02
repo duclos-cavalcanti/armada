@@ -57,8 +57,17 @@ impl Ledger {
     /// When the convoy's latest captain was launched (`None`: never). A captain runs cold, one pass
     /// per launch, so this is how recently its convoy was looked at.
     pub fn last_captain_launch(&self, convoy: &ConvoyKey) -> Result<Option<String>> {
+        self.latest_captain("created_at", convoy)
+    }
+
+    /// When the convoy's latest captain finished (`None`: none has) — its rest is counted from here.
+    pub fn last_captain_finish(&self, convoy: &ConvoyKey) -> Result<Option<String>> {
+        self.latest_captain("ended_at", convoy)
+    }
+
+    fn latest_captain(&self, column: &str, convoy: &ConvoyKey) -> Result<Option<String>> {
         Ok(self.conn.query_row(
-            "SELECT max(created_at) FROM sessions WHERE kind = 'captain' AND convoy = ?1",
+            &format!("SELECT max({column}) FROM sessions WHERE kind = 'captain' AND convoy = ?1"),
             params![convoy.0],
             |r| r.get(0),
         )?)
@@ -367,6 +376,9 @@ impl TicketRepo for Ledger {
         // Jira is authoritative for the edge set: always re-write it, so an emptied `blocked_by`
         // (a blocker removed/unlinked in Jira) clears the stale edges instead of lingering.
         self.set_blocked_by(&t.key, &t.blocked_by)?;
+        if t.has(TicketLabel::ProductOwner) {
+            self.set_hand(&t.key, true, now)?;
+        }
         Ok(())
     }
 }
@@ -731,7 +743,7 @@ mod tests {
     }
 
     #[test]
-    fn a_convoys_last_captain_launch_is_its_newest_session() {
+    fn a_convoys_last_captain_launch_and_finish_are_its_newest() {
         let db = Ledger::in_memory().unwrap();
         let convoy = ConvoyKey("PROJ-100".into());
         assert_eq!(db.last_captain_launch(&convoy).unwrap(), None, "never launched");
@@ -739,6 +751,25 @@ mod tests {
         SessionRepo::end(&db, &first, "2026-01-01T00:05:00Z").unwrap();
         db.start(&Session { created_at: "2026-01-02T00:00:00Z".into(), ..captain_on("PROJ-100") }).unwrap().unwrap();
         assert_eq!(db.last_captain_launch(&convoy).unwrap().as_deref(), Some("2026-01-02T00:00:00Z"));
+        assert_eq!(db.last_captain_finish(&convoy).unwrap().as_deref(), Some("2026-01-01T00:05:00Z"), "the live one hasn't finished");
+    }
+
+    #[test]
+    fn syncing_a_product_owner_ticket_marks_it_for_a_hand() {
+        let db = Ledger::in_memory().unwrap();
+        let t = |key: &str, labels: Vec<String>| TrackerTicket {
+            key: TicketKey(key.into()),
+            title: "T".into(),
+            status: TicketStatus::Todo,
+            assignee: None,
+            convoy: None,
+            blocked_by: vec![],
+            labels,
+        };
+        db.sync(&t("PROJ-1", vec![TicketLabel::ProductOwner.as_str().into()]), "t").unwrap();
+        db.sync(&t("PROJ-2", vec!["other".into()]), "t").unwrap();
+        assert!(db.is_hand(&TicketKey("PROJ-1".into())).unwrap());
+        assert!(!db.is_hand(&TicketKey("PROJ-2".into())).unwrap());
     }
 
     #[test]
@@ -799,6 +830,7 @@ mod tests {
             assignee: None,
             convoy: Some(ConvoyKey(epic.into())),
             blocked_by: vec![],
+            labels: vec![],
         };
         db.sync(&epic_child("PROJ-1", "PROJ-50"), "t").unwrap();
         let (ours, other) = (ConvoyKey("PROJ-90".into()), ConvoyKey("PROJ-91".into()));
@@ -1774,6 +1806,7 @@ mod repo_tests {
                 assignee: Some("me".into()),
                 convoy: None,
                 blocked_by: vec![],
+                labels: vec![],
             },
             "t2",
         )
@@ -1795,6 +1828,7 @@ mod repo_tests {
                 assignee: None,
                 convoy: None,
                 blocked_by: vec![],
+                labels: vec![],
             },
             "t3",
         )
@@ -1814,6 +1848,7 @@ mod repo_tests {
             assignee: None,
             convoy: None,
             blocked_by: blocked_by.into_iter().map(|b| TicketKey(b.into())).collect(),
+            labels: vec![],
         };
         // PROJ-2 is tracked; PROJ-99 is not. PROJ-1 claims both as blockers.
         db.sync(&tt("PROJ-2", vec![]), "t").unwrap();

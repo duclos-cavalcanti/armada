@@ -22,6 +22,8 @@ pub struct Config {
     pub poll_secs: u64,
     pub sync_secs: u64,
     pub reconcile_secs: u64,
+    /// How long a convoy rests between captain passes, counted from the last captain's finish.
+    pub captain_sleep_secs: u64,
     /// Reconcile mode: false (default, post-cutover) = apply the plan through the ports — fleetd
     /// drives the line; true = compute + log only, execute nothing (the parity look, opt in via
     /// `FLEET_DRY_RUN=true`). Flip via config/env, no recompile.
@@ -108,6 +110,7 @@ impl Default for Config {
             poll_secs: 5,
             sync_secs: 300,
             reconcile_secs: 60,
+            captain_sleep_secs: 900,
             dry_run: false,
             active_secs: domain::LIVENESS_ACTIVE_SECS,
             quiet_secs: domain::LIVENESS_QUIET_SECS,
@@ -135,6 +138,9 @@ impl Config {
         }
         if let Some(v) = env_num("FLEET_RECONCILE_SECS") {
             c.reconcile_secs = v;
+        }
+        if let Some(v) = env_num("FLEET_CAPTAIN_SLEEP_SECS") {
+            c.captain_sleep_secs = v;
         }
         if let Some(v) = env_bool("FLEET_DRY_RUN") {
             c.dry_run = v;
@@ -229,6 +235,7 @@ mod tests {
         assert_eq!(c.poll_secs, 5);
         assert_eq!(c.sync_secs, 300);
         assert_eq!(c.reconcile_secs, 60);
+        assert_eq!(c.captain_sleep_secs, 900);
         assert!(!c.dry_run, "live is the default post-cutover (dry-run is opt-in)");
         assert_eq!(c.active_secs, 120);
         assert_eq!(c.quiet_secs, 1800);

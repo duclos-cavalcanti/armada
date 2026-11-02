@@ -351,11 +351,6 @@ fn detail_from_issue(issue: &serde_json::Value) -> Option<TicketDetail> {
         },
         held: None,
         location: browse_url(issue).unwrap_or_default(),
-        labels: f
-            .get("labels")
-            .and_then(|l| l.as_array())
-            .map(|l| l.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-            .unwrap_or_default(),
     })
 }
 
@@ -456,6 +451,11 @@ fn issue_to_ticket(i: &serde_json::Value) -> Option<TrackerTicket> {
             .and_then(|k| k.as_str())
             .and_then(|s| ConvoyKey::parse(s).ok()),
         blocked_by: parse_blocked_by(f),
+        labels: f
+            .get("labels")
+            .and_then(|l| l.as_array())
+            .map(|l| l.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
     })
 }
 
@@ -545,7 +545,7 @@ mod tests {
         );
         assert_eq!(capitalized("story"), "Story");
         assert_eq!(d.location, "https://example.atlassian.net/browse/PROJ-7");
-        assert_eq!(d.labels, vec!["fleet-proposed".to_string()]);
+        assert_eq!(d.ticket.labels, vec!["fleet-proposed".to_string()]);
         assert_eq!(d.ticket.blocked_by, vec![TicketKey("PROJ-3".into())], "view --raw spells it `issuelinks`");
     }
 

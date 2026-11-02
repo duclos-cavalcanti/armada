@@ -58,10 +58,11 @@ Write `projects/$NAME/fleet.toml` in the showcase's shape — a short header say
 project is, then:
 
 ```toml
-poll_secs      = 5
-sync_secs      = 300
-reconcile_secs = 60
-dry_run        = false
+poll_secs          = 5
+sync_secs          = 300
+reconcile_secs     = 60
+captain_sleep_secs = 900
+dry_run            = false
 
 [project]
 path = "<checkout>"            # relative to this folder

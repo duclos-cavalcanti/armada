@@ -380,6 +380,7 @@ mod tests {
             assignee: Some("me".into()),
             convoy: None,
             blocked_by: vec![],
+            labels: vec![],
         }
     }
 

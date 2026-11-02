@@ -196,6 +196,7 @@
             { "key": "poll_secs", "meta": "5", "informs": "Liveness-poll cadence (s): how often the in-memory cog snapshot refreshes." },
             { "key": "sync_secs", "meta": "300", "informs": "Sync cadence (s): hydrate the ledger from the tracker + forge." },
             { "key": "reconcile_secs", "meta": "60", "informs": "Reconcile cadence (s): converge intent against reality." },
+            { "key": "captain_sleep_secs", "meta": "900", "informs": "A convoy's rest (s) between captain passes, from the last one's finish." },
             { "key": "dry_run", "meta": "false", "informs": "true = plan + log only, execute nothing (the parity look)." }
           ]},
           { "section": "liveness thresholds", "rows": [

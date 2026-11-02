@@ -17,7 +17,7 @@ use domain::ports::{
     ShipRepo, TicketRepo, Tracker,
 };
 use domain::{
-    CogState, ConvoyKey, ConvoyTicketView, ConvoyView, CrewKind, EntityKind, EventKind, HandState,
+    CogState, ConvoyKey, ConvoyTicketView, ConvoyView, CrewKind, EntityKind, EventKind, HandState, TicketLabel,
     LivenessThresholds, MrDraft, Order, Packet, Proposal, ProposalId, Proposed, Report, Session, Ship, ShipState, TicketDraft,
     TicketKey, TicketStatus,
 };
@@ -132,8 +132,9 @@ pub fn run(
             // apply through the ports (the Gate D flip). Reuse the liveness poll's memoized cogs (no
             // extra tmux fan-out).
             let dry_run = settings::dry_run(&cfg, &ledger);
+            let levers = reconcile::Levers { dry_run, captain_sleep_secs: settings::captain_sleep_secs(&cfg, &ledger) };
             let cogs = snapshot.lock().unwrap().clone();
-            match reconcile::tick(&ledger, tracker.as_ref(), &host, forge.as_ref(), &cogs, &cfg.project.path, dry_run) {
+            match reconcile::tick(&ledger, tracker.as_ref(), &host, forge.as_ref(), &cogs, &cfg.project.path, &levers) {
                 Ok(n) if n > 0 => {
                     let mode = if dry_run { "dry-run" } else { "live" };
                     tracing::info!("reconcile ({mode}) {n} actions");
@@ -171,6 +172,13 @@ fn ensure_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey) -> Res
     TicketRepo::sync(ledger, &tt, &now_rfc3339())
 }
 
+/// Queue the order — a hand's for a hand-marked ticket, whatever the producer asked: whether a
+/// ticket gets a hand is the ledger's call, not the captain's.
+fn dispatch(ledger: &Ledger, order: Order) -> Result<()> {
+    let auto_impl = order.auto_impl && !TicketRepo::is_hand(ledger, &order.ticket)?;
+    ledger.dispatch(&Order { auto_impl, ..order })
+}
+
 fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Forge, cfg: &Config, cmd: Command) {
     match cmd {
         Command::RecordStatus { target, state, last_action, reply } => {
@@ -184,7 +192,7 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             // The worktree is NOT dispatch's job — the operating agent berths it (fleet-berth)
             // and passes it in the order; dispatch only ensures the ledger row exists.
             let res = ensure_ticket(ledger, tracker, &order.ticket)
-                .and_then(|()| ledger.dispatch(&order))
+                .and_then(|()| dispatch(ledger, order))
                 .map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
@@ -321,11 +329,8 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
     }
 }
 
-/// The label on a ticket filed for a proposal, until the operator accepts it.
-const PROPOSED: &str = "fleet-proposed";
-
 /// Hold a cog's proposal. A new ticket is filed now, so the cog has a key to cite: labelled
-/// `PROPOSED` and outside any convoy, so no captain dispatches it before it's accepted. It's then
+/// `TicketLabel::Proposed` and outside any convoy, so no captain dispatches it before it's accepted. It's then
 /// held like an existing ticket. Either lands in the proposing ticket's convoy on accept unless it
 /// names one; the ticket is pulled onto the board if it's off-sprint (the ledger's FK).
 fn propose(ledger: &Ledger, tracker: &dyn Tracker, from: Option<TicketKey>, proposed: Proposed) -> Result<(ProposalId, TicketKey)> {
@@ -335,7 +340,7 @@ fn propose(ledger: &Ledger, tracker: &dyn Tracker, from: Option<TicketKey>, prop
     };
     let (ticket, why, convoy) = match proposed {
         Proposed::New(d) => {
-            let filed = TicketDraft { convoy: None, labels: vec![PROPOSED.into()], ..d.clone() };
+            let filed = TicketDraft { convoy: None, labels: vec![TicketLabel::Proposed.as_str().into()], ..d.clone() };
             (tracker.create(&filed)?, d.title, d.convoy)
         }
         Proposed::Existing { ticket, why, convoy } => {
@@ -351,7 +356,7 @@ fn propose(ledger: &Ledger, tracker: &dyn Tracker, from: Option<TicketKey>, prop
 
 /// The ticket was filed for a proposal and not yet accepted.
 fn is_proposed(tracker: &dyn Tracker, key: &TicketKey) -> Result<bool> {
-    Ok(tracker.read(key)?.labels.iter().any(|l| l == PROPOSED))
+    Ok(tracker.read(key)?.ticket.has(TicketLabel::Proposed))
 }
 
 /// Comment `why` on the ticket and move it to Cancelled. The ledger learns it now, so the reap
@@ -433,7 +438,7 @@ fn open_proposal(ledger: &Ledger, id: &ProposalId) -> Result<Proposal> {
 }
 
 /// Accept an open proposal and settle it as its ticket, landing it in its convoy (`convoy` when
-/// given, else the one it carries). A ticket filed for it loses its `PROPOSED` label: it's official.
+/// given, else the one it carries). A ticket filed for it loses its `TicketLabel::Proposed`: it's official.
 fn accept_proposal(ledger: &Ledger, tracker: &dyn Tracker, id: &ProposalId, convoy: Option<ConvoyKey>) -> Result<TicketKey> {
     let mut p = open_proposal(ledger, id)?;
     p.proposed.override_convoy(convoy);
@@ -441,7 +446,7 @@ fn accept_proposal(ledger: &Ledger, tracker: &dyn Tracker, id: &ProposalId, conv
         Proposed::New(draft) => tracker.create(&draft)?, // a draft held before proposals were filed on propose
         Proposed::Existing { ticket, convoy, .. } => {
             if is_proposed(tracker, &ticket)? {
-                tracker.label(&ticket, PROPOSED, false)?;
+                tracker.label(&ticket, TicketLabel::Proposed.as_str(), false)?;
             }
             if let Some(c) = &convoy {
                 add_to_convoy(ledger, tracker, c, &ticket)?;
@@ -563,6 +568,7 @@ fn rework<H: SessionHost>(
     ticket: &TicketKey,
     hand: bool,
 ) -> Result<()> {
+    let hand = hand || TicketRepo::is_hand(ledger, ticket)?;
     OrderRepo::get(ledger, ticket)?.ok_or_else(|| anyhow!("{} was never dispatched: fleetc dispatch it", ticket.0))?;
     let status = TicketRepo::get(ledger, ticket)?.and_then(|t| t.status);
     if let Some(s @ (TicketStatus::Done | TicketStatus::Cancelled)) = status {
@@ -1075,15 +1081,9 @@ mod tests {
             Ok(self.tickets.borrow().iter().filter(|t| t.convoy.as_ref().is_some_and(|c| c.0 == parent.0)).cloned().collect())
         }
         fn read(&self, key: &TicketKey) -> Result<domain::TicketDetail> {
-            let labels = self.labels.borrow().iter().filter(|(k, _)| k == key).map(|(_, l)| l.clone()).collect();
-            Ok(domain::TicketDetail {
-                ticket: self.get(key)?,
-                kind: "task".into(),
-                description: String::new(),
-                held: None,
-                location: String::new(),
-                labels,
-            })
+            let mut ticket = self.get(key)?;
+            ticket.labels = self.labels.borrow().iter().filter(|(k, _)| k == key).map(|(_, l)| l.clone()).collect();
+            Ok(domain::TicketDetail { ticket, kind: "task".into(), description: String::new(), held: None, location: String::new() })
         }
         fn create(&self, d: &TicketDraft) -> Result<TicketKey> {
             let key = TicketKey(format!("PROJ-{}", 100 + self.tickets.borrow().len()));
@@ -1094,6 +1094,7 @@ mod tests {
                 assignee: None,
                 convoy: d.convoy.clone(),
                 blocked_by: d.blocked_by.clone(),
+                labels: vec![],
             });
             for l in &d.labels {
                 self.label(&key, l, true)?;
@@ -1308,6 +1309,7 @@ mod tests {
             assignee: None,
             convoy: None,
             blocked_by: vec![],
+            labels: vec![],
         }
     }
 
@@ -1380,11 +1382,11 @@ mod tests {
         assert_eq!((forge.disarmed.borrow().clone(), forge.drafted.borrow().clone()), (vec![7], vec![(7, true)]));
         assert!(OrderRepo::get(&db, &key).unwrap().unwrap().created_at.as_str() > at, "the order is re-dated");
         // The worker waits for its blocker, and no sailor launches on a ticket back in To Do.
-        assert!(reconcile::plan(&db, &[], true).unwrap().is_empty());
+        assert!(reconcile::plan(&db, &[], true, 0).unwrap().is_empty());
         tracker.transition(&TicketKey("PROJ-2".into()), TicketStatus::Done).unwrap();
         sync::sync_board(&db, &tracker, "now").unwrap();
         assert_eq!(
-            reconcile::plan(&db, &[], true).unwrap(),
+            reconcile::plan(&db, &[], true, 0).unwrap(),
             vec![reconcile::Action::Spawn { ticket: "PROJ-1".into(), kind: "worker".into() }]
         );
 
@@ -1396,7 +1398,7 @@ mod tests {
         assert_eq!(TicketRepo::get(&db, &key).unwrap().unwrap().status, Some(TicketStatus::InQa));
         assert!(!OrderRepo::get(&db, &key).unwrap().unwrap().auto_impl);
         assert_eq!(
-            reconcile::plan(&db, &[], true).unwrap(),
+            reconcile::plan(&db, &[], true, 0).unwrap(),
             vec![reconcile::Action::Spawn { ticket: "PROJ-1".into(), kind: "hand".into() }]
         );
     }
@@ -1592,6 +1594,7 @@ mod tests {
             assignee: None,
             convoy: None,
             blocked_by: vec![],
+            labels: vec![],
         }]);
 
         tick_sync(&db, &forge, &tracker).unwrap();
@@ -1929,6 +1932,7 @@ mod tests {
             assignee: None,
             convoy: Some(convoy.clone()),
             blocked_by: blocked_by.into_iter().map(|b| TicketKey(b.into())).collect(),
+            labels: vec![],
         };
         let tickets = vec![tt("PROJ-1", TicketStatus::InQa, vec![]), tt("PROJ-2", TicketStatus::Todo, vec!["PROJ-1"])];
         sync::sync_board(&db, &FakeTracker::new(tickets), "now").unwrap();
@@ -2001,6 +2005,27 @@ mod tests {
         assert_eq!(hand(&db), Some(true), "for a hand");
         TicketRepo::set_hand(&db, &key, false, "now").unwrap();
         assert_eq!(hand(&db), Some(false), "added again without --hand: for a worker");
+    }
+
+    #[test]
+    fn a_product_owner_ticket_is_dispatched_to_a_hand_whatever_the_producer_asked() {
+        let db = Ledger::in_memory().unwrap();
+        let po = TrackerTicket { labels: vec![TicketLabel::ProductOwner.as_str().into()], ..tt("PROJ-1", TicketStatus::Todo) };
+        sync::sync_board(&db, &FakeTracker::new(vec![po, tt("PROJ-2", TicketStatus::Todo)]), "now").unwrap();
+        let order = |key: &str| Order {
+            ticket: TicketKey(key.into()),
+            auto_impl: true,
+            fork_from: "origin/master".into(),
+            ac_summary: "s".into(),
+            park_at: None,
+            worktree_path: Some("/wt".into()),
+            created_at: "now".into(),
+        };
+        let auto = |key: &str| OrderRepo::get(&db, &TicketKey(key.into())).unwrap().unwrap().auto_impl;
+        dispatch(&db, order("PROJ-1")).unwrap();
+        dispatch(&db, order("PROJ-2")).unwrap();
+        assert!(!auto("PROJ-1"), "labelled: a hand");
+        assert!(auto("PROJ-2"), "unlabelled: a worker");
     }
 
     #[test]

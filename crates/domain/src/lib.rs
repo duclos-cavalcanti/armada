@@ -486,6 +486,32 @@ pub struct TrackerTicket {
     pub assignee: Option<String>,
     pub convoy: Option<ConvoyKey>,
     pub blocked_by: Vec<TicketKey>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+}
+
+impl TrackerTicket {
+    pub fn has(&self, label: TicketLabel) -> bool {
+        self.labels.iter().any(|l| l == label.as_str())
+    }
+}
+
+/// A tracker label the line reads — one meaning, whatever the tracker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TicketLabel {
+    /// Filed for a proposal, until the operator accepts it.
+    Proposed,
+    /// A question for the product owner: a hand works it, never a worker.
+    ProductOwner,
+}
+
+impl TicketLabel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TicketLabel::Proposed => "fleet-proposed",
+            TicketLabel::ProductOwner => "product-owner",
+        }
+    }
 }
 
 /// A ticket's full text, as `fleetc ticket <KEY>` shows it: the board facts plus its type
@@ -502,8 +528,6 @@ pub struct TicketDetail {
     /// Where a person opens it: a URL (Jira) or a file path (the filesystem tracker).
     #[serde(default)]
     pub location: String,
-    #[serde(default)]
-    pub labels: Vec<String>,
 }
 
 /// A new ticket, as `fleetc ticket new` asks the tracker to create it. It starts in To Do.
