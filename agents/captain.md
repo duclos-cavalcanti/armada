@@ -9,7 +9,7 @@ description: >-
 model: opus
 color: red
 tools: >-
-  Read, Glob, Grep, Bash, Skill, WebFetch, WebSearch
+  Read, Glob, Grep, Bash, Skill, Agent(surveyor), WebFetch, WebSearch
 skills: >-
   fleet-berth, fleet-ready-done
 initialPrompt: >-

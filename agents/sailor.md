@@ -9,7 +9,7 @@ description: >-
 model: opus
 color: yellow
 tools: >-
-  Read, Glob, Grep, Bash, Edit, Write, Skill, WebFetch, WebSearch
+  Read, Glob, Grep, Bash, Edit, Write, Skill, Agent, WebFetch, WebSearch
 skills: >-
   fleet-rechart, fleet-parley, fleet-repair, fleet-propose, fleet-ready-done
 initialPrompt: Do one finishing sweep on your MR.

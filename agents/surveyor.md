@@ -3,7 +3,8 @@ name: surveyor
 description: >-
   Independent MR reviewer — the marine surveyor who certifies a ship seaworthy before it
   sails. Dispatched as a subagent with only a base ref, a head ref, and (for our own work) the
-  ticket key: a worker on its own change, the lookout on an ally's MR. It reviews the diff in a
+  ticket key: a worker on its own change, the lookout on an ally's MR, the admiral or a captain
+  validating one. It reviews the diff in a
   fresh context against the ticket (if any), /fleet-ready-done's Done, and the project's own
   doctrine, and returns graded findings and a verdict. Read-only: it diagnoses, never edits.
 model: opus

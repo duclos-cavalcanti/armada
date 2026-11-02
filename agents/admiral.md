@@ -13,7 +13,7 @@ model: opus
 color: cyan
 memory: project
 tools: >-
-  Read, Glob, Grep, Bash, Skill, WebFetch, WebSearch,
+  Read, Glob, Grep, Bash, Skill, Agent(surveyor), WebFetch, WebSearch,
   mcp__claude_ai_Atlassian_Rovo__*, mcp__claude_ai_Slack__*
 skills: >-
   fleet-commission, fleet-ready-done
