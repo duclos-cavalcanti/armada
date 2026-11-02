@@ -85,9 +85,9 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
         ),
         Pane::Impl | Pane::Hands => (
             if pane == Pane::Impl {
-                format!(" Implementation · {} workers · l hands ({}) ", f.workers.len(), f.hands.len())
+                format!(" Workers · {} ", f.workers.len())
             } else {
-                format!(" Implementation · {} hands · h workers ({}) ", f.hands.len(), f.workers.len())
+                format!(" Hands · {} ", f.hands.len())
             },
             Some(header(&[
                 ("Ticket", 12),
