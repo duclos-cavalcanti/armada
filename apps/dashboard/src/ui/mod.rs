@@ -37,7 +37,7 @@ fn render_tab_strip(f: &mut Frame, area: Rect, app: &App) {
 
 /// The active tab's panes, stacked top to bottom (zoom shows just the focused one).
 fn render_body(f: &mut Frame, area: Rect, app: &App) {
-    let panes: Vec<Pane> = if app.zoomed { vec![app.pane()] } else { app.tab.panes().to_vec() };
+    let panes: Vec<Pane> = if app.zoomed { vec![app.pane()] } else { app.tab.panes().iter().map(|&s| app.shown(s)).collect() };
     // Every pane gets an equal share of the tab's height.
     let areas = Layout::default()
         .direction(Direction::Vertical)
@@ -46,13 +46,26 @@ fn render_body(f: &mut Frame, area: Rect, app: &App) {
     for (pane, area) in panes.into_iter().zip(areas.iter()) {
         let (title, header, rows) = pane_view(app, pane);
         let focused = pane == app.pane();
-        if focused {
-            app.focused_area.set(Some(*area));
-        }
         draw_pane(f, *area, &title, focused, header, rows, app.cursor(pane));
     }
 }
 
+
+/// The focused pane as text — its title, header and every row, not just those in view.
+pub fn pane_text(app: &App) -> (usize, String) {
+    let (title, header, rows) = pane_view(app, app.pane());
+    let text = |l: Line| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+    plain(std::iter::once(title.trim().to_string()).chain(header.into_iter().chain(rows).map(text)))
+}
+
+/// Lines as plain text: each trimmed at the end, trailing blank lines dropped; with the line count.
+pub fn plain(lines: impl Iterator<Item = String>) -> (usize, String) {
+    let mut lines: Vec<String> = lines.map(|l| l.trim_end().to_string()).collect();
+    while lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    (lines.len(), lines.join("\n") + "\n")
+}
 
 /// A pane's title, column header (if any), and rows.
 fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<'static>>) {
@@ -70,8 +83,12 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             ])),
             f.dispatched.iter().map(order_row).collect(),
         ),
-        Pane::Impl => (
-            format!(" Implementation · {} building ", f.builders.len()),
+        Pane::Impl | Pane::Hands => (
+            if pane == Pane::Impl {
+                format!(" Implementation · {} workers · l hands ({}) ", f.workers.len(), f.hands.len())
+            } else {
+                format!(" Implementation · {} hands · h workers ({}) ", f.hands.len(), f.workers.len())
+            },
             Some(header(&[
                 ("Ticket", 12),
                 ("Crew", 7),
@@ -82,7 +99,10 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 ("Age", 6),
                 ("Last action", 0),
             ])),
-            f.builders.iter().map(|c| builder_row(c, f.is_up(c), f.ship_of(c.session.ticket.as_ref()))).collect(),
+            (if pane == Pane::Impl { &f.workers } else { &f.hands })
+                .iter()
+                .map(|c| builder_row(c, f.is_up(c), f.ship_of(c.session.ticket.as_ref())))
+                .collect(),
         ),
         Pane::Merge => (
             format!(" Merge · {} landing ", f.landing.len()),
@@ -149,7 +169,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let status = if app.fleet.fleetd_up { status } else { format!("fleetd down (see Log) · {status}") };
     let error = app.error.as_ref().filter(|(_, at)| at.elapsed().as_secs() < 5).map(|(msg, _)| format!(" ✗ {msg} "));
     let body = format!(
-        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-5 pane · j/k row · y/Y yank · enter tmux · m MR · t ticket",
+        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-5 pane · j/k row · h/l swap · y/Y yank · enter tmux · m MR · t ticket",
         flash, zoom, status,
     );
     let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
@@ -163,11 +183,11 @@ fn order_row(o: &OrderRow) -> Line<'static> {
     let crew = if o.order.auto_impl { "worker" } else { "hand" };
     let status = o.status.map(|s| s.as_str().to_string()).unwrap_or_else(|| "—".into());
     let mut waiting = Vec::new();
-    if let Some(reason) = &o.held {
-        waiting.push(format!("⚓ {}", short(reason, 40)));
-    }
     if !o.blockers.is_empty() {
         waiting.push(format!("⛔ {}", o.blockers.join(", ")));
+    }
+    if let Some(reason) = &o.held {
+        waiting.push(format!("⚓ {reason}")); // last: the screen clips it, a yank keeps it whole
     }
     let waiting = if waiting.is_empty() { "—".to_string() } else { waiting.join("  ") };
     let waiting_style = if waiting == "—" { dim() } else { Style::default().fg(Color::Yellow) };
@@ -298,13 +318,13 @@ fn ticket_rows(board: &[Ticket], held_reasons: &HashMap<String, String>) -> Vec<
             let status = t.status.map(|s| s.as_str().to_string()).unwrap_or_else(|| "—".into());
             let convoy = t.convoy.as_ref().map(|c| c.0.clone()).unwrap_or_default();
             let mut gate = String::new();
-            if t.held {
-                let reason = held_reasons.get(&t.key.0).map(String::as_str).unwrap_or("");
-                gate += &format!(" ⚓ {}", short(reason, 40));
-            }
             let waiting = open_blockers(t, board);
             if !waiting.is_empty() {
                 gate += &format!(" ⛔ {}", waiting.join(", "));
+            }
+            if t.held {
+                let reason = held_reasons.get(&t.key.0).map(String::as_str).unwrap_or("");
+                gate += &format!(" ⚓ {reason}"); // last: the screen clips it, a yank keeps it whole
             }
             Line::from(format!(
                 "{:<12} {:<12} {:<10} {}{}",

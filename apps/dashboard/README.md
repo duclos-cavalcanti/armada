@@ -39,8 +39,9 @@ Cycle with `Tab` / `S-Tab`:
 | `↑` / `↓`, `C-p` / `C-n` | previous / next pane |
 | `1`–`5` | focus the Nth pane |
 | `j` / `k` | move the cursor within the focused pane |
+| `h` / `l` | swap a pane for its alternate: Implementation's workers ↔ hands |
 | `space` | zoom the focused pane (toggle) |
-| `y` / `Y` | yank the focused pane / the whole page |
+| `y` / `Y` | yank the focused pane (every row, in view or not) / the page as drawn |
 | `enter` | switch to the row's tmux session (its cog) |
 | `m` | open the row's MR |
 | `t` | open the row's ticket |

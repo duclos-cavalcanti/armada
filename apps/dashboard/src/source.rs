@@ -115,8 +115,9 @@ pub struct Fleet {
     pub load_error: Option<String>,
     /// Every dispatched order, with its phase.
     pub dispatched: Vec<OrderRow>,
-    /// Phase 2: live builders (workers + hands).
-    pub builders: Vec<CogRow>,
+    /// Phase 2: live builders — the workers, and the operator's hands.
+    pub workers: Vec<CogRow>,
+    pub hands: Vec<CogRow>,
     /// Phase 3: our ships being landed.
     pub landing: Vec<LandingRow>,
     /// The ticketless cogs: captains (by convoy) + the lookout.
@@ -179,15 +180,16 @@ impl Fleet {
             Ok(CogRow { session, state, last_action, age_secs, liveness })
         };
 
-        let (mut builders, mut crew) = (Vec::new(), Vec::new());
+        let (mut workers, mut hands, mut crew) = (Vec::new(), Vec::new(), Vec::new());
         for session in SessionRepo::live(&db)? {
             match session.kind {
-                CrewKind::Worker | CrewKind::Hand => builders.push(cog(session)?),
+                CrewKind::Worker => workers.push(cog(session)?),
+                CrewKind::Hand => hands.push(cog(session)?),
                 CrewKind::Captain | CrewKind::Lookout => crew.push(cog(session)?),
                 CrewKind::Sailor => {} // a sailor shows with its ship, in `landing`
             }
         }
-        let building: HashSet<&TicketKey> = builders.iter().filter_map(|c| c.session.ticket.as_ref()).collect();
+        let building: HashSet<&TicketKey> = workers.iter().chain(&hands).filter_map(|c| c.session.ticket.as_ref()).collect();
 
         let board = TicketRepo::board(&db)?;
         let tickets: HashMap<&str, &Ticket> = board.iter().map(|t| (t.key.0.as_str(), t)).collect();
@@ -279,7 +281,8 @@ impl Fleet {
             ledger_path: ledger_path.to_path_buf(),
             load_error: None,
             dispatched,
-            builders,
+            workers,
+            hands,
             landing,
             crew,
             board,

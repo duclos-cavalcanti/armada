@@ -73,6 +73,7 @@ impl TabId {
 pub enum Pane {
     Dispatched,
     Impl,
+    Hands,
     Merge,
     Ships,
     Tickets,
@@ -82,13 +83,13 @@ pub enum Pane {
 }
 
 impl Pane {
-    const COUNT: usize = 8;
+    const COUNT: usize = 9;
     /// The coordinate the action handler keys on: `tab/pane`, or the bare pane name for a pane
     /// shown on several tabs.
     fn coordinate(self) -> &'static str {
         match self {
             Pane::Dispatched => "fleet/dispatched",
-            Pane::Impl => "fleet/impl",
+            Pane::Impl | Pane::Hands => "fleet/impl", // one row shape: a builder
             Pane::Merge => "fleet/merge",
             Pane::Ships => "ships/list",
             Pane::Tickets => "board/tickets",
@@ -97,9 +98,18 @@ impl Pane {
             Pane::Log => "log/fleetd",
         }
     }
+    /// The pane sharing this one's slot — one shows at a time, `h`/`l` swap them.
+    fn alternate(self) -> Option<Pane> {
+        match self {
+            Pane::Impl => Some(Pane::Hands),
+            Pane::Hands => Some(Pane::Impl),
+            _ => None,
+        }
+    }
 }
 
-/// What a yank captures: the focused pane's interior (`y`) or the whole page (`Y`).
+/// What a yank captures: every row of the focused pane, scrolled out of view or not (`y`), or the
+/// page as drawn (`Y`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum YankScope {
     Pane,
@@ -112,15 +122,15 @@ pub struct App {
     focus: [Pane; 4],
     /// The row cursor of each pane (indexed by `Pane`).
     cursors: [usize; Pane::COUNT],
-    /// The focused pane's rect, recorded on every draw so `y` can yank its region.
-    pub focused_area: std::cell::Cell<Option<ratatui::layout::Rect>>,
+    /// The slots showing their alternate pane (indexed by the slot's `Pane`).
+    swapped: [bool; Pane::COUNT],
     /// Transient footer notice (e.g. yank feedback); shown for ~3s.
     pub flash: Option<(String, Instant)>,
     /// The last action that failed (the handler's stderr); shown in red for ~5s.
     pub error: Option<(String, Instant)>,
     /// Where the action handler's failures arrive from its background thread.
     errors: (std::sync::mpsc::Sender<String>, std::sync::mpsc::Receiver<String>),
-    /// Set by `y`/`Y`; the run loop captures the region on the next draw.
+    /// Set by `y`/`Y`; the run loop captures it on the next draw.
     pub yank_requested: Option<YankScope>,
     /// Zoom: the focused pane fills the body; `space` toggles it.
     pub zoomed: bool,
@@ -136,7 +146,7 @@ impl App {
             tab: TabId::Fleet,
             focus: TabId::all().map(|t| t.panes()[0]),
             cursors: [0; Pane::COUNT],
-            focused_area: std::cell::Cell::new(None),
+            swapped: [false; Pane::COUNT],
             flash: None,
             error: None,
             errors: std::sync::mpsc::channel(),
@@ -151,7 +161,15 @@ impl App {
 
     /// The focused pane on the current tab.
     pub fn pane(&self) -> Pane {
-        self.focus[self.tab as usize]
+        self.shown(self.focus[self.tab as usize])
+    }
+
+    /// The pane a tab's slot shows: the slot's own, or its alternate once swapped.
+    pub fn shown(&self, slot: Pane) -> Pane {
+        match slot.alternate() {
+            Some(alt) if self.swapped[slot as usize] => alt,
+            _ => slot,
+        }
     }
 
     pub fn cursor(&self, pane: Pane) -> usize {
@@ -162,7 +180,8 @@ impl App {
         let f = &self.fleet;
         match pane {
             Pane::Dispatched => f.dispatched.len(),
-            Pane::Impl => f.builders.len(),
+            Pane::Impl => f.workers.len(),
+            Pane::Hands => f.hands.len(),
             Pane::Merge => f.landing.len(),
             Pane::Ships => f.armada.len(),
             Pane::Tickets => f.board.len(),
@@ -194,7 +213,7 @@ impl App {
                 let crew = if o.order.auto_impl { "worker" } else { "hand" };
                 vec![o.order.ticket.0.clone(), crew.into()]
             }),
-            Pane::Impl => f.builders.get(i).map(|c| {
+            Pane::Impl | Pane::Hands => (if pane == Pane::Impl { &f.workers } else { &f.hands }).get(i).map(|c| {
                 let iid = f.ship_of(c.session.ticket.as_ref()).map(|s| s.ship.iid.to_string());
                 vec![
                     key(c.session.ticket.as_ref()),
@@ -257,7 +276,7 @@ impl App {
     /// Move focus to the next (`+1`) / previous (`-1`) pane on the current tab, wrapping.
     fn step_pane(&mut self, delta: isize) {
         let panes = self.tab.panes();
-        let at = panes.iter().position(|p| *p == self.pane()).unwrap_or(0) as isize;
+        let at = panes.iter().position(|p| *p == self.focus[self.tab as usize]).unwrap_or(0) as isize;
         self.focus[self.tab as usize] = panes[(at + delta).rem_euclid(panes.len() as isize) as usize];
     }
 
@@ -314,6 +333,11 @@ impl App {
             }
             KeyCode::Char(c @ '1'..='5') => {
                 self.focus_nth_pane(c as usize - '1' as usize);
+                return;
+            }
+            KeyCode::Char('h' | 'l') if self.focus[self.tab as usize].alternate().is_some() => {
+                let slot = self.focus[self.tab as usize];
+                self.swapped[slot as usize] ^= true;
                 return;
             }
             KeyCode::Char('j') => {
@@ -381,26 +405,11 @@ fn main() -> Result<()> {
     result
 }
 
-/// Serialize a rect of a rendered frame buffer to plain text — WYSIWYG. The
-/// `margin`-cell border is trimmed; trailing blank lines dropped.
-fn region_text(
-    buf: &ratatui::buffer::Buffer,
-    area: ratatui::layout::Rect,
-    margin: u16,
-) -> (usize, String) {
-    let inner = area.inner(ratatui::layout::Margin { horizontal: margin, vertical: margin });
-    let mut lines: Vec<String> = Vec::new();
-    for y in inner.top()..inner.bottom() {
-        let mut line = String::new();
-        for x in inner.left()..inner.right() {
-            line.push_str(buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "));
-        }
-        lines.push(line.trim_end().to_string());
-    }
-    while lines.last().is_some_and(|l| l.is_empty()) {
-        lines.pop();
-    }
-    (lines.len(), lines.join("\n") + "\n")
+/// Serialize a rect of a rendered frame buffer to plain text — WYSIWYG.
+fn region_text(buf: &ratatui::buffer::Buffer, area: ratatui::layout::Rect) -> (usize, String) {
+    let lines = (area.top()..area.bottom())
+        .map(|y| (area.left()..area.right()).map(|x| buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" ")).collect::<String>());
+    ui::plain(lines)
 }
 
 /// Pipe text to the macOS clipboard.
@@ -421,27 +430,18 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, project: wire
         // terminal's buffers on return, so the frame buffer is the only place the
         // rendered cells exist.
         let yank = std::mem::take(&mut app.yank_requested);
-        let mut yanked: Option<(usize, String)> = None;
+        let mut yanked: Option<(usize, String)> = (yank == Some(YankScope::Pane)).then(|| ui::pane_text(&app));
         terminal.draw(|f| {
             ui::render(f, &app);
-            match yank {
-                Some(YankScope::Pane) => {
-                    yanked = app.focused_area.get().map(|area| region_text(f.buffer_mut(), area, 1));
-                }
-                Some(YankScope::Page) => {
-                    let area = f.area();
-                    yanked = Some(region_text(f.buffer_mut(), area, 0));
-                }
-                None => {}
+            if yank == Some(YankScope::Page) {
+                let area = f.area();
+                yanked = Some(region_text(f.buffer_mut(), area));
             }
         })?;
-        if yank.is_some() {
-            app.flash = Some(match yanked {
-                Some((n, text)) => match pbcopy(&text) {
-                    Ok(()) => (format!("⎘ yanked {} lines", n), Instant::now()),
-                    Err(e) => (format!("yank failed: {}", e), Instant::now()),
-                },
-                None => ("yank: no focused pane".into(), Instant::now()),
+        if let Some((n, text)) = yanked {
+            app.flash = Some(match pbcopy(&text) {
+                Ok(()) => (format!("⎘ yanked {} lines", n), Instant::now()),
+                Err(e) => (format!("yank failed: {}", e), Instant::now()),
             });
         }
 
