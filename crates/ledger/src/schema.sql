@@ -134,6 +134,7 @@ CREATE TABLE IF NOT EXISTS ship_snapshots (
     has_conflicts      INTEGER NOT NULL,               -- 0/1
     open_threads       INTEGER NOT NULL,               -- unresolved review threads (merge-blocking)
     total_threads      INTEGER NOT NULL DEFAULT 0,     -- every review thread, resolved or not
+    blocked_by_json    TEXT    NOT NULL DEFAULT '[]',  -- MR iids declared as blocking it, not merged; JSON
     approvals_current  INTEGER NOT NULL,
     approvals_required INTEGER NOT NULL,
     armed              INTEGER NOT NULL,               -- 0/1

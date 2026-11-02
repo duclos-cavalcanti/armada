@@ -2,10 +2,10 @@
 //! holds the auth + the platform lore). Fetches open MRs (the armada) and maps them
 //! to `ForgeShip`.
 //!
-//! The armada LIST is cheap (core facts only); the single-MR `snapshot` is ENRICHED
-//! — it adds `pipeline` (from the MR detail), the exact `open_threads` (the discussions, as
-//! `review_state` counts them) and `approvals` (a separate endpoint). `armed` is on both (`merge_when_pipeline_succeeds`); `on_merge_train`
-//! stays defaulted (a separate endpoint, never needed at decision time).
+//! Reads go through ONE GraphQL query (`MR_FIELDS`): the armada is every open MR exact — pipeline,
+//! approvals, open/total threads, auto-merge, merge train, declared blocks — in a call or two, where
+//! REST took three or four calls per MR. A single MR (`snapshot`) is the same query by iid. Writes
+//! and the review surface stay REST.
 
 use anyhow::{anyhow, ensure, Context, Result};
 use domain::ports::Forge;
@@ -53,12 +53,35 @@ impl GlabForge {
     }
 
     /// The approvals summary (a separate endpoint from the MR body).
-    fn approvals(&self, iid: i64) -> Result<Approvals> {
-        let json = self.api(&format!("projects/{}/merge_requests/{iid}/approvals", self.project))?;
-        let v: serde_json::Value = serde_json::from_str(&json)?;
-        let i = |k: &str| v.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
-        let (required, left) = (i("approvals_required"), i("approvals_left"));
-        Ok(Approvals { current: (required - left).max(0), required })
+    /// The project's MRs matching `filter` (GraphQL `mergeRequests` arguments, the page size
+    /// included), every page, each exact. GitLab caps a query's complexity, which grows with the
+    /// page size: one MR by iid asks for a page of one.
+    fn query_mrs(&self, filter: &str) -> Result<Vec<ForgeShip>> {
+        let (mut ships, mut after) = (Vec::new(), String::new());
+        loop {
+            let query = format!(
+                r#"{{ projects(ids: ["gid://gitlab/Project/{}"]) {{ nodes {{ mergeRequests({filter}{after}) {{
+                     pageInfo {{ hasNextPage endCursor }} nodes {{ {MR_FIELDS} }} }} }} }} }}"#,
+                self.project
+            );
+            let out = Command::new("glab").args(["api", "graphql", "-f", &format!("query={query}")]).output()?;
+            ensure!(out.status.success(), "glab api graphql (MRs) failed: {}", crate::preflight::one_line(&out.stderr));
+            let v: serde_json::Value = serde_json::from_slice(&out.stdout)?;
+            if let Some(errors) = v.get("errors") {
+                anyhow::bail!("glab api graphql (MRs): {errors}");
+            }
+            let mrs = v
+                .pointer("/data/projects/nodes/0/mergeRequests")
+                .ok_or_else(|| anyhow!("glab api graphql: no project {}", self.project))?;
+            let nodes = mrs.get("nodes").and_then(|n| n.as_array()).into_iter().flatten();
+            ships.extend(nodes.filter_map(|n| gql_to_ship(n, &self.ticket_prefix)));
+            match mrs.pointer("/pageInfo/endCursor").and_then(|c| c.as_str()) {
+                Some(cursor) if mrs.pointer("/pageInfo/hasNextPage").and_then(|h| h.as_bool()) == Some(true) => {
+                    after = format!(r#", after: "{cursor}""#);
+                }
+                _ => return Ok(ships),
+            }
+        }
     }
 
     /// The MR's latest pipeline: (id, status).
@@ -132,22 +155,16 @@ impl Forge for GlabForge {
         true // MR dependencies via /blocks
     }
 
+    fn armada_is_exact(&self) -> bool {
+        true // one GraphQL query carries every field
+    }
+
     fn armada(&self) -> Result<Vec<ForgeShip>> {
-        let json = self.api(&format!(
-            "projects/{}/merge_requests?state=opened&per_page=100",
-            self.project
-        ))?;
-        parse_glab_mrs(&json, &self.ticket_prefix)
+        self.query_mrs("state: opened, first: 100")
     }
 
     fn snapshot(&self, iid: i64) -> Result<ForgeShip> {
-        let json = self.api(&format!("projects/{}/merge_requests/{iid}", self.project))?;
-        let v: serde_json::Value = serde_json::from_str(&json)?;
-        let mut ship = mr_to_ship(&v, &self.ticket_prefix).context("could not map MR JSON to a ship")?;
-        ship.approvals = self.approvals(iid)?; // separate endpoint, not on the MR body
-        let review = self.review_state(iid)?; // exact, not the list's 0/1
-        (ship.open_threads, ship.total_threads) = (review.open_threads, review.total_threads);
-        Ok(ship)
+        self.query_mrs(&format!(r#"iids: ["{iid}"], first: 1"#))?.pop().ok_or_else(|| anyhow!("no MR !{iid}"))
     }
 
     fn review_state(&self, iid: i64) -> Result<ReviewState> {
@@ -455,54 +472,50 @@ fn is_armed(mr: &serde_json::Value) -> bool {
     mr.get("merge_when_pipeline_succeeds").and_then(|x| x.as_bool()).unwrap_or(false)
 }
 
-fn parse_glab_mrs(json: &str, prefix: &str) -> Result<Vec<ForgeShip>> {
-    let v: serde_json::Value = serde_json::from_str(json)?;
-    let arr = v.as_array().context("expected a JSON array of MRs from glab")?;
-    Ok(arr.iter().filter_map(|m| mr_to_ship(m, prefix)).collect())
-}
+/// What the fleet reads of an MR, as GraphQL selects it. `resolvable - resolved` discussions is the
+/// open-thread count (resolvable, unresolved, non-system), matching `count_open_threads` on REST.
+const MR_FIELDS: &str = "iid title webUrl sourceBranch targetBranch state draft author { username } diffHeadSha \
+    conflicts detailedMergeStatus autoMergeEnabled mergeTrainCar { id } approvalsRequired approvalsLeft \
+    resolvableDiscussionsCount resolvedDiscussionsCount headPipeline { status } \
+    blockingMergeRequests { visibleMergeRequests { iid state } }";
 
-fn mr_to_ship(m: &serde_json::Value, prefix: &str) -> Option<ForgeShip> {
-    let iid = m.get("iid")?.as_i64()?;
+/// One GraphQL MR node (`MR_FIELDS`) → a ship. GraphQL's enums are upper-case (`OPENED`,
+/// `CI_MUST_PASS`, `SUCCESS`); the fleet keeps REST's lower-case vocabulary.
+fn gql_to_ship(m: &serde_json::Value, prefix: &str) -> Option<ForgeShip> {
+    let iid = m.get("iid")?.as_str()?.parse().ok()?;
     let s = |k: &str| m.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let title = s("title");
-    let source = m.get("source_branch").and_then(|v| v.as_str()).unwrap_or("");
-    let draft = m.get("draft").and_then(|v| v.as_bool()).unwrap_or(false);
-    let gl_state = m.get("state").and_then(|v| v.as_str()).unwrap_or("opened");
-    let pilot = m
-        .get("author")
-        .and_then(|a| a.get("username"))
-        .and_then(|u| u.as_str())
-        .unwrap_or("")
-        .to_string();
+    let lower = |p: &str| m.pointer(p).and_then(|v| v.as_str()).map(str::to_lowercase);
+    let i = |k: &str| m.get(k).and_then(|v| v.as_i64()).unwrap_or(0);
+    let b = |k: &str| m.get(k).and_then(|v| v.as_bool()).unwrap_or(false);
+    let (title, source) = (s("title"), s("sourceBranch"));
+    let required = i("approvalsRequired");
+    let blocked_by = m
+        .pointer("/blockingMergeRequests/visibleMergeRequests")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|p| p.get("state").and_then(|s| s.as_str()) != Some("merged"))
+        .filter_map(|p| p.get("iid")?.as_str()?.parse().ok())
+        .collect();
     Some(ForgeShip {
         iid,
-        url: s("web_url"),
-        target: m.get("target_branch").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        source: source.to_string(),
-        pilot,
-        ticket: TicketKey::find_in(source, prefix).or_else(|| TicketKey::find_in(&title, prefix)),
+        url: s("webUrl"),
+        target: s("targetBranch"),
+        ticket: TicketKey::find_in(&source, prefix).or_else(|| TicketKey::find_in(&title, prefix)),
+        source,
+        pilot: m.pointer("/author/username").and_then(|u| u.as_str()).unwrap_or("").to_string(),
         title,
-        state: ship_state(gl_state, draft),
-        head_sha: s("sha"),
-        has_conflicts: m.get("has_conflicts").and_then(|v| v.as_bool()).unwrap_or(false),
-        // Present only on the single-MR DETAIL (absent on the list → these default):
-        pipeline: m
-            .get("head_pipeline")
-            .and_then(|p| p.get("status"))
-            .and_then(|s| s.as_str())
-            .and_then(pipeline_status),
-        // coarse: blocking threads unresolved → 1, else 0 (`snapshot` counts them exactly).
-        open_threads: match m.get("blocking_discussions_resolved").and_then(|v| v.as_bool()) {
-            Some(false) => 1,
-            _ => 0,
-        },
-        total_threads: 0, // `snapshot` counts them
-        // GitLab's authoritative merge-readiness — the sailor's land-decision signal.
-        merge_status: m.get("detailed_merge_status").and_then(|v| v.as_str()).map(String::from),
-        // `approvals` filled by `snapshot` (separate endpoint).
-        approvals: Approvals { current: 0, required: 0 },
-        armed: is_armed(m),
-        on_merge_train: false,
+        state: ship_state(&lower("/state").unwrap_or_default(), b("draft")),
+        head_sha: s("diffHeadSha"),
+        has_conflicts: b("conflicts"),
+        pipeline: lower("/headPipeline/status").as_deref().and_then(pipeline_status),
+        open_threads: (i("resolvableDiscussionsCount") - i("resolvedDiscussionsCount")).max(0),
+        total_threads: i("resolvableDiscussionsCount"),
+        merge_status: lower("/detailedMergeStatus"),
+        approvals: Approvals { current: (required - i("approvalsLeft")).max(0), required },
+        armed: b("autoMergeEnabled"),
+        on_merge_train: m.get("mergeTrainCar").is_some_and(|c| !c.is_null()),
+        blocked_by,
     })
 }
 
@@ -547,16 +560,25 @@ fn ship_state(gitlab_state: &str, draft: bool) -> ShipState {
 mod tests {
     use super::*;
 
-    // Real glab field shape (trimmed), from the live API.
-    const SAMPLE: &str = r#"[
-      {"iid":2331,"title":"PROJ-6187: Remove reliance","source_branch":"feature/PROJ-6187-remove",
-       "target_branch":"master","web_url":"https://x/2331","draft":false,"state":"opened",
-       "sha":"61b2a8","detailed_merge_status":"ci_must_pass","has_conflicts":false,
-       "merge_when_pipeline_succeeds":true,"author":{"username":"Jack.Shannon"}},
-      {"iid":2300,"title":"chore: no ticket here","source_branch":"chore/cleanup",
-       "target_branch":"master","web_url":"https://x/2300","draft":true,"state":"opened",
-       "sha":"abc","has_conflicts":true,"author":{"username":"me"}}
+    // A GraphQL `mergeRequests` node shape (trimmed), from the live API.
+    const NODES: &str = r#"[
+      {"iid":"2331","title":"PROJ-6187: Remove reliance","webUrl":"https://x/2331","sourceBranch":"feature/PROJ-6187-remove",
+       "targetBranch":"master","state":"opened","draft":false,"author":{"username":"Jack.Shannon"},"diffHeadSha":"61b2a8",
+       "conflicts":false,"detailedMergeStatus":"CI_MUST_PASS","autoMergeEnabled":true,"mergeTrainCar":null,
+       "approvalsRequired":1,"approvalsLeft":0,"resolvableDiscussionsCount":5,"resolvedDiscussionsCount":3,
+       "headPipeline":{"status":"SUCCESS"},
+       "blockingMergeRequests":{"visibleMergeRequests":[{"iid":"2330","state":"opened"},{"iid":"2200","state":"merged"},{"iid":"2201","state":"closed"}]}},
+      {"iid":"2300","title":"chore: no ticket here","webUrl":"https://x/2300","sourceBranch":"chore/cleanup",
+       "targetBranch":"master","state":"opened","draft":true,"author":{"username":"me"},"diffHeadSha":"abc",
+       "conflicts":true,"detailedMergeStatus":"DRAFT_STATUS","autoMergeEnabled":false,"mergeTrainCar":{"id":"gid://x/1"},
+       "approvalsRequired":2,"approvalsLeft":2,"resolvableDiscussionsCount":0,"resolvedDiscussionsCount":0,
+       "headPipeline":null,"blockingMergeRequests":{"visibleMergeRequests":[]}}
     ]"#;
+
+    fn ships(prefix: &str) -> Vec<ForgeShip> {
+        let v: serde_json::Value = serde_json::from_str(NODES).unwrap();
+        v.as_array().unwrap().iter().filter_map(|n| gql_to_ship(n, prefix)).collect()
+    }
 
     #[test]
     fn read_blocks_splits_closed_blockers_from_live_ones() {
@@ -570,32 +592,45 @@ mod tests {
     }
 
     #[test]
-    fn parses_core_fields() {
-        let ships = parse_glab_mrs(SAMPLE, "PROJ").unwrap();
-        assert_eq!(ships.len(), 2);
-
+    fn maps_a_graphql_node_exact() {
+        let ships = ships("PROJ");
         let a = &ships[0];
-        assert_eq!(a.iid, 2331);
-        assert_eq!(a.ticket, Some(TicketKey("PROJ-6187".into())));
-        assert_eq!(a.pilot, "Jack.Shannon");
-        assert_eq!(a.target, "master");
-        assert_eq!(a.state, ShipState::Open);
-        assert_eq!(a.head_sha, "61b2a8");
-        assert!(!a.has_conflicts);
-        assert_eq!(a.merge_status.as_deref(), Some("ci_must_pass")); // detailed_merge_status captured
-        assert!(a.armed); // merge_when_pipeline_succeeds
+        assert_eq!((a.iid, a.ticket.clone(), a.pilot.as_str()), (2331, Some(TicketKey("PROJ-6187".into())), "Jack.Shannon"));
+        assert_eq!((a.state, a.head_sha.as_str(), a.has_conflicts), (ShipState::Open, "61b2a8", false));
+        assert_eq!(a.merge_status.as_deref(), Some("ci_must_pass"), "upper-case enum → REST's vocabulary");
+        assert_eq!(a.pipeline, Some(PipelineStatus::Success));
+        assert_eq!((a.open_threads, a.total_threads), (2, 5), "resolvable − resolved are open");
+        assert_eq!(a.approvals, Approvals { current: 1, required: 1 });
+        assert!(a.armed && !a.on_merge_train);
+        assert_eq!(a.blocked_by, vec![2330, 2201], "a merged blocker is settled; a closed one still needs dropping");
 
         let b = &ships[1];
-        assert_eq!(b.ticket, None); // no ticket key in branch/title
-        assert_eq!(b.state, ShipState::Draft); // draft=true
-        assert!(b.has_conflicts);
-        assert!(!b.armed); // absent → not armed
+        assert_eq!((b.ticket.clone(), b.state, b.pipeline), (None, ShipState::Draft, None));
+        assert!(b.has_conflicts && !b.armed && b.on_merge_train);
+        assert_eq!(b.approvals, Approvals { current: 0, required: 2 });
+    }
+
+    /// Live read against a real project: `FLEET_GL_SMOKE=<project id> FLEET_GL_PREFIX=<KEY> cargo test
+    /// -p fleetd smoke_reads_the_live_project -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn smoke_reads_the_live_project() {
+        let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{k} unset"));
+        let f = GlabForge::new(env("FLEET_GL_SMOKE"), env("FLEET_GL_PREFIX"));
+        let ships = f.armada().unwrap();
+        for s in &ships {
+            println!("!{} {:?} {:?} pipeline={:?} merge={:?} threads={}/{} appr={}/{} armed={} blocked_by={:?}",
+                s.iid, s.ticket, s.state, s.pipeline, s.merge_status, s.open_threads, s.total_threads,
+                s.approvals.current, s.approvals.required, s.armed, s.blocked_by);
+        }
+        let first = ships.first().expect("an open MR");
+        assert_eq!(&f.snapshot(first.iid).unwrap(), first, "one MR by iid reads the same");
     }
 
     #[test]
     fn tickets_link_only_by_the_configured_prefix() {
         // Same MRs, another tracker's prefix: nothing links (no cross-project false matches).
-        assert!(parse_glab_mrs(SAMPLE, "OTHER").unwrap().iter().all(|s| s.ticket.is_none()));
+        assert!(ships("OTHER").iter().all(|s| s.ticket.is_none()));
     }
 
     #[test]
@@ -662,21 +697,5 @@ mod tests {
         assert_eq!(floating[0].id, 4);
         assert_eq!(floating[0].author.as_deref(), Some("rev"));
         assert_eq!(floating[0].body, "HOLD: must-fix");
-    }
-
-    #[test]
-    fn detail_enriches_pipeline_and_threads() {
-        // The single-MR detail carries head_pipeline + blocking_discussions_resolved.
-        let detail = r#"{"iid":2338,"title":"PROJ-6164: x","source_branch":"chore/PROJ-6164-y",
-          "target_branch":"master","web_url":"https://x/2338","draft":false,"state":"opened",
-          "sha":"0e31","has_conflicts":false,"author":{"username":"me"},
-          "head_pipeline":{"status":"success"},"blocking_discussions_resolved":false}"#;
-        let v: serde_json::Value = serde_json::from_str(detail).unwrap();
-        let ship = mr_to_ship(&v, "PROJ").unwrap();
-        assert_eq!(ship.pipeline, Some(PipelineStatus::Success));
-        assert_eq!(ship.open_threads, 1); // unresolved blocking threads
-
-        // The list shape (no pipeline/threads) still defaults cleanly.
-        assert_eq!(parse_glab_mrs(SAMPLE, "PROJ").unwrap()[0].pipeline, None);
     }
 }

@@ -949,6 +949,10 @@ mod tests {
         fn stacks(&self) -> bool {
             true
         }
+
+        fn armada_is_exact(&self) -> bool {
+            false
+        }
         fn armada(&self) -> Result<Vec<ForgeShip>> {
             Ok(vec![])
         }
@@ -970,6 +974,7 @@ mod tests {
                 approvals: Approvals { current: 0, required: 0 },
                 armed: true,
                 on_merge_train: false,
+                blocked_by: vec![],
                 pipeline: None,
                 merge_status: None,
             })
@@ -1899,6 +1904,7 @@ mod tests {
             approvals: Approvals { current: 0, required: 0 },
             armed: false,
             on_merge_train: false,
+            blocked_by: vec![],
             pipeline: None,
             merge_status: None,
             synced_at: "t".into(),

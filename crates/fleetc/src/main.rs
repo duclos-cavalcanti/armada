@@ -1448,7 +1448,7 @@ mod tests {
         let (p, root) = project("older");
         let export = root.join("snapshot.db");
         ledger::snapshot(&p.ledger(), &export.to_string_lossy()).unwrap();
-        let v1 = "ALTER TABLE ship_snapshots DROP COLUMN total_threads; PRAGMA user_version = 1;";
+        let v1 = "ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; PRAGMA user_version = 1;";
         assert!(std::process::Command::new("sqlite3").arg(&export).arg(v1).status().unwrap().success());
 
         import_into(&p, &export).unwrap();

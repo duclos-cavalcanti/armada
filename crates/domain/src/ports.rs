@@ -167,6 +167,9 @@ pub trait Forge {
     /// Can this forge stack MRs — declare one MR blocked by another (`sync_blocks`)? When false the
     /// fleet never dispatches a stacked child: it waits for its parent to merge instead.
     fn stacks(&self) -> bool;
+    /// Does `armada` already carry each MR exact (threads, approvals, pipeline, blocks)? When false,
+    /// sync re-reads ours one by one with `snapshot`.
+    fn armada_is_exact(&self) -> bool;
     /// Every open MR (ours + allies = the armada), each as a `ForgeShip` DTO.
     fn armada(&self) -> Result<Vec<ForgeShip>>;
     fn snapshot(&self, iid: i64) -> Result<ForgeShip>;

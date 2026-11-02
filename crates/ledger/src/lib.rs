@@ -133,6 +133,8 @@ fn init(conn: &Connection) -> Result<()> {
 const MIGRATIONS: &[&str] = &[
     // v2: an MR's total review threads, beside its open ones.
     "ALTER TABLE ship_snapshots ADD COLUMN total_threads INTEGER NOT NULL DEFAULT 0;",
+    // v3: the MRs declared as blocking it, so reconcile asks the forge only when they drift.
+    "ALTER TABLE ship_snapshots ADD COLUMN blocked_by_json TEXT NOT NULL DEFAULT '[]';",
 ];
 
 /// The ledger's schema version (SQLite `user_version`): one past its last migration.
@@ -574,7 +576,7 @@ mod tests {
         let path = dir.join("ledger.db").to_string_lossy().into_owned();
         drop(Ledger::open(&path).unwrap());
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch("ALTER TABLE ship_snapshots DROP COLUMN total_threads; PRAGMA user_version = 1;").unwrap();
+        conn.execute_batch("ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; PRAGMA user_version = 1;").unwrap();
         drop(conn);
 
         drop(Ledger::open(&path).unwrap());
@@ -991,6 +993,10 @@ fn row_to_snapshot(r: &rusqlite::Row) -> rusqlite::Result<ShipSnapshot> {
         armed: r.get::<_, i64>("armed")? != 0,
         on_merge_train: r.get::<_, i64>("on_merge_train")? != 0,
         pipeline,
+        blocked_by: {
+            let json: String = r.get("blocked_by_json")?;
+            serde_json::from_str(&json).map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?
+        },
         merge_status: r.get("merge_status")?,
         synced_at: r.get("synced_at")?,
     })
@@ -1047,18 +1053,20 @@ impl ShipRepo for Ledger {
     fn sync_snapshot(&self, s: &ShipSnapshot) -> Result<()> {
         self.conn.execute(
             "INSERT INTO ship_snapshots(ship_id, title, state, head_sha, has_conflicts, open_threads, total_threads,
-                 approvals_current, approvals_required, armed, on_merge_train, pipeline, merge_status, synced_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                 approvals_current, approvals_required, armed, on_merge_train, pipeline, merge_status, synced_at,
+                 blocked_by_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT(ship_id) DO UPDATE SET
                title=excluded.title, state=excluded.state, head_sha=excluded.head_sha,
                has_conflicts=excluded.has_conflicts, open_threads=excluded.open_threads, total_threads=excluded.total_threads,
                approvals_current=excluded.approvals_current, approvals_required=excluded.approvals_required,
                armed=excluded.armed, on_merge_train=excluded.on_merge_train, pipeline=excluded.pipeline,
-               merge_status=excluded.merge_status, synced_at=excluded.synced_at",
+               merge_status=excluded.merge_status, synced_at=excluded.synced_at, blocked_by_json=excluded.blocked_by_json",
             params![
                 s.ship.0, s.title, s.state.as_str(), s.head_sha, s.has_conflicts as i64,
                 s.open_threads, s.total_threads, s.approvals.current, s.approvals.required, s.armed as i64,
                 s.on_merge_train as i64, s.pipeline.map(|p| p.as_str()), s.merge_status, s.synced_at,
+                serde_json::to_string(&s.blocked_by)?,
             ],
         )?;
         Ok(())
@@ -1596,6 +1604,7 @@ mod repo_tests {
             approvals: Approvals { current: 0, required: 1 },
             armed: false,
             on_merge_train: false,
+            blocked_by: vec![],
             pipeline: Some(PipelineStatus::Failed),
             merge_status: None,
             synced_at: "t".into(),

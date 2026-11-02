@@ -107,6 +107,10 @@ impl Forge for GhForge {
         false // no MR dependencies on GitHub
     }
 
+    fn armada_is_exact(&self) -> bool {
+        false // the PR list lacks threads: sync reads ours one by one
+    }
+
     fn armada(&self) -> Result<Vec<ForgeShip>> {
         let json = self.gh(&["pr", "list", "--state", "open", "--limit", "100", "--json", FIELDS])?;
         let prs: Vec<Value> = serde_json::from_str(&json)?;
@@ -294,6 +298,7 @@ fn pr_to_ship(p: &Value, prefix: &str) -> Option<ForgeShip> {
         approvals: approvals(s("reviewDecision"), approved),
         armed: p.get("autoMergeRequest").is_some_and(|a| !a.is_null()),
         on_merge_train: false,
+        blocked_by: vec![],
         merge_status: merge_status(s("mergeStateStatus"), s("reviewDecision"), pipeline),
         pipeline,
     })

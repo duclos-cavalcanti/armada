@@ -356,10 +356,24 @@ pub(crate) fn wanted_blocks(ledger: &Ledger) -> Result<Vec<(i64, Vec<i64>)>> {
 }
 
 /// Keep our MRs' dependencies in step with the ticket graph (`wanted_blocks`) through the forge.
-/// Not a planned action: only the forge knows what's declared, so this asks it each tick and is
-/// quiet when nothing changed. Best-effort per MR — a failure retries next tick.
+/// Not a planned action. The last sync's snapshot says what's declared, so the forge is asked only
+/// for an MR whose declared blocks drifted from the wanted ones (a missing parent, or a dropped
+/// edge or closed blocker to remove). Best-effort per MR — a failure retries next tick.
 fn tend_blocks<F: Forge + ?Sized>(ledger: &Ledger, forge: &F) -> Result<()> {
+    let armada = ledger.armada()?;
     for (child, parents) in wanted_blocks(ledger)? {
+        let declared = match armada.iter().find(|s| s.iid == child) {
+            Some(ship) => ShipRepo::snapshot(ledger, &ship.id)?.map(|s| s.blocked_by),
+            None => None,
+        };
+        if declared.is_some_and(|mut d| {
+            let mut p = parents.clone();
+            d.sort_unstable();
+            p.sort_unstable();
+            d == p
+        }) {
+            continue;
+        }
         match forge.sync_blocks(child, &parents) {
             Ok(0) => {}
             Ok(n) => tracing::info!("blocks of !{child}: {n} changed — now blocked by {parents:?}"),
@@ -988,6 +1002,7 @@ pub(crate) fn fresh_snapshot<F: Forge + ?Sized>(ledger: &Ledger, forge: &F, ship
                 approvals: fs.approvals,
                 armed: fs.armed,
                 on_merge_train: fs.on_merge_train,
+                blocked_by: fs.blocked_by,
                 pipeline: fs.pipeline,
                 merge_status: fs.merge_status,
                 synced_at: now_rfc3339(),
@@ -1304,6 +1319,7 @@ mod tests {
             approvals: Approvals { current: 0, required: 0 },
             armed: false,
             on_merge_train: false,
+            blocked_by: vec![],
             pipeline: None,
             merge_status: None,
             synced_at: "t".into(),
@@ -1349,6 +1365,7 @@ mod tests {
             approvals: Approvals { current: 0, required: 0 },
             armed: false,
             on_merge_train: false,
+            blocked_by: vec![],
             pipeline: None,
             merge_status: None,
             synced_at: "t".into(),
@@ -1827,6 +1844,10 @@ mod tests {
         }
         fn stacks(&self) -> bool {
             true
+        }
+
+        fn armada_is_exact(&self) -> bool {
+            false
         }
         fn armada(&self) -> Result<Vec<ForgeShip>> {
             Ok(vec![])
@@ -2324,6 +2345,7 @@ mod tests {
             approvals: Approvals { current: 0, required: 0 },
             armed: false,
             on_merge_train: false,
+            blocked_by: vec![],
             pipeline: Some(PipelineStatus::Failed),
             merge_status: None,
         });
@@ -2453,6 +2475,7 @@ mod tests {
             approvals: Approvals { current: 0, required: 0 },
             armed: false,
             on_merge_train: false,
+            blocked_by: vec![],
             pipeline: None,
             merge_status: None,
         });
@@ -2685,6 +2708,14 @@ mod tests {
         assert!(forge.blocks.borrow().is_empty(), "a dry run touches no forge");
         tick(&db, &tracker, &host, &forge, &[], "/project", false).unwrap();
         assert_eq!(*forge.blocks.borrow(), vec![(102, vec![101])]);
+
+        // Once the sync shows !101 declared, the forge isn't asked again.
+        let child = db.armada().unwrap().into_iter().find(|s| s.iid == 102).unwrap();
+        let mut snap = ShipRepo::snapshot(&db, &child.id).unwrap().unwrap();
+        snap.blocked_by = vec![101];
+        db.sync_snapshot(&snap).unwrap();
+        tick(&db, &tracker, &host, &forge, &[], "/project", false).unwrap();
+        assert_eq!(forge.blocks.borrow().len(), 1, "declared as wanted: no forge call");
     }
 
     // ── stand-down (the cold-cog session close) ──────────────────────────────────────

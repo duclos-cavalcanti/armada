@@ -359,6 +359,9 @@ pub struct ShipSnapshot {
     pub armed: bool,
     pub on_merge_train: bool,
     pub pipeline: Option<PipelineStatus>,
+    /// The MRs declared as blocking it that haven't merged (`sync_blocks` keeps them in step).
+    #[serde(default)]
+    pub blocked_by: Vec<i64>,
     /// GitLab's authoritative merge-readiness (`detailed_merge_status`): `mergeable`,
     /// `conflict`, `need_rebase`, `ci_must_pass`, `discussions_not_resolved`, `not_approved`, …
     /// An OPEN, GitLab-evolving vocabulary (unlike the closed `state`/`pipeline` sets), so it's a
@@ -400,6 +403,9 @@ pub struct ForgeShip {
     pub armed: bool,
     pub on_merge_train: bool,
     pub pipeline: Option<PipelineStatus>,
+    /// The MRs declared as blocking it that haven't merged (`sync_blocks` keeps them in step).
+    #[serde(default)]
+    pub blocked_by: Vec<i64>,
     /// GitLab's `detailed_merge_status` — the merge-readiness signal (see `ShipSnapshot::merge_status`).
     pub merge_status: Option<String>,
 }

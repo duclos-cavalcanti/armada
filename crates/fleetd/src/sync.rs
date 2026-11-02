@@ -89,9 +89,10 @@ pub fn sync_armada(ledger: &Ledger, forge: &dyn Forge, now: &str) -> Result<usiz
     let open: std::collections::HashSet<i64> = ships.iter().map(|s| s.iid).collect();
     for fs in ships {
         let linked = matches!(&fs.ticket, Some(k) if TicketRepo::get(ledger, k)?.is_some());
-        // Enrich OUR ships (linked to a tracked ticket) with pipeline/approvals/threads;
-        // allies keep the cheap list data. Best-effort — a failed enrich falls back.
-        let fs = if linked {
+        // Enrich OUR ships (linked to a tracked ticket) with pipeline/approvals/threads, unless the
+        // armada already carries them; allies keep the list data. Best-effort — a failed enrich
+        // falls back.
+        let fs = if linked && !forge.armada_is_exact() {
             match forge.snapshot(fs.iid) {
                 Ok(enriched) => enriched,
                 Err(e) => {
@@ -130,6 +131,7 @@ pub fn sync_armada(ledger: &Ledger, forge: &dyn Forge, now: &str) -> Result<usiz
             approvals: fs.approvals,
             armed: fs.armed,
             on_merge_train: fs.on_merge_train,
+            blocked_by: fs.blocked_by,
             pipeline: fs.pipeline,
             merge_status: fs.merge_status,
             synced_at: now.to_string(),
@@ -168,6 +170,7 @@ fn retire_departed(ledger: &Ledger, forge: &dyn Forge, open: &std::collections::
             approvals: fs.approvals,
             armed: fs.armed,
             on_merge_train: fs.on_merge_train,
+            blocked_by: fs.blocked_by,
             pipeline: fs.pipeline,
             merge_status: fs.merge_status,
             synced_at: now.to_string(),
@@ -187,14 +190,19 @@ mod tests {
     use super::*;
     use domain::*;
 
-    /// The open MRs (`.0`) plus ones only `snapshot` reaches (`.1`): merged or closed since.
-    struct FakeForge(Vec<ForgeShip>, Vec<ForgeShip>);
+    /// The open MRs (`.0`) plus ones only `snapshot` reaches (`.1`): merged or closed since. `.2`:
+    /// the armada is exact (no per-MR enrich).
+    struct FakeForge(Vec<ForgeShip>, Vec<ForgeShip>, bool);
     impl Forge for FakeForge {
         fn preflight(&self) -> Result<String> {
             Ok("fake".into())
         }
         fn stacks(&self) -> bool {
             true
+        }
+
+        fn armada_is_exact(&self) -> bool {
+            self.2
         }
         fn armada(&self) -> Result<Vec<ForgeShip>> {
             Ok(self.0.clone())
@@ -271,6 +279,7 @@ mod tests {
             approvals: Approvals { current: 0, required: 0 },
             armed: false,
             on_merge_train: false,
+            blocked_by: vec![],
             pipeline: None,
             merge_status: None,
         }
@@ -295,7 +304,7 @@ mod tests {
         )
         .unwrap();
 
-        let forge = FakeForge(vec![fs(1, Some("PROJ-1")), fs(2, Some("PROJ-999")), fs(3, None)], vec![]);
+        let forge = FakeForge(vec![fs(1, Some("PROJ-1")), fs(2, Some("PROJ-999")), fs(3, None)], vec![], false);
         let n = sync_armada(&db, &forge, "now").unwrap();
 
         assert_eq!(n, 3);
@@ -445,7 +454,7 @@ mod tests {
         let db = Ledger::in_memory().unwrap();
         let board = vec![tt("PROJ-1", TicketStatus::InQa), tt("PROJ-2", TicketStatus::InQa)];
         sync_board(&db, &FakeTracker(board, vec![]), "now").unwrap();
-        sync_armada(&db, &FakeForge(vec![fs(1, Some("PROJ-1")), fs(2, Some("PROJ-2")), fs(3, None)], vec![]), "now").unwrap();
+        sync_armada(&db, &FakeForge(vec![fs(1, Some("PROJ-1")), fs(2, Some("PROJ-2")), fs(3, None)], vec![], false), "now").unwrap();
         db.dispatch(&Order {
             ticket: TicketKey("PROJ-2".into()),
             auto_impl: true,
@@ -461,7 +470,7 @@ mod tests {
         closed.state = ShipState::Closed;
         let mut merged = fs(2, Some("PROJ-2"));
         merged.state = ShipState::Merged;
-        sync_armada(&db, &FakeForge(vec![], vec![closed, merged]), "later").unwrap();
+        sync_armada(&db, &FakeForge(vec![], vec![closed, merged], false), "later").unwrap();
 
         let open: Vec<i64> = db.armada().unwrap().iter().map(|s| s.iid).collect();
         assert_eq!(open, vec![2], "the closed one and the ally end; the merge waits for its reap");
@@ -470,12 +479,26 @@ mod tests {
     }
 
     #[test]
+    fn an_exact_armada_is_taken_as_is() {
+        // The forge's armada already carries each MR exact: ours isn't re-read one by one.
+        let db = Ledger::in_memory().unwrap();
+        sync_board(&db, &FakeTracker(vec![tt("PROJ-1", TicketStatus::InProgress)], vec![]), "now").unwrap();
+        let mut ours = fs(1, Some("PROJ-1"));
+        ours.blocked_by = vec![7];
+        sync_armada(&db, &FakeForge(vec![ours], vec![], true), "now").unwrap();
+        let id = ShipRepo::get_by_iid(&db, 1).unwrap().unwrap().id;
+        let snap = db.snapshot(&id).unwrap().unwrap();
+        assert_eq!(snap.approvals, Approvals { current: 0, required: 0 }, "not the snapshot's enrichment");
+        assert_eq!(snap.blocked_by, vec![7], "its declared blocks are kept");
+    }
+
+    #[test]
     fn board_then_armada_links_ship_tickets() {
         let db = Ledger::in_memory().unwrap();
         // board first → PROJ-1 exists
         sync_board(&db, &FakeTracker(vec![tt("PROJ-1", TicketStatus::InProgress)], vec![]), "now").unwrap();
         // then armada → the ship for PROJ-1 links its FK
-        sync_armada(&db, &FakeForge(vec![fs(1, Some("PROJ-1"))], vec![]), "now").unwrap();
+        sync_armada(&db, &FakeForge(vec![fs(1, Some("PROJ-1"))], vec![], false), "now").unwrap();
         assert_eq!(
             ShipRepo::get_by_iid(&db, 1).unwrap().unwrap().ticket,
             Some(TicketKey("PROJ-1".into()))
