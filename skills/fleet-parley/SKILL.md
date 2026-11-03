@@ -1,14 +1,15 @@
 ---
-description: Answer the open review threads on the ticket's MR — validate each finding, fix it your way or push back, reply, resolve — through `fleetc review` / `fleetc reply` (forge-neutral). Count-gated, and surfaces floating review notes before declaring the MR clean.
+description: Answer the open review threads on the ticket's MR — treat each finding as false until you prove it against the code, docs and a run, then fix it your way or push back with the evidence; defer nits to one follow-up ticket; reply, resolve — through `fleetc review` / `fleetc reply` (forge-neutral). Count-gated, and surfaces floating review notes before declaring the MR clean.
 argument-hint:
 ---
 
 # Skill: fleet-parley
 
-You are answering the reviewers on the ticket's MR. For each open thread: **validate the
-finding, then derive and apply the fix yourself**, or push back when it's wrong. Reply on
-the thread and resolve it: once you've answered, it's the reviewer's to re-open. The reviewer
-diagnoses; you own the correction.
+You are answering the reviewers on the ticket's MR. A review is a **claim, not a fact**: for
+each open thread, **prove the finding before you act on it**, then derive and apply the fix
+yourself, or push back with the evidence that it's wrong. Reply on the thread and resolve it:
+once you've answered, it's the reviewer's to re-open. The reviewer diagnoses; you verify, and
+own the correction.
 
 **Ends with** every addressable thread handled (exit 0, `OPEN=N REVIEW_NOTES=M` on
 stdout), or an escalation when a finding needs the operator (exit 1).
@@ -19,7 +20,7 @@ stdout), or an escalation when a finding needs the operator (exit 1).
 set -euo pipefail
 PACKET=$(fleetc packet)
 [ -n "$(printf '%s' "$PACKET" | jq -r '.ship.iid // empty')" ] || { echo "no open MR" >&2; exit 1; }
-# Gates nit deferral: at least one approval, and all that are required.
+# An approved MR raises the bar: at least one approval, and all that are required.
 APPROVED=$(printf '%s' "$PACKET" | jq '(.snapshot.approvals // {current: 0}) | .current > 0 and .current >= .required')
 echo "APPROVED=$APPROVED"
 REVIEW=$(fleetc review)   # your MR's: {open_threads, threads: [{id, path, line, author, body}], floating_notes}
@@ -40,51 +41,62 @@ read them, and never treat `OPEN=0` as "review complete" while one asks for chan
 The scope authority is the **ticket** (`fleetc ticket`): its acceptance
 criteria and its *Out of scope*.
 
-## Step 1 — Classify each thread
+## Step 1 — Prove each finding: false until proven
 
-Start strict, soften down: walk the categories in order; the first that clearly fires wins.
+Treat every finding as **false until you prove it** against the ground truth:
+
+- **the code** — at your HEAD and on `origin/HEAD`: read it, grep it, trace the path it names;
+- **the docs** — the project's design records, doctrine and specs on `origin/HEAD`;
+- **the ticket** (`fleetc ticket`) — its acceptance criteria and its *Out of scope*;
+- **a run** — where the claim is testable, a test or command you execute.
+
+Keep the evidence either way: `file:line`, the doc §, the command and what it printed.
+
+- **Proven** → classify it below.
+- **Disproven, or not proven** → **push back**: reply with what the code, the docs or the run
+  actually show, and resolve. Never apply a finding you couldn't prove; never push back
+  without evidence.
+
+Then classify each proven finding — the first that fires wins:
 
 1. **Escalate** — you can't answer it; the operator rules:
    - **Two reviewers conflict** on the same lines; both can't be satisfied.
    - **It would amend an acceptance criterion, a design decision, or an invariant**: that's
      the ticket author's call, not a patch.
-   **Push back** — you answer it with evidence (only on a clear match; a partial match
-   softens to 3):
-   - **A factual error or false diagnosis**: the code, a grep, or the project's doctrine
-     contradicts what the reviewer asserts, or the violated property doesn't actually hold.
-     The reply cites the evidence.
-   - **Scope expansion**: the ask goes beyond the ticket (tightening, tests, better
-     errors, and lint stay *inside* scope). Propose it (`/fleet-propose`); the reply names
-     the proposed ticket's key.
-2. **Defer a nit** (only when `APPROVED` is true): the MR has its approvals, and a push can
-   reset them, costing a review round for polish. A nit is what the reviewer labels one
-   (`nit`, `[nit]`), or a pure style / naming / polish ask that changes no behaviour,
-   correctness, test, or doc accuracy. When in doubt, it isn't a nit: apply it.
-3. **Apply with research**: the ask is underspecified ("this might break on X", "consider
-   Y"). Verify or compare, then apply; the reply says what you chose and why.
-4. **Apply** (the default): confirm the diagnosis against the current code, derive the fix
-   (the reviewer's suggestion is one input, not an instruction), apply it.
-   - **Right problem, wrong remedy**: apply your own fix; the reply says both.
+2. **Scope expansion** — the ask goes beyond the ticket (tightening, tests, better errors, and
+   lint stay *inside* scope). Propose it (`/fleet-propose`); the reply names its key.
+3. **Defer a nit** — always: a nit is what the reviewer labels one (`nit`, `[nit]`), or a pure
+   style / naming / polish ask that changes no behaviour, correctness, test, or doc accuracy.
+   It goes to the MR's nits ticket (Step 3), never into this MR.
+4. **Apply** — derive the fix (the reviewer's suggestion is one input, not an instruction) and
+   apply it. **Right problem, wrong remedy**: apply your own fix; the reply says both.
 5. **Asks nothing** (a verdict, a pass, an acknowledgement): reply with the disposition and
    resolve it now.
 
-When a push-back trigger is a genuine 50/50, descend to 3 and note the ambiguity in the
-reply. Never answer a correct finding with "we'll ticket it later": a right finding is
-fixed now, a wrong one is pushed back. The one exception is a nit on an approved MR (2).
+**An approved MR** (`APPROVED=true`) pushes back harder: a push resets its approvals and costs a
+review round. Apply only a proven defect — wrong behaviour, a correctness or security bug, an
+acceptance criterion not met. Anything short of that (readability, a refactor, a test beyond
+the ACs, doc polish) is deferred to the nits ticket like a nit.
+
+A proven finding is fixed now, except a nit, or a non-defect on an approved MR, which is
+deferred; an unproven one is pushed back. Nothing is "ticketed for later" otherwise.
 
 ## Step 2 — Fix, verify, push
 
-Make the fixes in the worktree, run the tests, commit, and push. After a rebase, push with
+Only once every thread is settled (Step 1) and every fix is in the worktree: run the tests,
+then commit and push **once**, never per thread. After a rebase, push with
 `--force-with-lease`, never plain `--force`.
 
 ## Step 3 — Reply and resolve
 
-**Deferred nits first:** propose them all as **one** follow-up ticket with `/fleet-propose`
-(a task: "Nits from !<iid>", one bullet per thread: its file:line and ask). Then reply on each
-nit thread "Deferred to <KEY>: the MR is approved, and polish isn't worth resetting its
-approvals." and resolve it.
+**Deferred nits first:** they all go to **one** ticket per MR, "Nits from !<iid>" (a task, one
+bullet per thread: its file:line and ask). If it's already proposed (`fleetc proposal` lists
+it), add this round's bullets to it — `fleetc ticket edit <KEY> --body -`, starting from
+`fleetc ticket <KEY>`, since it replaces the description whole. Otherwise propose it with
+`/fleet-propose`. Then reply on each deferred thread "Deferred to <KEY>: <a nit | not a defect,
+and the MR is approved>." and resolve it.
 
-For each other thread you handled:
+For each other thread you handled (a push-back cites its evidence):
 
 ```bash
 fleetc reply --thread <id> --resolve --body - <<'EOF'

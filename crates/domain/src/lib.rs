@@ -345,6 +345,9 @@ pub struct Ship {
     /// The `head_sha` the last lookout reviewed (the review cold-loop change-detector).
     /// `None` = never reviewed → the first review always fires.
     pub reviewed: Option<String>,
+    /// Sailor sweeps launched on it — a review round each. At 10 its sailor escalates.
+    #[serde(default)]
+    pub rounds: i64,
 }
 
 /// The churny forge mirror (1:1 with a `Ship`). Re-synced; stale past `synced_at`.

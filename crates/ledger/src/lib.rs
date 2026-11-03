@@ -182,6 +182,8 @@ const MIGRATIONS: &[&str] = &[
     // v6: a lookout per allied ship, up to a cap, in place of the singleton.
     "ALTER TABLE sessions ADD COLUMN ship INTEGER REFERENCES ships(id);
     DROP INDEX IF EXISTS one_live_lookout;",
+    // v7: a ship's review rounds (sailor sweeps), so its sailor escalates at 10.
+    "ALTER TABLE ships ADD COLUMN rounds INTEGER NOT NULL DEFAULT 0;",
 ];
 
 /// The ledger's schema version (SQLite `user_version`): one past its last migration.
@@ -633,7 +635,11 @@ mod tests {
         let path = dir.join("ledger.db").to_string_lossy().into_owned();
         drop(Ledger::open(&path).unwrap());
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch("ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; PRAGMA user_version = 1;").unwrap();
+        conn.execute_batch(
+            "ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; \
+             ALTER TABLE ships DROP COLUMN rounds; PRAGMA user_version = 1;",
+        )
+        .unwrap();
         drop(conn);
 
         drop(Ledger::open(&path).unwrap());
@@ -661,7 +667,8 @@ mod tests {
         // Back to v4: the same rebuild, without the admiral kind.
         let v4 = MIGRATIONS[3].replace(",'admiral'", ""); // v5's rebuild
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} PRAGMA user_version = 4;")).unwrap();
+        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; PRAGMA user_version = 4;"))
+            .unwrap();
         drop(conn);
 
         let db = Ledger::open(&path).unwrap();
@@ -1073,6 +1080,7 @@ fn row_to_ship(r: &rusqlite::Row) -> rusqlite::Result<Ship> {
         ended_at: r.get("ended_at")?,
         swept: r.get("swept")?,
         reviewed: r.get("reviewed")?,
+        rounds: r.get("rounds")?,
     })
 }
 
@@ -1187,6 +1195,11 @@ impl ShipRepo for Ledger {
     fn set_reviewed(&self, id: &ShipId, head_sha: &str) -> Result<()> {
         self.conn
             .execute("UPDATE ships SET reviewed = ?2 WHERE id = ?1", params![id.0, head_sha])?;
+        Ok(())
+    }
+
+    fn count_round(&self, id: &ShipId) -> Result<()> {
+        self.conn.execute("UPDATE ships SET rounds = rounds + 1 WHERE id = ?1", params![id.0])?;
         Ok(())
     }
 
@@ -1688,6 +1701,7 @@ mod repo_tests {
             ended_at: None,
             swept: None,
             reviewed: None,
+            rounds: 0,
         };
         let id = ShipRepo::upsert(&db, &ship).unwrap();
         assert_eq!(db.armada().unwrap().len(), 1);
@@ -1721,6 +1735,7 @@ mod repo_tests {
             target: "master".into(), source: String::new(), pilot: "ally".into(), created_at: "t".into(), ended_at: None,
             swept: None,
             reviewed: None,
+            rounds: 0,
         };
         ShipRepo::upsert(&db, &ally).unwrap();
         assert_eq!(db.armada().unwrap().len(), 2);

@@ -118,6 +118,7 @@ pub fn sync_armada(ledger: &Ledger, forge: &dyn Forge, now: &str) -> Result<usiz
                 ended_at: None,
                 swept: None,
                 reviewed: None,
+                rounds: 0,
             },
         )?;
         ledger.sync_snapshot(&ShipSnapshot {

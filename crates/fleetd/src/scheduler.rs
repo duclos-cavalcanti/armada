@@ -1290,6 +1290,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
+            rounds: 0,
         };
         ShipRepo::upsert(&db, &ship).unwrap();
         let me = ControlTarget::Cog { cog: CrewKind::Hand, ticket: key.clone() };
@@ -1333,6 +1334,7 @@ mod tests {
                 ended_at: None,
                 swept: None,
                 reviewed: None,
+                rounds: 0,
             };
             let ship = ShipRepo::upsert(&db, &ship).unwrap();
             let id = start_ticketless(&db, CrewKind::Lookout, None, &format!("lookout-{iid}"));
@@ -1470,6 +1472,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
+            rounds: 0,
         };
         ShipRepo::upsert(&db, &ship).unwrap();
         let sailor = Session {
@@ -1534,6 +1537,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
+            rounds: 0,
         };
         let sid = ShipRepo::upsert(&db, &ship).unwrap();
         db.set_swept(&sid, Some("fp")).unwrap();
@@ -1639,6 +1643,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
+            rounds: 0,
         };
         ShipRepo::upsert(&db, &ship).unwrap();
         assert_eq!(launch(&db, &forge, req(Some(TicketKey("PROJ-2".into())), None)).unwrap(), "https://forge/mr/9");
@@ -1666,6 +1671,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
+            rounds: 0,
         };
         ShipRepo::upsert(&db, &ship).unwrap();
         let (forge, key) = (FakeForge::default(), TicketKey("PROJ-2".into()));
@@ -1854,6 +1860,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
+            rounds: 0,
         };
         ShipRepo::upsert(&db, &ship(7)).unwrap();
         let tracker = FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]);
@@ -2011,6 +2018,7 @@ mod tests {
                 ended_at: None,
                 swept: None,
                 reviewed: None,
+                rounds: 0,
             },
         )
         .unwrap();
@@ -2066,6 +2074,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
+            rounds: 0,
         };
         ShipRepo::upsert(&db, &parent).unwrap();
 

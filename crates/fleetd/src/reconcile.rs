@@ -1133,6 +1133,7 @@ fn launch_sailor<H: SessionHost, F: Forge + ?Sized>(
 
     let snap = fresh_snapshot(ledger, forge, &ship)?;
     ShipRepo::set_swept(ledger, &ship.id, Some(&ship_fingerprint(&snap, has_open_blocker(ledger, &tkey)?)))?;
+    ShipRepo::count_round(ledger, &ship.id)?;
 
     let worktree = OrderRepo::get(ledger, &tkey)?
         .and_then(|o| o.worktree_path)
@@ -1455,6 +1456,7 @@ mod tests {
                 ended_at: None,
                 swept: None,
                 reviewed: None,
+                rounds: 0,
             },
         )
         .unwrap();
@@ -1506,6 +1508,7 @@ mod tests {
                 ended_at: None,
                 swept: None,
                 reviewed: None,
+                rounds: 0,
             },
         )
         .unwrap();
@@ -2533,6 +2536,7 @@ mod tests {
         assert_eq!(snap.head_sha, "fresh");
         // swept recorded (so a second tick on the same snapshot wouldn't re-launch).
         assert!(s.swept.is_some(), "swept recorded at dispatch");
+        assert_eq!(s.rounds, 1, "a sweep is a review round");
     }
 
     // ── LaunchLookout (the allied-ship review cold-loop) ────────────────────────────────────

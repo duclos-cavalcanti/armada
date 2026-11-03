@@ -61,6 +61,8 @@ pub trait ShipRepo {
     fn set_swept(&self, id: &ShipId, fingerprint: Option<&str>) -> Result<()>;
     /// Record the `head_sha` the last lookout reviewed (the review cold-loop change-detector).
     fn set_reviewed(&self, id: &ShipId, head_sha: &str) -> Result<()>;
+    /// A sailor sweep was launched on it: one review round more.
+    fn count_round(&self, id: &ShipId) -> Result<()>;
     /// Retire a ship — it left the open list, merged or closed (sets `ended_at`). Idempotent; a
     /// reopened MR's next upsert clears it again.
     fn retire(&self, id: &ShipId, at: &str) -> Result<()>;

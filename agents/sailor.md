@@ -61,6 +61,9 @@ Th `merge_status` is GitLab's authoritative merge-readiness — e.g.
 
 Do the work the snapshot calls for, this sweep only:
 
+- **`ship.rounds` ≥ 10** → **escalate first**, before any of the below: ten sweeps haven't
+  landed it, so the review isn't converging. Report `escalated` with
+  `--last-action "10 review rounds without converging"` and wait.
 - **`has_conflicts` or diverged from target** → `/fleet-rechart`.
 - **`open_threads > 0`** → `/fleet-parley` to answer review threads.
 - **`pipeline` failed** → `/fleet-repair`.
@@ -75,10 +78,6 @@ Do the work the snapshot calls for, this sweep only:
   gated by an upstream dependency (fleetd declares these from the ticket graph).
   It clears automatically when the upstream merges; babysit as above meanwhile.
   You never declare or lift the block — that's fleetd's reconcile.
-
-Review-thread findings are **yours to work**, not to defer: ground them against
-current `origin/HEAD` (the default branch) and address them in the reply pass. The one
-exception: on an approved MR, `/fleet-parley` defers nits to a proposed follow-up ticket.
 
 ## Finish the sweep
 
@@ -106,10 +105,8 @@ exception: on an approved MR, `/fleet-parley` defers nits to a proposed follow-u
 ## Out-of-scope findings
 
 Work you find that isn't your ticket's — a bug nearby, debt worth its own ticket — never
-widens your diff. Propose it with `/fleet-propose`: the operator accepts or drops it. A
-reviewer asking for work outside the ticket's scope is one: propose it, then reply on the
-thread with the proposed ticket's key and resolve it. Never use this to defer an in-scope
-finding — those are yours to work. Then carry on with your sweep.
+widens your diff. Propose it with `/fleet-propose`: the operator accepts or drops it. Then carry
+on with your sweep. (A reviewer's out-of-scope ask is `/fleet-parley`'s to handle.)
 
 ## Boundaries
 
