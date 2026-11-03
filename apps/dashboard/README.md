@@ -49,6 +49,7 @@ Cycle with `Tab` / `S-Tab`:
 | `m` | open the row's MR |
 | `t` | open the row's ticket |
 | `v` | read the verdict on the row's escalation (Implementation, Merge) |
+| `e` | switch to the admiral ruling on the row's escalation (`scripts/admiralty.sh` spawns it) |
 | any other | run `handler.sh <tab/pane> <key> <row fields…>` on the focused row |
 
 The keys are fixed, never "smart": `enter` on a row whose session is down (or has none) opens

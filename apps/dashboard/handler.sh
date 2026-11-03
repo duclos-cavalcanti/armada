@@ -12,7 +12,7 @@
 # on stderr — the dashboard shows it, in red, in its footer.
 #
 # The keys are fixed, never "smart": enter switches to the row's tmux session (or fails),
-# m opens the MR, t opens the ticket.
+# m opens the MR, t opens the ticket, e switches to the ticket's admiral (scripts/admiralty.sh).
 #
 # Row-field contract per coordinate (coord + key are stripped, so $1 is the first
 # field — these positions match the dashboard's `focused_action()`):
@@ -37,6 +37,12 @@ launch_tmux() {
     [ -n "$1" ] || fail "$2"
     tmux has-session -t "=$1" 2>/dev/null || fail "no tmux session $1 (dead or not yet spawned)"
     tmux switch-client -t "=$1"
+}
+
+# Switch to the admiral ruling on a ticket's escalation — the session scripts/admiralty.sh spawned.
+launch_admiral() {
+    tmux has-session -t "=admiral-$1" 2>/dev/null || fail "no admiral on $1 — spawn one: scripts/admiralty.sh"
+    tmux switch-client -t "=admiral-$1"
 }
 
 launch_browser() { open "$1"; }
@@ -79,10 +85,12 @@ main() {
         fleet/impl/t) launch_ticket "${1:-}" ;;
         fleet/impl/m) [ -n "${5:-}" ] || fail "${1:-} has no MR yet"; launch_mr "${5}" ;;
         fleet/impl/v) popup inspection "${1:-}" ;;
+        fleet/impl/e) launch_admiral "${1:-}" ;;
         fleet/merge/enter) launch_tmux "${4:-}" "${1:-} has no sailor" ;;
         fleet/merge/t) launch_ticket "${1:-}" ;;
         fleet/merge/m) launch_browser "${3:-}" ;;
         fleet/merge/v) popup inspection "${1:-}" ;;
+        fleet/merge/e) launch_admiral "${1:-}" ;;
 
         # ---- Ships --------------------------------------------------------
         # m opens the MR — by its url ($4) if present, else by iid ($1); l attaches the lookout.
