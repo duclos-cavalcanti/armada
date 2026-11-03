@@ -121,7 +121,7 @@ pub struct Fleet {
     pub hands: Vec<CogRow>,
     /// Phase 3: our ships being landed.
     pub landing: Vec<LandingRow>,
-    /// The ticketless cogs: captains (by convoy) + the lookout.
+    /// The ticketless cogs: captains (by convoy) + the lookouts (by ship).
     pub crew: Vec<CogRow>,
     pub board: Vec<Ticket>,
     /// Why each held ticket is held (its key → the hold's reason, `""` when none was given).
@@ -323,9 +323,14 @@ impl Fleet {
         self.crew.iter().find(|c| c.session.convoy.as_ref() == Some(convoy))
     }
 
-    /// The live lookout, if one is reviewing.
-    pub fn lookout(&self) -> Option<&CogRow> {
-        self.crew.iter().find(|c| c.session.kind == CrewKind::Lookout)
+    /// The live lookouts.
+    pub fn lookouts(&self) -> impl Iterator<Item = &CogRow> {
+        self.crew.iter().filter(|c| c.session.kind == CrewKind::Lookout)
+    }
+
+    /// The live lookout reviewing a ship, if one is.
+    pub fn lookout_on(&self, ship: &domain::ShipId) -> Option<&CogRow> {
+        self.lookouts().find(|c| c.session.ship.as_ref() == Some(ship))
     }
 }
 

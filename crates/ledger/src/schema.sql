@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at         TEXT NOT NULL,
     ended_at           TEXT,
     anchored_at        TEXT,                            -- operator anchor (stop & hold); NULL = under way
+    ship               INTEGER REFERENCES ships(id),     -- the MR a lookout reviews
     -- a worker/sailor/admiral is bound to a ticket; a captain/hand/lookout may be ticketless.
     CHECK (ticket IS NOT NULL OR kind NOT IN ('worker','sailor','admiral')),
     -- a captain commands a convoy.
@@ -48,9 +49,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_live_crew_per_ticket
 -- ...and one LIVE captain per convoy.
 CREATE UNIQUE INDEX IF NOT EXISTS one_live_captain_per_convoy
     ON sessions(convoy) WHERE kind = 'captain' AND ended_at IS NULL;
--- ...and ONE live lookout for the whole factory (the singleton allied-ship reviewer).
-CREATE UNIQUE INDEX IF NOT EXISTS one_live_lookout
-    ON sessions(kind) WHERE kind = 'lookout' AND ended_at IS NULL;
+-- ...and one LIVE lookout per allied ship it reviews.
+CREATE UNIQUE INDEX IF NOT EXISTS one_live_lookout_per_ship
+    ON sessions(ship) WHERE kind = 'lookout' AND ended_at IS NULL;
 
 -- Convoys — the operator-curated grouping a captain commands. Existence is an operator
 -- fact (open → active); `ended_at` is the captain's "all delivered" close, which reconcile
@@ -89,10 +90,9 @@ CREATE TABLE IF NOT EXISTS hand_tickets (
     marked_at TEXT NOT NULL
 );
 
--- The singleton lookout's own control row. The allied-ship review cog is ticketless + convoyless, so
--- it has no existing row to hang a hold on — this one-row table IS its home. `anchored_at` =
--- operator anchor on the review loop (NULL = under way), which reconcile's lookout launch gate
--- reads. One row, seeded at init; room to grow (future review toggles/state).
+-- The lookouts' own control row: the hold over the whole review loop has no existing row to hang
+-- on, so this one-row table IS its home. `anchored_at` = operator anchor on the review loop (NULL =
+-- under way), which reconcile's lookout launch gate reads. One row, seeded at init.
 CREATE TABLE IF NOT EXISTS lookout (
     id          INTEGER PRIMARY KEY CHECK (id = 1),   -- singleton: exactly one row
     anchored_at TEXT

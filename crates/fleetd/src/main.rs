@@ -284,6 +284,7 @@ mod tests {
                 created_at: "t".into(),
                 ended_at: None,
                 anchored_at: None,
+                ship: None,
             },
         )
         .unwrap();

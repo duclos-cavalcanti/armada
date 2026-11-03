@@ -121,7 +121,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             ])),
             f.landing.iter().map(|r| landing_row(r, r.sailor.as_ref().is_some_and(|s| f.is_up(s)))).collect(),
         ),
-        Pane::Ships => (ships_title(app), None, ship_rows(&f.armada)),
+        Pane::Ships => (ships_title(app), None, ship_rows(app)),
         Pane::Tickets => (
             format!(" board · {} tickets ", f.board.len()),
             None,
@@ -274,30 +274,36 @@ fn landing_row(r: &LandingRow, up: bool) -> Line<'static> {
 
 // ── ships · board ────────────────────────────────────────────────────────────────
 
-/// The Ships pane title carries the lookout — the singleton that reviews these ships.
+/// The Ships pane title counts the lookouts on watch, each reviewing one of these ships.
 fn ships_title(app: &App) -> String {
-    let lookout = match app.fleet.lookout() {
-        Some(l) => format!(
-            "lookout {} {}",
-            l.liveness.as_deref().map(str::to_lowercase).unwrap_or_else(|| "live".into()),
-            fmt_age(l.age_secs)
-        ),
-        None => "lookout off watch".into(),
+    let lookouts = match app.fleet.lookouts().count() {
+        0 => "no lookout on watch".into(),
+        n => format!("{n} lookout{} on watch", if n == 1 { "" } else { "s" }),
     };
-    format!(" ships · {} open · {} ", app.fleet.armada.len(), lookout)
+    format!(" ships · {} open · {} ", app.fleet.armada.len(), lookouts)
 }
 
-fn ship_rows(ships: &[ShipRow]) -> Vec<Line<'static>> {
-    ships
+/// One line per ship; the last column is its review: `◎` a lookout is on it, `✓` reviewed at its
+/// head, `·` not yet.
+fn ship_rows(app: &App) -> Vec<Line<'static>> {
+    app.fleet
+        .armada
         .iter()
         .map(|r| {
+            let watched = app.fleet.lookout_on(&r.ship.id).is_some();
             let owner = r.ship.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| format!("@{}", r.ship.pilot));
             let (state, pipe, appr, reviewed) = match &r.snapshot {
                 Some(s) => (
                     format!("{:?}", s.state).to_lowercase(),
                     s.pipeline.map(|p| format!("{:?}", p).to_lowercase()).unwrap_or_else(|| "—".into()),
                     format!("{}/{}", s.approvals.current, s.approvals.required),
-                    if r.ship.reviewed.as_deref() == Some(s.head_sha.as_str()) { "✓" } else { "·" },
+                    if watched {
+                        "◎"
+                    } else if r.ship.reviewed.as_deref() == Some(s.head_sha.as_str()) {
+                        "✓"
+                    } else {
+                        "·"
+                    },
                 ),
                 None => ("—".into(), "—".into(), "—".into(), "·"),
             };

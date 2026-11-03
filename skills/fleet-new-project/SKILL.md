@@ -63,6 +63,7 @@ sync_secs          = 300
 reconcile_secs     = 60
 captain_sleep_secs = 900
 admirals           = 3
+lookouts           = 3
 dry_run            = false
 
 [project]

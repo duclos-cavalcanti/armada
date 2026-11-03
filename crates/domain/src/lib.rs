@@ -196,6 +196,8 @@ pub struct Session {
     /// The operator anchor (ex "park"): set = this cog must stop & hold; `heal` never respawns
     /// an anchored session. Cleared by weighing anchor. NULL = under way.
     pub anchored_at: Option<Timestamp>,
+    /// The allied ship a lookout reviews; `None` for every other cog.
+    pub ship: Option<ShipId>,
 }
 
 impl Session {
@@ -1115,6 +1117,7 @@ mod liveness_tests {
             created_at: "t".into(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         };
         let home = std::env::var("HOME").unwrap();
         let want = format!("{home}/.claude/projects/-wt-feature-PROJ-1-Some-Thing-x/abc-123.jsonl");
@@ -1149,6 +1152,7 @@ mod order_tests {
             created_at: at.into(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         };
         let sailed = [session("2026-10-28T10:00:00.5Z")];
         assert!(order("2026-10-28T10:00:00Z").builder_due(&[]), "dispatched, nothing launched yet");

@@ -27,6 +27,8 @@ pub struct Config {
     /// How many admirals may sit at once, each convened on a confirmed escalation: -1 = no cap,
     /// 0 = none convened.
     pub admirals: i64,
+    /// How many lookouts may review allied MRs at once, one MR each: -1 = no cap, 0 = none.
+    pub lookouts: i64,
     /// Reconcile mode: false (default, post-cutover) = apply the plan through the ports — fleetd
     /// drives the line; true = compute + log only, execute nothing (the parity look, opt in via
     /// `FLEET_DRY_RUN=true`). Flip via config/env, no recompile.
@@ -115,6 +117,7 @@ impl Default for Config {
             reconcile_secs: 60,
             captain_sleep_secs: 900,
             admirals: 3,
+            lookouts: 3,
             dry_run: false,
             active_secs: domain::LIVENESS_ACTIVE_SECS,
             quiet_secs: domain::LIVENESS_QUIET_SECS,

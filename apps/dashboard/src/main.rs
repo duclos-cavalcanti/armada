@@ -199,7 +199,7 @@ impl App {
     ///   fleet/dispatched   ticket  crew(worker|hand)
     ///   fleet/impl         ticket  kind  tmux_session  state  mr_iid
     ///   fleet/merge        ticket  mr_iid  url  sailor_tmux  sailor_state
-    ///   ships/list         iid  ticket  pilot  url
+    ///   ships/list         iid  ticket  pilot  url  lookout_tmux
     ///   board/tickets      key  status  convoy
     ///   convoys            key  title  captain_tmux
     ///   proposals          kind(proposal|anchored)  ref(proposal id | ticket key)
@@ -234,7 +234,8 @@ impl App {
                 ]
             }),
             Pane::Ships => f.armada.get(i).map(|r| {
-                vec![r.ship.iid.to_string(), key(r.ship.ticket.as_ref()), r.ship.pilot.clone(), r.ship.url.clone()]
+                let lookout = f.lookout_on(&r.ship.id).map(|c| c.session.tmux_session.clone()).unwrap_or_default();
+                vec![r.ship.iid.to_string(), key(r.ship.ticket.as_ref()), r.ship.pilot.clone(), r.ship.url.clone(), lookout]
             }),
             Pane::Tickets => f.board.get(i).map(|t| {
                 vec![

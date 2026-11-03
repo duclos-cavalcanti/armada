@@ -34,10 +34,10 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc convoy   open <KEY> [--title <text>] [--plan <file|->] | close [<KEY>]   (the plan ties its tickets together; omitted: none)\n  \
      fleetc convoy   add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N>   (a ticket joins the convoy — its only one, for a hand with --hand — or an added one leaves)\n  \
      fleetc anchor   <KEY-N> [--reason <why>]   (hold everything on it: off the frontier, its cogs stopped, its MR disarmed + drafted)\n  \
-     fleetc anchor   --cog <captain|lookout> [--convoy <KEY>]   (stop a ticketless cog)\n  \
+     fleetc anchor   --cog <captain|lookout> [--convoy <KEY>]   (stop a ticketless cog; lookout: every one)\n  \
      fleetc weigh    <KEY-N> | --cog <captain|lookout> [--convoy <KEY>]   (release what anchor held)\n  \
-     fleetc sink     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (scuttle — hard teardown)\n  \
-     fleetc send     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] <message>   (message into the cog's pane)\n  \
+     fleetc sink     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>|--iid <N>]   (scuttle — hard teardown)\n  \
+     fleetc send     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>|--iid <N>] <message>   (message into the cog's pane)\n  \
      fleetc rework   <KEY-N> [--hand]   (its ACs changed: back to a worker — or a hand — in its worktree, on its MR)\n  \
      fleetc inspection <KEY-N> [--verdict confirm|refute --body <text|->]   (the latest verdict on its cog's escalation; with --verdict, record one — /fleet-inspect)\n  \
      fleetc decommission <KEY-N> --reason <why> [--yes]   (withdraw it for good: close its MR, cancel it with the reason, reap its cogs + worktree)\n  \
@@ -149,18 +149,19 @@ fn status(args: &[String]) -> Result<()> {
     let cog = cog.ok_or_else(|| anyhow!("--cog required"))?;
     let state = state.ok_or_else(|| anyhow!("--state required"))?;
     let kind = CrewKind::parse(&cog).ok_or_else(|| anyhow!("invalid --cog: {cog}"))?;
-    // The cog's own key fills in: a captain's convoy, a ticketed cog's ticket; the lookout has none.
-    let (ticket, convoy) = match kind {
-        CrewKind::Captain => (ticket, convoy.or_else(|| own("FLEET_CONVOY"))),
-        CrewKind::Lookout => (ticket, convoy),
-        _ => (ticket.or_else(|| own("FLEET_TICKET")), convoy),
+    // The cog's own key fills in: a captain's convoy, a ticketed cog's ticket, a lookout's MR.
+    let (ticket, convoy, iid) = match kind {
+        CrewKind::Captain => (ticket, convoy.or_else(|| own("FLEET_CONVOY")), None),
+        CrewKind::Lookout => (ticket, convoy, own("FLEET_SHIP").and_then(|s| s.parse().ok())),
+        _ => (ticket.or_else(|| own("FLEET_TICKET")), convoy, None),
     };
-    validate_cog_target(kind.as_str(), ticket.as_deref(), convoy.as_deref(), "status")?;
+    let target = wire::CogTarget { cog: kind.as_str().into(), ticket, convoy, iid };
+    validate_cog_target(&target, "status")?;
     let parsed = CogState::parse(kind, &state)
         .ok_or_else(|| anyhow!("invalid state '{state}' for cog '{cog}'"))?;
 
     submit("/status", &wire::StatusReport {
-        target: wire::CogTarget { cog: kind.as_str().into(), ticket, convoy },
+        target,
         state: parsed.as_str().into(),
         last_action,
     })
@@ -307,10 +308,13 @@ fn ticketless_target(args: &[String], verb: &str) -> Result<wire::CogTarget> {
     if target.ticket.is_some() {
         bail!("{verb} the ticket, which holds its cog too: fleetc {verb} <KEY-N>");
     }
+    if target.iid.is_some() {
+        bail!("{verb} holds every lookout: drop --iid (fleetc sink --cog lookout --iid <N> ends one)");
+    }
     Ok(target)
 }
 
-/// `fleetc sink --cog <kind> [--ticket|--convoy]` — scuttle the cog: a deliberate, destructive
+/// `fleetc sink --cog <kind> [--ticket|--convoy|--iid]` — scuttle the cog: a deliberate, destructive
 /// teardown (end the session + kill the tmux). Its own verb — sinking a ship is not casual.
 fn sink(args: &[String]) -> Result<()> {
     submit("/sink", &require_cog_target(args, "sink")?)
@@ -563,7 +567,7 @@ fn convoy_key(c: &str, verb: &str) -> Result<String> {
 /// the key is per-cog — worker/sailor/hand need `--ticket`, a captain `--convoy`, the lookout neither.
 /// A missing `--cog`, an unknown kind, or the wrong key errors here (fail-fast; fleetd re-validates).
 fn require_cog_target(args: &[String], verb: &str) -> Result<wire::CogTarget> {
-    let (mut cog, mut ticket, mut convoy) = (None, None, None);
+    let (mut cog, mut ticket, mut convoy, mut iid) = (None, None, None, None);
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
@@ -571,19 +575,25 @@ fn require_cog_target(args: &[String], verb: &str) -> Result<wire::CogTarget> {
             "--cog" => cog = Some(take()?),
             "--ticket" => ticket = Some(take()?),
             "--convoy" => convoy = Some(take()?),
+            "--iid" => iid = Some(take()?.parse().map_err(|_| anyhow!("{verb}: --iid takes an MR number"))?),
             other => bail!("{verb}: unknown flag {other:?}"),
         }
     }
-    let cog = cog.ok_or_else(|| anyhow!("{verb} needs --cog <worker|sailor|hand|captain|lookout>"))?;
-    validate_cog_target(&cog, ticket.as_deref(), convoy.as_deref(), verb)?;
-    Ok(wire::CogTarget { cog, ticket, convoy })
+    let cog = cog.ok_or_else(|| anyhow!("{verb} needs --cog <worker|sailor|hand|admiral|captain|lookout>"))?;
+    let target = wire::CogTarget { cog, ticket, convoy, iid };
+    validate_cog_target(&target, verb)?;
+    Ok(target)
 }
 
 /// Validate a cog target's shape (shared by the control verbs + `send`): worker/sailor/hand need a
 /// `--ticket`, a captain a `--convoy`, the lookout neither. An unknown kind or the wrong key errors.
-fn validate_cog_target(cog: &str, ticket: Option<&str>, convoy: Option<&str>, verb: &str) -> Result<()> {
+fn validate_cog_target(t: &wire::CogTarget, verb: &str) -> Result<()> {
+    let (cog, ticket, convoy) = (t.cog.as_str(), t.ticket.as_deref(), t.convoy.as_deref());
+    if t.iid.is_some() && cog != "lookout" {
+        bail!("{verb} --cog {cog}: --iid targets a lookout");
+    }
     match cog {
-        "worker" | "sailor" | "hand" => {
+        "worker" | "sailor" | "hand" | "admiral" => {
             let t = ticket.ok_or_else(|| anyhow!("{verb} --cog {cog} needs --ticket <KEY-N>"))?;
             ticket_key(t, verb)?;
             if convoy.is_some() {
@@ -599,7 +609,7 @@ fn validate_cog_target(cog: &str, ticket: Option<&str>, convoy: Option<&str>, ve
         }
         "lookout" => {
             if ticket.is_some() || convoy.is_some() {
-                bail!("{verb} --cog lookout takes no key (it's the singleton)");
+                bail!("{verb} --cog lookout: use --iid <N> (its MR), or nothing for every lookout");
             }
         }
         other => bail!("{verb}: unknown --cog {other:?}"),
@@ -607,7 +617,7 @@ fn validate_cog_target(cog: &str, ticket: Option<&str>, convoy: Option<&str>, ve
     Ok(())
 }
 
-/// `fleetc send --cog <kind> [--ticket|--convoy] "<message>"` — push an operator message into the
+/// `fleetc send --cog <kind> [--ticket|--convoy|--iid] "<message>"` — push an operator message into the
 /// target cog's tmux pane (typed + submitted as a prompt). The target is the same per-cog addressing
 /// as the control verbs; the message is the lone positional. No broadcast — serialize sends if needed.
 fn send(args: &[String]) -> Result<()> {
@@ -617,25 +627,19 @@ fn send(args: &[String]) -> Result<()> {
 /// Parse `send`'s args into the wire DTO — the cog target (flags) + the message (lone positional),
 /// validated. Split out from `send` so the parse is unit-testable without the socket.
 fn parse_send(args: &[String]) -> Result<wire::SendMsg> {
-    let (mut cog, mut ticket, mut convoy, mut message) = (None, None, None, None);
+    let (mut flags, mut message) = (Vec::new(), None);
     let mut it = args.iter();
     while let Some(a) = it.next() {
-        match a.as_str() {
-            "--cog" => cog = Some(it.next().cloned().ok_or_else(|| anyhow!("--cog needs a value"))?),
-            "--ticket" => ticket = Some(it.next().cloned().ok_or_else(|| anyhow!("--ticket needs a value"))?),
-            "--convoy" => convoy = Some(it.next().cloned().ok_or_else(|| anyhow!("--convoy needs a value"))?),
-            _ => {
-                if message.is_some() {
-                    bail!("send: unexpected extra arg {a:?} — quote the message");
-                }
-                message = Some(a.clone());
-            }
+        if a.starts_with("--") {
+            flags.push(a.clone());
+            flags.extend(it.next().cloned()); // its value; a missing one is require_cog_target's error
+        } else if message.replace(a.clone()).is_some() {
+            bail!("send: unexpected extra arg {a:?} — quote the message");
         }
     }
-    let cog = cog.ok_or_else(|| anyhow!("send needs --cog <worker|sailor|hand|captain|lookout>"))?;
+    let target = require_cog_target(&flags, "send")?;
     let message = message.ok_or_else(|| anyhow!("send needs a <message> (quote it)"))?;
-    validate_cog_target(&cog, ticket.as_deref(), convoy.as_deref(), "send")?;
-    Ok(wire::SendMsg { cog, ticket, convoy, message })
+    Ok(wire::SendMsg { target, message })
 }
 
 /// POST a validated DTO to fleetd and turn a non-200 into a clear error.
@@ -713,7 +717,7 @@ fn render_plan(tick: &domain::Event) -> String {
 /// (`~/.claude/projects/<cwd-encoded>/<id>.jsonl`, authoritative), or — for a pre-capture session
 /// with no stored id — the newest jsonl in that dir (convention fallback).
 fn transcript(args: &[String]) -> Result<()> {
-    use domain::ports::SessionRepo;
+    use domain::ports::{SessionRepo, ShipRepo};
     let open = args.iter().any(|a| a == "--open");
     let rest: Vec<String> = args.iter().filter(|a| a.as_str() != "--open").cloned().collect();
     let target = require_cog_target(&rest, "transcript")?;
@@ -722,9 +726,13 @@ fn transcript(args: &[String]) -> Result<()> {
     let ledger = ledger::Ledger::open_readonly(&db).map_err(|_| anyhow!("no ledger yet ({db})"))?;
 
     let kind = CrewKind::parse(&target.cog).ok_or_else(|| anyhow!("unknown --cog {:?}", target.cog))?;
+    let ship = match target.iid {
+        Some(iid) => Some(ledger.get_by_iid(iid)?.ok_or_else(|| anyhow!("no MR !{iid}"))?.id),
+        None => None,
+    };
     let session = SessionRepo::live(&ledger)?
         .into_iter()
-        .find(|s| s.kind == kind && matches_target(s, &target))
+        .find(|s| s.kind == kind && matches_target(s, &target, ship.as_ref()))
         .ok_or_else(|| anyhow!("no live {} session for that target", target.cog))?;
 
     let path = transcript_path(&session)?;
@@ -738,14 +746,15 @@ fn transcript(args: &[String]) -> Result<()> {
 }
 
 /// Does this live session match the cog target's key? Ticket for worker/sailor/hand/admiral, convoy
-/// for a captain, nothing for the singleton lookout (kind already matched by the caller).
-fn matches_target(s: &domain::Session, t: &wire::CogTarget) -> bool {
+/// for a captain, its MR (`ship`, resolved from `--iid`) for a lookout — any lookout when none is
+/// named (kind already matched by the caller).
+fn matches_target(s: &domain::Session, t: &wire::CogTarget, ship: Option<&domain::ShipId>) -> bool {
     match s.kind {
         CrewKind::Worker | CrewKind::Sailor | CrewKind::Hand | CrewKind::Admiral => {
             s.ticket.as_ref().map(|k| &k.0) == t.ticket.as_ref()
         }
         CrewKind::Captain => s.convoy.as_ref().map(|k| &k.0) == t.convoy.as_ref(),
-        CrewKind::Lookout => true,
+        CrewKind::Lookout => ship.is_none_or(|id| s.ship.as_ref() == Some(id)),
     }
 }
 
@@ -1623,6 +1632,7 @@ mod tests {
             created_at: "t".into(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         }
     }
 
@@ -1636,16 +1646,20 @@ mod tests {
     }
 
     #[test]
-    fn matches_target_keys_on_ticket_convoy_or_singleton() {
+    fn matches_target_keys_on_ticket_convoy_or_ship() {
         let ct = |cog: &str, ticket: Option<&str>, convoy: Option<&str>| wire::CogTarget {
             cog: cog.into(),
             ticket: ticket.map(Into::into),
             convoy: convoy.map(Into::into),
+            iid: None,
         };
-        assert!(matches_target(&sess(CrewKind::Worker, Some("PROJ-1"), None, "/wt", None), &ct("worker", Some("PROJ-1"), None)));
-        assert!(!matches_target(&sess(CrewKind::Worker, Some("PROJ-2"), None, "/wt", None), &ct("worker", Some("PROJ-1"), None)));
-        assert!(matches_target(&sess(CrewKind::Captain, None, Some("PROJ-100"), "/project", None), &ct("captain", None, Some("PROJ-100"))));
-        assert!(matches_target(&sess(CrewKind::Lookout, None, None, "/project", None), &ct("lookout", None, None)));
+        assert!(matches_target(&sess(CrewKind::Worker, Some("PROJ-1"), None, "/wt", None), &ct("worker", Some("PROJ-1"), None), None));
+        assert!(!matches_target(&sess(CrewKind::Worker, Some("PROJ-2"), None, "/wt", None), &ct("worker", Some("PROJ-1"), None), None));
+        assert!(matches_target(&sess(CrewKind::Captain, None, Some("PROJ-100"), "/project", None), &ct("captain", None, Some("PROJ-100")), None));
+        let lookout = domain::Session { ship: Some(domain::ShipId(3)), ..sess(CrewKind::Lookout, None, None, "/project", None) };
+        assert!(matches_target(&lookout, &ct("lookout", None, None), None), "no MR named: any lookout");
+        assert!(matches_target(&lookout, &ct("lookout", None, None), Some(&domain::ShipId(3))));
+        assert!(!matches_target(&lookout, &ct("lookout", None, None), Some(&domain::ShipId(4))));
     }
 
     #[test]
@@ -1653,11 +1667,14 @@ mod tests {
         let a = |args: &[&str]| parse_send(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>());
         let p = a(&["--cog", "worker", "--ticket", "PROJ-1", "handle the edge case"]).unwrap();
         assert_eq!(
-            (p.cog.as_str(), p.ticket.as_deref(), p.convoy, p.message.as_str()),
+            (p.target.cog.as_str(), p.target.ticket.as_deref(), p.target.convoy, p.message.as_str()),
             ("worker", Some("PROJ-1"), None, "handle the edge case")
         );
-        // lookout takes the message, no key.
+        // a lookout takes the message, with or without its MR.
         assert_eq!(a(&["--cog", "lookout", "look again"]).unwrap().message, "look again");
+        assert_eq!(a(&["--cog", "lookout", "--iid", "7", "look again"]).unwrap().target.iid, Some(7));
+        assert!(a(&["--cog", "worker", "--ticket", "PROJ-1", "--iid", "7", "hi"]).is_err(), "--iid is a lookout's");
+        assert!(a(&["--cog", "admiral", "--ticket", "PROJ-1", "rule"]).is_ok(), "an admiral by its ticket");
         // errors: missing message, bad target shape, and an unquoted (second) positional.
         assert!(a(&["--cog", "lookout"]).is_err(), "needs a message");
         assert!(a(&["--cog", "worker", "hi"]).is_err(), "worker needs --ticket");

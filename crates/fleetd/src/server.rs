@@ -774,7 +774,7 @@ fn handle_send(request: &str, cmds: &Sender<Command>) -> String {
         Ok(d) => d,
         Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
     };
-    let target = match ControlTarget::from_wire(wire::CogTarget { cog: dto.cog, ticket: dto.ticket, convoy: dto.convoy }) {
+    let target = match ControlTarget::from_wire(dto.target) {
         Ok(t) => t,
         Err(e) => return http_response("400 Bad Request", "text/plain", &e),
     };

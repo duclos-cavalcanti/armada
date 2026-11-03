@@ -26,7 +26,8 @@ Cycle with `Tab` / `S-Tab`:
   - an escalation reads by who holds it: **flagged** (no captain has looked), **triage** (a
     captain is inspecting it, or sent its way out), **escalated** (confirmed: yours). `v` reads
     the verdict;
-- **Ships** — every open MR fleetd tracks, ours + allies; the title shows the lookout.
+- **Ships** — every open MR fleetd tracks, ours + allies; the title counts the lookouts on watch,
+  and an ally's last column shows its review (`◎` a lookout is on it, `✓` reviewed at its head).
 - **Board** — the sprint tickets, with the Convoys and Proposals panes again (the same panes as
   on Fleet).
 - **Log** — fleetd's log (`.fleet/fleetd.log`), newest first, warnings yellow and errors red;

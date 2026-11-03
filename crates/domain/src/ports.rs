@@ -105,8 +105,8 @@ pub trait ConvoyRepo {
     fn added_members(&self) -> Result<Vec<TicketKey>>;
 }
 
-/// The singleton lookout's control row — the allied-ship review cog is ticketless + convoyless, so its
-/// one operator-settable fact (the anchor) lives in its own one-row table, not on any session.
+/// The lookouts' control row — the hold over the whole review loop (the anchor) lives in its own
+/// one-row table, not on any one lookout's session.
 pub trait LookoutRepo {
     /// Anchor the lookout — hold the review loop: sets `anchored_at`, which reconcile's lookout
     /// launch gate reads to skip the relaunch. Appends `LookoutAnchored`. No-op if already anchored.

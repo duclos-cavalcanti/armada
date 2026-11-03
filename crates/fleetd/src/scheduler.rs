@@ -138,6 +138,7 @@ pub fn run(
                 dry_run,
                 captain_sleep_secs: settings::captain_sleep_secs(&cfg, &ledger),
                 admirals: settings::admirals(&cfg, &ledger),
+                lookouts: settings::lookouts(&cfg, &ledger),
             };
             let cogs = snapshot.lock().unwrap().clone();
             match reconcile::tick(&ledger, tracker.as_ref(), &host, forge.as_ref(), &cogs, &cfg.project.path, &levers) {
@@ -732,12 +733,12 @@ pub enum Verb {
 }
 
 /// The resolved target of a control verb (anchor/weigh/sink). The uniform `--cog <kind>` addressing
-/// (§A): worker/sailor/hand are addressed by `ticket` (+ kind), a captain by its `convoy`, the
-/// lookout as the singleton. Parsed + validated from the wire `CogTarget` — the daemon branches here.
+/// (§A): worker/sailor/hand/admiral are addressed by `ticket` (+ kind), a captain by its `convoy`, a
+/// lookout by its MR's `iid` (none: every lookout). Parsed + validated from the wire `CogTarget`.
 pub enum ControlTarget {
     Cog { cog: CrewKind, ticket: TicketKey }, // the homogeneous ticketed surface
     Captain { convoy: ConvoyKey },
-    Lookout,
+    Lookout { iid: Option<i64> },
 }
 
 impl ControlTarget {
@@ -745,6 +746,9 @@ impl ControlTarget {
     /// a `ticket`, a captain a `convoy`, the lookout neither (a mismatch is a clear error at the edge).
     pub fn from_wire(t: wire::CogTarget) -> std::result::Result<Self, String> {
         let cog = CrewKind::parse(&t.cog).ok_or_else(|| format!("unknown --cog {:?}", t.cog))?;
+        if t.iid.is_some() && cog != CrewKind::Lookout {
+            return Err(format!("--iid targets a lookout, not a {}", cog.as_str()));
+        }
         match cog {
             CrewKind::Worker | CrewKind::Sailor | CrewKind::Hand | CrewKind::Admiral => {
                 let ticket = t.ticket.ok_or_else(|| format!("--cog {} needs --ticket", cog.as_str()))?;
@@ -756,7 +760,7 @@ impl ControlTarget {
                 let convoy = ConvoyKey::parse(&convoy).map_err(|e| e.to_string())?;
                 Ok(ControlTarget::Captain { convoy })
             }
-            CrewKind::Lookout => Ok(ControlTarget::Lookout),
+            CrewKind::Lookout => Ok(ControlTarget::Lookout { iid: t.iid }),
         }
     }
 
@@ -764,7 +768,7 @@ impl ControlTarget {
         match self {
             ControlTarget::Cog { cog, .. } => *cog,
             ControlTarget::Captain { .. } => CrewKind::Captain,
-            ControlTarget::Lookout => CrewKind::Lookout,
+            ControlTarget::Lookout { .. } => CrewKind::Lookout,
         }
     }
 
@@ -773,14 +777,15 @@ impl ControlTarget {
         match self {
             ControlTarget::Cog { ticket, .. } => format!(" for {}", ticket.0),
             ControlTarget::Captain { convoy } => format!(" for {}", convoy.0),
-            ControlTarget::Lookout => String::new(),
+            ControlTarget::Lookout { iid: Some(iid) } => format!(" on !{iid}"),
+            ControlTarget::Lookout { iid: None } => String::new(),
         }
     }
 }
 
 /// The live session(s) a control/send verb targets — the ONE resolution shared by anchor/weigh/sink
-/// and send. Worker/sailor/hand resolve by (ticket, kind); a captain by its convoy; the lookout as
-/// the singleton kind.
+/// and send. Worker/sailor/hand/admiral resolve by (ticket, kind); a captain by its convoy; a lookout
+/// by its ship (every lookout, when none is named).
 fn live_sessions_for(ledger: &Ledger, target: &ControlTarget) -> Result<Vec<Session>> {
     Ok(match target {
         ControlTarget::Cog { cog, ticket } => {
@@ -790,8 +795,15 @@ fn live_sessions_for(ledger: &Ledger, target: &ControlTarget) -> Result<Vec<Sess
             .into_iter()
             .filter(|s| s.kind == CrewKind::Captain && s.convoy.as_ref() == Some(convoy))
             .collect(),
-        ControlTarget::Lookout => {
-            SessionRepo::live(ledger)?.into_iter().filter(|s| s.kind == CrewKind::Lookout).collect()
+        ControlTarget::Lookout { iid } => {
+            let ship = match iid {
+                Some(iid) => Some(ledger.get_by_iid(*iid)?.ok_or_else(|| anyhow!("no MR !{iid}"))?.id),
+                None => None,
+            };
+            SessionRepo::live(ledger)?
+                .into_iter()
+                .filter(|s| s.kind == CrewKind::Lookout && ship.as_ref().is_none_or(|id| s.ship.as_ref() == Some(id)))
+                .collect()
         }
     })
 }
@@ -807,14 +819,14 @@ fn send<H: SessionHost>(ledger: &Ledger, host: &H, target: &ControlTarget, messa
 }
 
 /// Apply a control verb to its target, branching on the cog's shape. The DB gate differs — a
-/// ticketed cog's hold is its own session, a captain's is the convoy, the lookout's is its singleton
-/// row — but the session-reaching half (the graceful nudge, or the sink teardown) is uniform
+/// ticketed cog's hold is its own session, a captain's is the convoy, the lookouts' is their one
+/// control row — but the session-reaching half (the graceful nudge, or the sink teardown) is uniform
 /// (`signal`). The gate lives on the TRIGGER SOURCE so the cold cogs don't relaunch under anchor.
 fn control<H: SessionHost>(ledger: &Ledger, host: &H, verb: Verb, target: &ControlTarget) -> Result<()> {
     match target {
         ControlTarget::Cog { cog, ticket } => control_cog(ledger, host, verb, *cog, ticket),
         ControlTarget::Captain { convoy } => control_captain(ledger, host, verb, convoy),
-        ControlTarget::Lookout => control_lookout(ledger, host, verb),
+        ControlTarget::Lookout { iid } => control_lookout(ledger, host, verb, *iid),
     }
 }
 
@@ -854,15 +866,18 @@ fn control_captain<H: SessionHost>(ledger: &Ledger, host: &H, verb: Verb, convoy
     Ok(())
 }
 
-/// The singleton lookout — the hold lives on its `lookout` row. anchor/sink set it + weigh clears
-/// it; then `signal` the live lookout, if one is reviewing.
-fn control_lookout<H: SessionHost>(ledger: &Ledger, host: &H, verb: Verb) -> Result<()> {
+/// The lookouts — their hold lives on the `lookout` row, over them all. anchor/sink set it + weigh
+/// clears it; then `signal` every live lookout. Sinking ONE (its MR's `iid`) ends just that review:
+/// its MR is marked reviewed, so it waits for its next push.
+fn control_lookout<H: SessionHost>(ledger: &Ledger, host: &H, verb: Verb, iid: Option<i64>) -> Result<()> {
     let now = now_rfc3339();
-    match verb {
-        Verb::Anchor | Verb::Sink => LookoutRepo::anchor(ledger, &now)?,
-        Verb::Weigh => LookoutRepo::weigh(ledger, &now)?,
+    match (verb, iid) {
+        (Verb::Anchor | Verb::Weigh, Some(_)) => bail!("anchor / weigh hold every lookout: drop --iid"),
+        (Verb::Sink, Some(_)) => {}
+        (Verb::Anchor | Verb::Sink, None) => LookoutRepo::anchor(ledger, &now)?,
+        (Verb::Weigh, None) => LookoutRepo::weigh(ledger, &now)?,
     }
-    for s in live_sessions_for(ledger, &ControlTarget::Lookout)? {
+    for s in live_sessions_for(ledger, &ControlTarget::Lookout { iid })? {
         signal(ledger, host, verb, &s)?;
     }
     Ok(())
@@ -962,6 +977,7 @@ pub fn tick_sync(ledger: &Ledger, forge: &dyn Forge, tracker: &dyn Tracker) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    const LEVERS: reconcile::Levers = reconcile::Levers { dry_run: false, captain_sleep_secs: 0, admirals: 0, lookouts: 1 };
     use domain::ports::EventLog;
     use domain::*;
 
@@ -1195,6 +1211,7 @@ mod tests {
             created_at: "t".into(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         };
         SessionRepo::start(&db, &worker).unwrap().expect("session start");
         let me = ControlTarget::Cog { cog: CrewKind::Worker, ticket: TicketKey("PROJ-1".into()) };
@@ -1223,6 +1240,7 @@ mod tests {
             created_at: "t".into(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         };
         let id = SessionRepo::start(&db, &worker).unwrap().expect("session start");
         let report = |state, at: &str| Report { session: id.clone(), state, last_action: None, reported_at: at.into() };
@@ -1257,6 +1275,7 @@ mod tests {
             created_at: "t".into(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         };
         SessionRepo::start(&db, &hand).unwrap().expect("session start");
         let ship = Ship {
@@ -1294,8 +1313,38 @@ mod tests {
         record_status(&db, &cap("PROJ-100"), done, None).unwrap();
         assert_eq!(ReportRepo::latest(&db, &captain).unwrap().map(|r| r.state), Some(done));
         let reviewed = CogState::Lookout(LookoutState::Reviewed);
-        record_status(&db, &ControlTarget::Lookout, reviewed, None).unwrap();
+        record_status(&db, &ControlTarget::Lookout { iid: None }, reviewed, None).unwrap();
         assert_eq!(ReportRepo::latest(&db, &lookout).unwrap().map(|r| r.state), Some(reviewed));
+    }
+
+    #[test]
+    fn a_lookout_reports_on_its_own_ship_among_several() {
+        let db = Ledger::in_memory().unwrap();
+        let on = |iid: i64| {
+            let ship = Ship {
+                id: ShipId(0),
+                ticket: None,
+                iid,
+                url: "u".into(),
+                target: "master".into(),
+                source: String::new(),
+                pilot: "ally".into(),
+                created_at: "t".into(),
+                ended_at: None,
+                swept: None,
+                reviewed: None,
+            };
+            let ship = ShipRepo::upsert(&db, &ship).unwrap();
+            let id = start_ticketless(&db, CrewKind::Lookout, None, &format!("lookout-{iid}"));
+            let lookout = Session { ship: Some(ship), ..SessionRepo::get(&db, &id).unwrap().unwrap() };
+            SessionRepo::end(&db, &id, "t").unwrap(); // re-start it on its ship
+            SessionRepo::start(&db, &lookout).unwrap().expect("one lookout per ship")
+        };
+        let (a, b) = (on(77), on(78));
+        let reviewed = CogState::Lookout(LookoutState::Reviewed);
+        record_status(&db, &ControlTarget::Lookout { iid: Some(78) }, reviewed, None).unwrap();
+        assert_eq!(ReportRepo::latest(&db, &b).unwrap().map(|r| r.state), Some(reviewed));
+        assert!(ReportRepo::latest(&db, &a).unwrap().is_none(), "!77's lookout didn't report");
     }
 
     #[test]
@@ -1434,6 +1483,7 @@ mod tests {
             created_at: at.into(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         };
         SessionRepo::start(&db, &sailor).unwrap().expect("session start");
 
@@ -1444,11 +1494,11 @@ mod tests {
         assert_eq!((forge.disarmed.borrow().clone(), forge.drafted.borrow().clone()), (vec![7], vec![(7, true)]));
         assert!(OrderRepo::get(&db, &key).unwrap().unwrap().created_at.as_str() > at, "the order is re-dated");
         // The worker waits for its blocker, and no sailor launches on a ticket back in To Do.
-        assert!(reconcile::plan(&db, &[], true, 0, 0).unwrap().is_empty());
+        assert!(reconcile::plan(&db, &[], true, &LEVERS).unwrap().is_empty());
         tracker.transition(&TicketKey("PROJ-2".into()), TicketStatus::Done).unwrap();
         sync::sync_board(&db, &tracker, "now").unwrap();
         assert_eq!(
-            reconcile::plan(&db, &[], true, 0, 0).unwrap(),
+            reconcile::plan(&db, &[], true, &LEVERS).unwrap(),
             vec![reconcile::Action::Spawn { ticket: "PROJ-1".into(), kind: "worker".into() }]
         );
 
@@ -1460,7 +1510,7 @@ mod tests {
         assert_eq!(TicketRepo::get(&db, &key).unwrap().unwrap().status, Some(TicketStatus::InQa));
         assert!(!OrderRepo::get(&db, &key).unwrap().unwrap().auto_impl);
         assert_eq!(
-            reconcile::plan(&db, &[], true, 0, 0).unwrap(),
+            reconcile::plan(&db, &[], true, &LEVERS).unwrap(),
             vec![reconcile::Action::Spawn { ticket: "PROJ-1".into(), kind: "hand".into() }]
         );
     }
@@ -1501,6 +1551,7 @@ mod tests {
             created_at: "t".into(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         };
         sailor.id = SessionRepo::start(&db, &sailor).unwrap().expect("session start");
         let admiral = Session { kind: CrewKind::Admiral, tmux_session: "admiral-PROJ-1".into(), ..sailor.clone() };
@@ -1752,6 +1803,7 @@ mod tests {
                 created_at: "t".into(),
                 ended_at: None,
                 anchored_at: None,
+                ship: None,
             },
         )
         .unwrap()
@@ -1850,6 +1902,7 @@ mod tests {
                 created_at: "t".into(),
                 ended_at: None,
                 anchored_at: None,
+                ship: None,
             },
         )
         .unwrap()
@@ -1892,12 +1945,12 @@ mod tests {
     }
 
     #[test]
-    fn lookout_anchor_toggles_the_singleton_gate() {
+    fn lookout_anchor_toggles_the_review_loop_gate() {
         let db = Ledger::in_memory().unwrap();
         let host = FakeHost::new();
-        control(&db, &host, Verb::Anchor, &ControlTarget::Lookout).unwrap();
+        control(&db, &host, Verb::Anchor, &ControlTarget::Lookout { iid: None }).unwrap();
         assert!(LookoutRepo::anchored(&db).unwrap(), "the lookout row holds the hold");
-        control(&db, &host, Verb::Weigh, &ControlTarget::Lookout).unwrap();
+        control(&db, &host, Verb::Weigh, &ControlTarget::Lookout { iid: None }).unwrap();
         assert!(!LookoutRepo::anchored(&db).unwrap(), "weigh lifts it");
     }
 
@@ -1906,8 +1959,8 @@ mod tests {
         let db = Ledger::in_memory().unwrap();
         let id = start_ticketless(&db, CrewKind::Lookout, None, "lookout");
         let host = FakeHost::new();
-        control(&db, &host, Verb::Sink, &ControlTarget::Lookout).unwrap();
-        assert!(LookoutRepo::anchored(&db).unwrap(), "sink holds the singleton gate");
+        control(&db, &host, Verb::Sink, &ControlTarget::Lookout { iid: None }).unwrap();
+        assert!(LookoutRepo::anchored(&db).unwrap(), "sinking every lookout holds the loop");
         assert!(SessionRepo::get(&db, &id).unwrap().unwrap().ended_at.is_some(), "lookout session ended");
         assert_eq!(host.killed.borrow().as_slice(), &["lookout".to_string()]);
     }
@@ -2099,6 +2152,7 @@ mod tests {
             cog: cog.into(),
             ticket: ticket.map(Into::into),
             convoy: convoy.map(Into::into),
+            iid: None,
         };
         // worker/sailor/hand → a ticket.
         assert!(matches!(
@@ -2112,8 +2166,10 @@ mod tests {
             Ok(ControlTarget::Captain { .. })
         ));
         assert!(ControlTarget::from_wire(ct("captain", None, None)).is_err(), "needs a convoy");
-        // lookout → neither.
-        assert!(matches!(ControlTarget::from_wire(ct("lookout", None, None)), Ok(ControlTarget::Lookout)));
+        // lookout → an MR, or none (every lookout).
+        assert!(matches!(ControlTarget::from_wire(ct("lookout", None, None)), Ok(ControlTarget::Lookout { iid: None })));
+        let one = wire::CogTarget { iid: Some(7), ..ct("lookout", None, None) };
+        assert!(matches!(ControlTarget::from_wire(one), Ok(ControlTarget::Lookout { iid: Some(7) })));
         // unknown cog → a clear error, never a silent accept.
         assert!(ControlTarget::from_wire(ct("foreman", Some("PROJ-1"), None)).is_err());
     }

@@ -17,10 +17,10 @@
 //! - heal:     a Dead WARM cog (worker/hand) that didn't deliberately stop — a crash → respawn.
 //! - stand_down: a Dead COLD cog (sailor) — its one-shot watch is over → end the session so the
 //!   sweep trigger can re-launch on the next change (a crash looks identical; it re-fires too).
-//! - lookout:   one SINGLETON cog reviewing ALLIED ships (not ours). An allied open ship whose code
-//!   changed since its last review (head_sha ≠ reviewed) → launch the lookout on it (fleetd picks
-//!   the iid + marks it reviewed at dispatch); it reviews one and reports `reviewed`, reconcile
-//!   stands it down, and the next tick takes the next ally.
+//! - lookout:   one cog per ALLIED ship under review (not ours), up to `lookouts` at once. An allied
+//!   open ship whose code changed since its last review (head_sha ≠ reviewed) → launch a lookout on
+//!   it, oldest MR first (fleetd marks it reviewed at dispatch); it reviews its one ship and reports
+//!   `reviewed`, and reconcile stands it down.
 //! - captain:   one cold captain per ACTIVE convoy — launched once the convoy has rested
 //!   `captain_sleep_secs` since its last captain finished, stood down when it reports `done`.
 
@@ -33,7 +33,7 @@ use domain::ports::{
 };
 use domain::{
     Classification, CogState, ConvoyKey, CrewKind, EntityKind, EventKind, HandState, Inspection,
-    Liveness, Order, PipelineStatus, Report, Session, SessionId, Ship, ShipSnapshot, ShipState, Ticket,
+    Liveness, Order, PipelineStatus, Report, Session, SessionId, Ship, ShipId, ShipSnapshot, ShipState, Ticket,
     TicketKey, TicketStatus, Verdict, WorkerState,
 };
 use ledger::Ledger;
@@ -53,15 +53,16 @@ pub enum Action {
     LaunchCaptain { convoy: String },          // active convoy with a pass of work + no live captain → launch
     StandDownCaptain { convoy: String },       // captain finished its pass / convoy gone → end its session
     LaunchSailor { ticket: String },           // open ship changed since last sweep → launch a sailor
-    LaunchLookout { iid: i64 },                // an allied ship changed since last review → launch the lookout on it
-    StandDownLookout,                          // the singleton lookout finished its review → end its session
+    LaunchLookout { iid: i64 },                // an allied ship changed since its last review → launch a lookout on it
+    StandDownLookout { session: i64 },         // a lookout finished its review (or its ship sank) → end its session
     LaunchAdmiral { ticket: String },          // a confirmed escalation with no admiral since its verdict → convene one
 }
 
 /// Compute the reconcile plan from ledger state + the live cogs (session + derived
 /// liveness). Pure (reads only). `cogs` carry liveness for the heal/terminal checks; `stacks` is
 /// the forge's capability (`Forge::stacks`) — without it, no STACKED spawn and no BLOCK.
-pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, captain_sleep_secs: u64, admirals: i64) -> Result<Vec<Action>> {
+pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Result<Vec<Action>> {
+    let &Levers { captain_sleep_secs, admirals, lookouts, .. } = levers;
     let mut actions = Vec::new();
 
     // DISPATCH — iterate the order queue (intent). Spawn a CLEAN (all blockers terminal) ticket OR
@@ -268,50 +269,49 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, captain_sleep_secs: u64
         }
     }
 
-    // LOOKOUT — one SINGLETON cog reviewing ALLIED ships (MRs we don't own: no fleet order). Stand a
-    // finished lookout down (it reported `reviewed`, or died); then, if none is live, launch it on
-    // the next unreviewed ally. fleetd picks the iid — the first allied OPEN ship whose code changed
-    // since its last review (head_sha ≠ reviewed) — and marks it reviewed at dispatch.
-    let mut finished_lookout = false;
-    let mut live_lookout = false;
+    // LOOKOUTS — a lookout reviews ONE allied ship (an MR we don't own: no fleet order), up to
+    // `lookouts` at once (-1 = no cap, 0 = none). STAND DOWN one that reported `reviewed`, died, or
+    // whose ship merged or closed — unless the operator anchored it. Then, unless the operator
+    // anchored the lookouts, LAUNCH on each allied open ship whose code changed since its last review
+    // (head_sha ≠ reviewed) with no lookout on it, oldest MR first. fleetd marks it reviewed at launch.
+    let (mut seated, mut watched) = (0, Vec::new());
     for cog in cogs {
         if cog.session.kind != CrewKind::Lookout || cog.session.ended_at.is_some() {
             continue;
         }
         let done = ReportRepo::latest(ledger, &cog.session.id)?.is_some_and(|r| r.state.is_done());
-        if (done || cog.liveness == Liveness::Dead) && cog.session.anchored_at.is_none() {
-            finished_lookout = true;
+        let ship = cog.session.ship.as_ref();
+        let sunk = match ship {
+            Some(id) => !afloat(ledger, &armada, id)?,
+            None => false,
+        };
+        if cog.session.anchored_at.is_none() && (done || cog.liveness == Liveness::Dead || sunk) {
+            actions.push(Action::StandDownLookout { session: cog.session.id.0 });
         } else {
-            live_lookout = true; // alive (reviewing) or anchored → still holds the singleton slot
+            seated += 1;
+            watched.extend(ship);
         }
     }
-    if finished_lookout {
-        actions.push(Action::StandDownLookout); // ended first, so the launch below can take the slot
-    }
-    // An operator-anchored lookout (its hold lives on the singleton `lookout` row, the trigger
-    // source) is skipped — no relaunch while the anchor stands.
-    if !live_lookout && !LookoutRepo::anchored(ledger)? {
-        for ship in ledger.armada()? {
+    if !LookoutRepo::anchored(ledger)? {
+        let mut due = Vec::new();
+        for ship in &armada {
             // Ours = the fleet dispatched its ticket (an order). A peer's MR carries a ticket key too,
             // so the key alone says nothing about who owns it.
             let ours = match &ship.ticket {
                 Some(t) => OrderRepo::get(ledger, t)?.is_some(),
                 None => false,
             };
-            if ours || ship.ended_at.is_some() {
-                continue; // ours, or closed — the lookout reviews only allies
+            if ours || ship.ended_at.is_some() || watched.contains(&&ship.id) {
+                continue; // ours, closed, or under review
             }
-            let unreviewed = match ShipRepo::snapshot(ledger, &ship.id)? {
-                Some(snap) => {
-                    snap.state == ShipState::Open && ship.reviewed.as_deref() != Some(snap.head_sha.as_str())
-                }
-                None => false,
-            };
+            let unreviewed = ShipRepo::snapshot(ledger, &ship.id)?
+                .is_some_and(|snap| snap.state == ShipState::Open && ship.reviewed.as_deref() != Some(snap.head_sha.as_str()));
             if unreviewed {
-                actions.push(Action::LaunchLookout { iid: ship.iid });
-                break; // one review per pass
+                due.push((instant(&ship.created_at), ship.iid));
             }
         }
+        due.sort();
+        actions.extend(due.into_iter().take(room(lookouts, seated)).map(|(_, iid)| Action::LaunchLookout { iid }));
     }
 
     // ADMIRALTY — an admiral convenes on a ticket's CONFIRMED escalation, for the operator to rule
@@ -349,8 +349,7 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, captain_sleep_secs: u64
     }
     due.sort();
     due.dedup(); // a worker and a sailor on one ticket name the same escalation
-    let room = usize::try_from(admirals).map_or(usize::MAX, |cap| cap.saturating_sub(seated));
-    actions.extend(due.into_iter().take(room).map(|(_, ticket)| Action::LaunchAdmiral { ticket }));
+    actions.extend(due.into_iter().take(room(admirals, seated)).map(|(_, ticket)| Action::LaunchAdmiral { ticket }));
 
     // De-dup identical actions (e.g. a merged ship + terminal ticket both → one Reap).
     let mut seen: Vec<Action> = Vec::new();
@@ -533,6 +532,17 @@ fn confirmed(ledger: &Ledger, ticket: &TicketKey) -> Result<Option<Inspection>> 
     Ok(verdict.filter(|v| v.verdict == Verdict::Confirm && v.judges(&report)))
 }
 
+/// The ship is still open: not merged or closed.
+fn afloat(ledger: &Ledger, armada: &[Ship], id: &ShipId) -> Result<bool> {
+    let open = armada.iter().any(|s| &s.id == id && s.ended_at.is_none());
+    Ok(open && ShipRepo::snapshot(ledger, id)?.is_none_or(|snap| matches!(snap.state, ShipState::Open | ShipState::Draft)))
+}
+
+/// The free seats under a cap lever, `seated` taken: -1 = no cap, 0 = none.
+fn room(cap: i64, seated: usize) -> usize {
+    usize::try_from(cap).map_or(usize::MAX, |cap| cap.saturating_sub(seated))
+}
+
 /// `a` is later than `b` (both RFC 3339; compared as text only when one won't parse).
 fn after(a: &str, b: &str) -> bool {
     match (instant(a), instant(b)) {
@@ -573,6 +583,7 @@ pub struct Levers {
     pub dry_run: bool,
     pub captain_sleep_secs: u64,
     pub admirals: i64,
+    pub lookouts: i64,
 }
 
 /// Apply the reconcile plan through the ports. `dry_run=true` logs the plan and executes
@@ -588,7 +599,7 @@ pub fn tick<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
     project: &str,
     levers: &Levers,
 ) -> Result<usize> {
-    let actions = plan(ledger, cogs, forge.stacks(), levers.captain_sleep_secs, levers.admirals)?;
+    let actions = plan(ledger, cogs, forge.stacks(), levers)?;
     if levers.dry_run {
         ledger.append(
             &now_rfc3339(),
@@ -642,7 +653,7 @@ fn execute<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
         Action::StandDownCaptain { convoy } => stand_down_captain(ledger, host, convoy),
         Action::LaunchSailor { ticket } => launch_sailor(ledger, forge, host, ticket),
         Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, project, *iid),
-        Action::StandDownLookout => stand_down_lookout(ledger, host),
+        Action::StandDownLookout { session } => stand_down_lookout(ledger, host, &SessionId(*session)),
         Action::LaunchAdmiral { ticket } => launch_admiral(ledger, host, project, ticket),
     }
 }
@@ -705,6 +716,7 @@ fn spawn<T: Tracker + ?Sized, H: SessionHost>(
             created_at: now_rfc3339(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         },
     )? {
         Some(id) => id,
@@ -749,6 +761,7 @@ pub(crate) fn spawn_ticketless_hand<H: SessionHost>(ledger: &Ledger, host: &H, w
             created_at: now_rfc3339(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         },
     )?
     .ok_or_else(|| anyhow!("spawn_ticketless_hand: session not recorded"))?;
@@ -990,6 +1003,7 @@ fn launch_captain<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, conv
             created_at: now_rfc3339(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         },
     )? {
         Some(id) => id,
@@ -1139,6 +1153,7 @@ fn launch_sailor<H: SessionHost, F: Forge + ?Sized>(
             created_at: now_rfc3339(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         },
     )? {
         Some(id) => id,
@@ -1156,11 +1171,12 @@ fn launch_sailor<H: SessionHost, F: Forge + ?Sized>(
     Ok(())
 }
 
-/// LaunchLookout — the SINGLETON allied-ship review cold-loop. Review ONE allied ship (an MR we don't own).
-/// fleetd has picked the iid (the next unreviewed ally); fresh-poll it, mark it `reviewed = head_sha`
-/// at dispatch (sailor-style — the head this pass reviews), then launch the one lookout in the project checkout
-/// with the MR's iid injected via `FLEET_SHIP` (no worktree — an allied MR isn't ours; `/mr-review`
-/// fetches by SHA). The `one_live_lookout` lock makes a duplicate a benign skip.
+/// LaunchLookout — review ONE allied ship (an MR we don't own), picked by reconcile. Fresh-poll it,
+/// mark it `reviewed = head_sha` (the head this review covers), then launch a lookout in the project
+/// checkout with the MR's iid in `FLEET_SHIP` (no worktree — an allied MR isn't ours; `/mr-review`
+/// fetches by SHA). Named for the MR's ticket when it carries one, else its iid. A tmux session of
+/// that name already up (another MR on the same ticket) waits its turn; a lookout already on the ship
+/// (the per-ship lock) is a benign skip.
 fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
     ledger: &Ledger,
     forge: &F,
@@ -1173,33 +1189,40 @@ fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
         .into_iter()
         .find(|s| s.iid == iid && s.ended_at.is_none())
         .ok_or_else(|| anyhow!("launch_lookout !{iid}: no such ship"))?;
+    let tmux_session = match &ship.ticket {
+        Some(key) => format!("lookout-{}", key.0),
+        None => format!("lookout-{iid}"),
+    };
+    if host.alive(&tmux_session)? {
+        return Ok(());
+    }
 
     let snap = fresh_snapshot(ledger, forge, &ship)?;
     ShipRepo::set_reviewed(ledger, &ship.id, &snap.head_sha)?;
 
-    let lookout_tmux = "lookout".to_string();
     let hid = new_session_id();
     let session_id = match SessionRepo::start(
         ledger,
         &Session {
             id: SessionId(0),
             kind: CrewKind::Lookout,
-            ticket: None,
+            ticket: None, // an ally's ticket may be off our board: the ship is the key
             convoy: None,
             worktree_path: project.to_string(),
-            tmux_session: lookout_tmux.clone(),
+            tmux_session: tmux_session.clone(),
             harness_session_id: Some(hid.clone()),
             created_at: now_rfc3339(),
             ended_at: None,
             anchored_at: None,
+            ship: Some(ship.id.clone()),
         },
     )? {
         Some(id) => id,
-        None => return Ok(()), // the singleton lock holds → a lookout is already reviewing. Benign skip.
+        None => return Ok(()),
     };
 
     let cmd = format!("FLEET_SHIP={iid} {}", launch_cmd("lookout", Launch::Fresh(&hid)));
-    host.spawn(&lookout_tmux, Path::new(project), &cmd)?;
+    host.spawn(&tmux_session, Path::new(project), &cmd)?;
     ledger.append(
         &now_rfc3339(),
         EventKind::SessionStarted,
@@ -1210,23 +1233,22 @@ fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
     Ok(())
 }
 
-/// StandDownLookout — the singleton lookout finished its one review (or crashed): end its session +
-/// kill its tmux (best-effort; already dead). The trigger re-launches on the next unreviewed ally.
-fn stand_down_lookout<H: SessionHost>(ledger: &Ledger, host: &H) -> Result<()> {
-    for session in SessionRepo::live(ledger)? {
-        if session.kind != CrewKind::Lookout {
-            continue;
-        }
-        SessionRepo::end(ledger, &session.id, &now_rfc3339())?;
-        let _ = host.kill(&session.tmux_session);
-        ledger.append(
-            &now_rfc3339(),
-            EventKind::SessionEnded,
-            EntityKind::Session,
-            &session.id.0.to_string(),
-            &serde_json::json!({ "kind": "lookout", "reason": "stand_down" }),
-        )?;
+/// StandDownLookout — a lookout finished its review (or crashed, or its ship sank): end its session
+/// + kill its tmux (best-effort; already dead). Its ship is due again on its next push.
+fn stand_down_lookout<H: SessionHost>(ledger: &Ledger, host: &H, id: &SessionId) -> Result<()> {
+    let session = SessionRepo::get(ledger, id)?.ok_or_else(|| anyhow!("stand_down_lookout: no session {}", id.0))?;
+    if session.ended_at.is_some() {
+        return Ok(());
     }
+    SessionRepo::end(ledger, id, &now_rfc3339())?;
+    let _ = host.kill(&session.tmux_session);
+    ledger.append(
+        &now_rfc3339(),
+        EventKind::SessionEnded,
+        EntityKind::Session,
+        &id.0.to_string(),
+        &serde_json::json!({ "kind": "lookout", "reason": "stand_down" }),
+    )?;
     Ok(())
 }
 
@@ -1253,6 +1275,7 @@ fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, tick
             created_at: now_rfc3339(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         },
     )? {
         Some(id) => id,
@@ -1322,8 +1345,8 @@ fn new_session_id() -> String {
 mod tests {
     use super::*;
 
-    const LIVE: Levers = Levers { dry_run: false, captain_sleep_secs: 0, admirals: 0 };
-    const DRY: Levers = Levers { dry_run: true, captain_sleep_secs: 0, admirals: 0 };
+    const LIVE: Levers = Levers { dry_run: false, captain_sleep_secs: 0, admirals: 0, lookouts: 1 };
+    const DRY: Levers = Levers { dry_run: true, ..LIVE };
     use domain::ports::EventLog;
     use domain::*;
     use std::cell::RefCell;
@@ -1407,6 +1430,7 @@ mod tests {
                 created_at: "t".into(),
                 ended_at: None,
                 anchored_at: None,
+                ship: None,
             },
         )
         .unwrap()
@@ -1462,7 +1486,12 @@ mod tests {
     }
 
     /// An ALLIED ship (an MR we don't own — no order; here no ticket either) + its snapshot, for the lookout tests.
-    fn allied_ship(db: &Ledger, iid: i64, state: ShipState) {
+    fn allied_ship(db: &Ledger, iid: i64, state: ShipState) -> ShipId {
+        allied_ship_at(db, iid, state, "t")
+    }
+
+    /// An allied ship (no ticket, no order) opened at `at`.
+    fn allied_ship_at(db: &Ledger, iid: i64, state: ShipState, at: &str) -> ShipId {
         let id = ShipRepo::upsert(
             db,
             &Ship {
@@ -1473,7 +1502,7 @@ mod tests {
                 target: "master".into(),
                 source: String::new(),
                 pilot: "ally".into(),
-                created_at: "t".into(),
+                created_at: at.into(),
                 ended_at: None,
                 swept: None,
                 reviewed: None,
@@ -1481,7 +1510,7 @@ mod tests {
         )
         .unwrap();
         db.sync_snapshot(&ShipSnapshot {
-            ship: id,
+            ship: id.clone(),
             title: "T".into(),
             state,
             head_sha: "s".into(),
@@ -1497,9 +1526,10 @@ mod tests {
             synced_at: "t".into(),
         })
         .unwrap();
+        id
     }
 
-    /// A live, ticketless singleton lookout cog (not started in the ledger — plan(, true) reads it from
+    /// A live lookout cog on no ship (not started in the ledger — plan(, true) reads it from
     /// the `cogs` slice).
     fn lookout_cog() -> Cog {
         Cog {
@@ -1514,6 +1544,7 @@ mod tests {
                 created_at: "t".into(),
                 ended_at: None,
                 anchored_at: None,
+                ship: None,
             },
             liveness: Liveness::Active,
         }
@@ -1532,6 +1563,7 @@ mod tests {
                 created_at: "t".into(),
                 ended_at: None,
                 anchored_at: None,
+                ship: None,
             },
             liveness: Liveness::Dead,
         }
@@ -1552,6 +1584,7 @@ mod tests {
                 created_at: "t".into(),
                 ended_at: None,
                 anchored_at: None,
+                ship: None,
             },
             liveness: Liveness::Active,
         }
@@ -1573,6 +1606,7 @@ mod tests {
                 created_at: "t".into(),
                 ended_at: None,
                 anchored_at: None,
+                ship: None,
             },
         )
         .unwrap()
@@ -1596,7 +1630,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::Todo, false, vec![]);
         order(&db, "PROJ-1", true);
         assert_eq!(
-            plan(&db, &[], true, 0, 0).unwrap(),
+            plan(&db, &[], true, &LIVE).unwrap(),
             vec![Action::Spawn { ticket: "PROJ-1".into(), kind: "worker".into() }]
         );
     }
@@ -1606,7 +1640,7 @@ mod tests {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::Todo, false, vec![]);
         order(&db, "PROJ-1", false);
-        assert_eq!(plan(&db, &[], true, 0, 0).unwrap()[0], Action::Spawn { ticket: "PROJ-1".into(), kind: "hand".into() });
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap()[0], Action::Spawn { ticket: "PROJ-1".into(), kind: "hand".into() });
     }
 
     #[test]
@@ -1616,14 +1650,14 @@ mod tests {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         order(&db, "PROJ-1", false); // hand order
-        assert_eq!(plan(&db, &[], true, 0, 0).unwrap()[0], Action::Spawn { ticket: "PROJ-1".into(), kind: "hand".into() });
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap()[0], Action::Spawn { ticket: "PROJ-1".into(), kind: "hand".into() });
     }
 
     #[test]
     fn no_spawn_without_an_order() {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::Todo, false, vec![]);
-        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -1632,7 +1666,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::Todo, false, vec![]);
         order(&db, "PROJ-1", true);
         session(&db, CrewKind::Worker, "PROJ-1", false);
-        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -1642,7 +1676,7 @@ mod tests {
         order(&db, "PROJ-1", true);
         ticket(&db, "PROJ-2", TicketStatus::InProgress, false, vec![]);
         order(&db, "PROJ-2", true);
-        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -1653,22 +1687,22 @@ mod tests {
         order(&db, "PROJ-1", true);
         let mut cog = live_cog(&db, CrewKind::Worker, "PROJ-1", Liveness::Idle);
         report(&db, &cog, CogState::Worker(WorkerState::Waiting));
-        assert!(plan(&db, std::slice::from_ref(&cog), true, 0, 0).unwrap().is_empty(), "its blocker is open: it waits");
+        assert!(plan(&db, std::slice::from_ref(&cog), true, &LIVE).unwrap().is_empty(), "its blocker is open: it waits");
         cog.liveness = Liveness::Dead;
-        assert!(plan(&db, std::slice::from_ref(&cog), true, 0, 0).unwrap().is_empty(), "nor healed while it waits");
+        assert!(plan(&db, std::slice::from_ref(&cog), true, &LIVE).unwrap().is_empty(), "nor healed while it waits");
 
         ticket(&db, "PROJ-2", TicketStatus::Done, false, vec![]);
         let heal = Action::Heal { ticket: "PROJ-1".into(), kind: "worker".into() };
-        assert_eq!(plan(&db, std::slice::from_ref(&cog), true, 0, 0).unwrap(), vec![heal], "dead: healed first");
+        assert_eq!(plan(&db, std::slice::from_ref(&cog), true, &LIVE).unwrap(), vec![heal], "dead: healed first");
         cog.liveness = Liveness::Idle;
-        assert_eq!(plan(&db, std::slice::from_ref(&cog), true, 0, 0).unwrap(), vec![Action::Wake { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, std::slice::from_ref(&cog), true, &LIVE).unwrap(), vec![Action::Wake { ticket: "PROJ-1".into() }]);
         wake(&db, &FakeHost::new(), "PROJ-1").unwrap();
         assert_eq!(
             ReportRepo::latest(&db, &cog.session.id).unwrap().map(|r| r.state),
             Some(CogState::Worker(WorkerState::Implementing)),
             "woken once: back to implementing"
         );
-        assert!(plan(&db, &[cog], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[cog], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -1677,9 +1711,9 @@ mod tests {
         ticket(&db, "PROJ-2", TicketStatus::InProgress, false, vec![]);
         ticket(&db, "PROJ-1", TicketStatus::Todo, false, vec!["PROJ-2"]);
         order(&db, "PROJ-1", true);
-        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty(), "blocked while PROJ-2 is in progress");
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty(), "blocked while PROJ-2 is in progress");
         ticket(&db, "PROJ-2", TicketStatus::Done, false, vec![]);
-        assert_eq!(plan(&db, &[], true, 0, 0).unwrap().len(), 1);
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap().len(), 1);
     }
 
     #[test]
@@ -1692,12 +1726,12 @@ mod tests {
         ship(&db, 101, "PROJ-1", ShipState::Open); // its open MR — the fork base
         ticket(&db, "PROJ-2", TicketStatus::Todo, false, vec!["PROJ-1"]); // child blocked_by parent
         order(&db, "PROJ-2", true); // forks off origin/master
-        assert!(!plan(&db, &[], true, 0, 0).unwrap().contains(&spawn), "off master it isn't stacked: it waits");
+        assert!(!plan(&db, &[], true, &LIVE).unwrap().contains(&spawn), "off master it isn't stacked: it waits");
         let stacked = Order { fork_from: "origin/feature/PROJ-1".into(), ..OrderRepo::get(&db, &TicketKey("PROJ-2".into())).unwrap().unwrap() };
         OrderRepo::dispatch(&db, &stacked).unwrap();
-        assert!(plan(&db, &[], true, 0, 0).unwrap().contains(&spawn), "off the parent's branch it spawns");
+        assert!(plan(&db, &[], true, &LIVE).unwrap().contains(&spawn), "off the parent's branch it spawns");
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]); // the parent, still building
-        assert!(!plan(&db, &[], true, 0, 0).unwrap().contains(&spawn), "a parent still building isn't stacked on");
+        assert!(!plan(&db, &[], true, &LIVE).unwrap().contains(&spawn), "a parent still building isn't stacked on");
     }
 
     #[test]
@@ -1711,7 +1745,7 @@ mod tests {
         order(&db, "PROJ-2", true);
         let t2 = TicketRepo::get(&db, &TicketKey("PROJ-2".into())).unwrap().unwrap();
         assert_eq!(classify(&db, &t2, &db.armada().unwrap(), false).unwrap(), Some(Classification::Blocked));
-        assert!(!plan(&db, &[], false, 0, 0).unwrap().iter().any(|a| matches!(a, Action::Spawn { .. })));
+        assert!(!plan(&db, &[], false, &LIVE).unwrap().iter().any(|a| matches!(a, Action::Spawn { .. })));
     }
 
     #[test]
@@ -1722,7 +1756,7 @@ mod tests {
         ticket(&db, "PROJ-2", TicketStatus::Todo, false, vec!["PROJ-1"]);
         order(&db, "PROJ-2", true);
         assert!(
-            !plan(&db, &[], true, 0, 0).unwrap().iter().any(|a| matches!(a, Action::Spawn { .. })),
+            !plan(&db, &[], true, &LIVE).unwrap().iter().any(|a| matches!(a, Action::Spawn { .. })),
             "a blocked child with no parent ship to fork from doesn't spawn"
         );
     }
@@ -1735,7 +1769,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let w = live_cog(&db, CrewKind::Worker, "PROJ-1", Liveness::Quiet);
         report(&db, &w, CogState::Worker(WorkerState::Concluded));
-        assert_eq!(plan(&db, &[w], true, 0, 0).unwrap(), vec![Action::Handoff { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, &[w], true, &LIVE).unwrap(), vec![Action::Handoff { ticket: "PROJ-1".into() }]);
     }
 
     #[test]
@@ -1744,7 +1778,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let w = live_cog(&db, CrewKind::Worker, "PROJ-1", Liveness::Active);
         report(&db, &w, CogState::Worker(WorkerState::Implementing)); // not done yet
-        assert!(plan(&db, &[w], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[w], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -1754,7 +1788,7 @@ mod tests {
         let w = live_cog(&db, CrewKind::Worker, "PROJ-1", Liveness::Quiet);
         report(&db, &w, CogState::Worker(WorkerState::Concluded));
         session(&db, CrewKind::Sailor, "PROJ-1", false); // sailor already sailing
-        assert!(plan(&db, &[w], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[w], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -1764,7 +1798,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let w = live_cog(&db, CrewKind::Worker, "PROJ-1", Liveness::Dead);
         report(&db, &w, CogState::Worker(WorkerState::Concluded));
-        assert_eq!(plan(&db, &[w], true, 0, 0).unwrap(), vec![Action::Handoff { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, &[w], true, &LIVE).unwrap(), vec![Action::Handoff { ticket: "PROJ-1".into() }]);
     }
 
     // ── reap ──────────────────────────────────────────────────────────────────────
@@ -1775,7 +1809,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         session(&db, CrewKind::Sailor, "PROJ-1", false); // live sailor to reap
         ship(&db, 10, "PROJ-1", ShipState::Merged);
-        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
     }
 
     #[test]
@@ -1783,7 +1817,7 @@ mod tests {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::Cancelled, false, vec![]);
         order(&db, "PROJ-1", true); // no session at all: nothing live to trigger the per-cog reap
-        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
     }
 
     #[test]
@@ -1791,7 +1825,7 @@ mod tests {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::Done, false, vec![]);
         let cogs = vec![dead_cog("PROJ-1", CrewKind::Sailor)]; // live-in-ledger, ticket Done
-        assert_eq!(plan(&db, &cogs, true, 0, 0).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, &cogs, true, &LIVE).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
     }
 
     // ── heal ──────────────────────────────────────────────────────────────────────
@@ -1818,7 +1852,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let cogs = vec![dead_cog("PROJ-1", CrewKind::Worker)];
         assert_eq!(
-            plan(&db, &cogs, true, 0, 0).unwrap(),
+            plan(&db, &cogs, true, &LIVE).unwrap(),
             vec![Action::Heal { ticket: "PROJ-1".into(), kind: "worker".into() }]
         );
     }
@@ -1831,7 +1865,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let mut cog = dead_cog("PROJ-1", CrewKind::Worker);
         cog.session.anchored_at = Some("t1".into());
-        assert!(plan(&db, &[cog], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[cog], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -1841,7 +1875,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let w = live_cog(&db, CrewKind::Worker, "PROJ-1", Liveness::Dead);
         report(&db, &w, CogState::Worker(WorkerState::Escalated));
-        assert!(plan(&db, &[w], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[w], true, &LIVE).unwrap().is_empty());
     }
 
     // ── dry-run ───────────────────────────────────────────────────────────────────
@@ -2296,7 +2330,7 @@ mod tests {
         order_wt(&db, "PROJ-1", false, Some("/wt/PROJ-1"));
         let h = live_cog(&db, CrewKind::Hand, "PROJ-1", Liveness::Quiet);
         report(&db, &h, CogState::Hand(HandState::Done));
-        assert_eq!(plan(&db, std::slice::from_ref(&h), true, 0, 0).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, std::slice::from_ref(&h), true, &LIVE).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
 
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
@@ -2313,7 +2347,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         order_wt(&db, "PROJ-1", true, Some("/wt/PROJ-1")); // an AUTO order with a worktree → sailor-eligible
         ship(&db, 10, "PROJ-1", ShipState::Open); // swept = None → first sweep always fires
-        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-1".into() }]);
     }
 
     #[test]
@@ -2326,7 +2360,7 @@ mod tests {
         order_wt(&d1, "PROJ-1", false, Some("/wt/PROJ-1")); // auto_impl=false → hand
         ship(&d1, 10, "PROJ-1", ShipState::Open);
         assert_eq!(
-            plan(&d1, &[], true, 0, 0).unwrap(),
+            plan(&d1, &[], true, &LIVE).unwrap(),
             vec![Action::Spawn { ticket: "PROJ-1".into(), kind: "hand".into() }],
             "a manual/hand order spawns a hand, never a cold-loop sailor",
         );
@@ -2334,7 +2368,7 @@ mod tests {
         let d2 = db();
         ticket(&d2, "PROJ-2", TicketStatus::InQa, false, vec![]); // no order at all
         ship(&d2, 11, "PROJ-2", ShipState::Open);
-        assert_eq!(plan(&d2, &[], true, 0, 0).unwrap(), vec![Action::LaunchLookout { iid: 11 }], "no order → no sailor; an ally's to review");
+        assert_eq!(plan(&d2, &[], true, &LIVE).unwrap(), vec![Action::LaunchLookout { iid: 11 }], "no order → no sailor; an ally's to review");
     }
 
     #[test]
@@ -2346,17 +2380,17 @@ mod tests {
         ticket(&db, "PROJ-2", TicketStatus::InQa, false, vec!["PROJ-1"]);
         order_wt(&db, "PROJ-2", true, Some("/wt/PROJ-2"));
         ship(&db, 10, "PROJ-2", ShipState::Open);
-        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-2".into() }]);
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-2".into() }]);
 
         // Swept while blocked (the sweep couldn't arm) → quiet while nothing changes…
         let s = db.armada().unwrap().into_iter().find(|s| s.iid == 10).unwrap();
         let snap = ShipRepo::snapshot(&db, &s.id).unwrap().unwrap();
         db.set_swept(&s.id, Some(&ship_fingerprint(&snap, true))).unwrap();
-        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty(), "unchanged while PROJ-1 is open");
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty(), "unchanged while PROJ-1 is open");
 
         // …until PROJ-1 lands: the blocker lifting is itself a change → the sweep that arms.
         ticket(&db, "PROJ-1", TicketStatus::Done, false, vec![]);
-        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-2".into() }]);
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-2".into() }]);
     }
 
     #[test]
@@ -2369,7 +2403,7 @@ mod tests {
         let s = db.armada().unwrap().into_iter().find(|s| s.iid == 10).unwrap();
         let snap = ShipRepo::snapshot(&db, &s.id).unwrap().unwrap();
         db.set_swept(&s.id, Some(&ship_fingerprint(&snap, false))).unwrap();
-        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty());
     }
 
     /// Re-sync ship `iid`'s snapshot through `mutate`, then mark swept = its (new) fingerprint —
@@ -2394,7 +2428,7 @@ mod tests {
         ship(&db, 10, "PROJ-1", ShipState::Open);
         swept_with(&db, 10, |s| s.pipeline = Some(PipelineStatus::Failed));
         assert_eq!(
-            plan(&db, &[], true, 0, 0).unwrap(),
+            plan(&db, &[], true, &LIVE).unwrap(),
             vec![Action::LaunchSailor { ticket: "PROJ-1".into() }]
         );
     }
@@ -2412,7 +2446,7 @@ mod tests {
             s.pipeline = Some(PipelineStatus::Failed);
             s.merge_status = Some("merge_request_blocked".into());
         });
-        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty(), "a blocked ship doesn't re-launch while unchanged");
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty(), "a blocked ship doesn't re-launch while unchanged");
     }
 
     #[test]
@@ -2425,7 +2459,7 @@ mod tests {
         ship(&db, 10, "PROJ-1", ShipState::Open);
         swept_with(&db, 10, |s| s.pipeline = Some(PipelineStatus::Failed));
         session(&db, CrewKind::Sailor, "PROJ-1", false); // a live sailor holds the slot
-        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty(), "a live sailor blocks re-launch");
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty(), "a live sailor blocks re-launch");
     }
 
     #[test]
@@ -2434,7 +2468,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InQa, true, vec![]); // held
         order_wt(&db, "PROJ-1", true, Some("/wt/PROJ-1"));
         ship(&db, 10, "PROJ-1", ShipState::Open);
-        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -2444,7 +2478,7 @@ mod tests {
         order_wt(&db, "PROJ-1", true, Some("/wt/PROJ-1"));
         ship(&db, 10, "PROJ-1", ShipState::Open);
         session(&db, CrewKind::Sailor, "PROJ-1", false); // a live sailor holds it
-        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -2501,13 +2535,13 @@ mod tests {
         assert!(s.swept.is_some(), "swept recorded at dispatch");
     }
 
-    // ── LaunchLookout (the singleton allied-ship review cold-loop) ──────────────────────────
+    // ── LaunchLookout (the allied-ship review cold-loop) ────────────────────────────────────
 
     #[test]
     fn launches_the_lookout_on_an_unreviewed_allied_ship() {
         let db = db();
         allied_ship(&db, 77, ShipState::Open); // an allied MR, reviewed = None → review it
-        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), vec![Action::LaunchLookout { iid: 77 }]);
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap(), vec![Action::LaunchLookout { iid: 77 }]);
     }
 
     #[test]
@@ -2517,7 +2551,7 @@ mod tests {
         let db = db();
         allied_ship(&db, 77, ShipState::Open);
         LookoutRepo::anchor(&db, "t").unwrap();
-        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -2527,7 +2561,7 @@ mod tests {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         ship(&db, 10, "PROJ-1", ShipState::Open);
-        let lookout = |db: &Ledger| plan(db, &[], true, 0, 0).unwrap().into_iter().find(|a| matches!(a, Action::LaunchLookout { .. }));
+        let lookout = |db: &Ledger| plan(db, &[], true, &LIVE).unwrap().into_iter().find(|a| matches!(a, Action::LaunchLookout { .. }));
         assert_eq!(lookout(&db), Some(Action::LaunchLookout { iid: 10 }), "a peer's ticketed MR is an ally");
         order(&db, "PROJ-1", true);
         assert_eq!(lookout(&db), None, "no lookout on our own ship");
@@ -2538,22 +2572,39 @@ mod tests {
         let db = db();
         allied_ship(&db, 77, ShipState::Open);
         mark_reviewed(&db, 77); // reviewed == head → nothing changed
-        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
     fn no_lookout_for_a_draft_ally() {
         let db = db();
         allied_ship(&db, 77, ShipState::Draft); // a draft ally isn't ready to review
-        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
-    fn no_second_lookout_while_one_is_reviewing() {
-        // The singleton: a live lookout blocks launching another, even on a different unreviewed ally.
+    fn the_lookouts_lever_caps_the_reviews_one_per_ship_oldest_first() {
         let db = db();
-        allied_ship(&db, 77, ShipState::Open);
-        assert!(plan(&db, &[lookout_cog()], true, 0, 0).unwrap().is_empty());
+        let watched = allied_ship_at(&db, 77, ShipState::Open, "2026-01-01T00:03:00Z");
+        allied_ship_at(&db, 78, ShipState::Open, "2026-01-01T00:02:00Z");
+        allied_ship_at(&db, 79, ShipState::Open, "2026-01-01T00:01:00Z");
+        let launched = |cogs: &[Cog], lookouts| -> Vec<i64> {
+            let plan = plan(&db, cogs, true, &Levers { lookouts, ..LIVE }).unwrap();
+            plan.into_iter().filter_map(|a| if let Action::LaunchLookout { iid } = a { Some(iid) } else { None }).collect()
+        };
+        assert_eq!(launched(&[], 2), [79, 78], "oldest MR first");
+        assert_eq!(launched(&[], -1), [79, 78, 77], "-1: no cap");
+        assert!(launched(&[], 0).is_empty(), "0: none");
+        let on_77 = Cog { session: Session { ship: Some(watched), ..lookout_cog().session }, ..lookout_cog() };
+        assert_eq!(launched(&[on_77], 2), [79], "a live lookout takes a seat, and keeps its ship");
+    }
+
+    #[test]
+    fn a_lookout_stands_down_once_its_ship_merges() {
+        let db = db();
+        let id = allied_ship(&db, 77, ShipState::Merged);
+        let cog = Cog { session: Session { ship: Some(id), ..lookout_cog().session }, ..lookout_cog() };
+        assert_eq!(plan(&db, &[cog], true, &LIVE).unwrap(), vec![Action::StandDownLookout { session: 1 }]);
     }
 
     #[test]
@@ -2561,23 +2612,23 @@ mod tests {
         let db = db();
         let mut cog = lookout_cog();
         cog.liveness = Liveness::Dead;
-        assert_eq!(plan(&db, &[cog], true, 0, 0).unwrap(), vec![Action::StandDownLookout]);
+        assert_eq!(plan(&db, &[cog], true, &LIVE).unwrap(), vec![Action::StandDownLookout { session: 1 }]);
     }
 
     #[test]
     fn a_live_lookout_that_reported_reviewed_stands_down_and_the_next_ally_launches() {
         // `claude --agent` doesn't self-exit: the lookout's `reviewed` report, not a dead tmux, ends
-        // its pass — and frees the singleton slot for the next unreviewed ally in the same plan.
+        // its pass — and frees its seat for the next unreviewed ally in the same plan.
         let db = db();
         allied_ship(&db, 77, ShipState::Open);
         let id = SessionRepo::start(&db, &lookout_cog().session).unwrap().expect("session start");
         let cog = Cog { session: SessionRepo::get(&db, &id).unwrap().unwrap(), liveness: Liveness::Active };
         report(&db, &cog, CogState::Lookout(LookoutState::Escalated));
-        assert!(plan(&db, std::slice::from_ref(&cog), true, 0, 0).unwrap().is_empty(), "an escalated lookout holds the slot");
+        assert!(plan(&db, std::slice::from_ref(&cog), true, &LIVE).unwrap().is_empty(), "an escalated lookout holds the slot");
         report(&db, &cog, CogState::Lookout(LookoutState::Reviewed));
         assert_eq!(
-            plan(&db, &[cog], true, 0, 0).unwrap(),
-            vec![Action::StandDownLookout, Action::LaunchLookout { iid: 77 }]
+            plan(&db, &[cog], true, &LIVE).unwrap(),
+            vec![Action::StandDownLookout { session: id.0 }, Action::LaunchLookout { iid: 77 }]
         );
     }
 
@@ -2610,15 +2661,16 @@ mod tests {
         let host = FakeHost::new();
         assert_eq!(tick(&db, &tracker, &host, &forge, &[], "/project", &LIVE).unwrap(), 1);
 
-        // the singleton lookout launched in the project checkout, ticketless, with the allied iid injected.
+        // a lookout launched in the project checkout on the ship, with the allied iid injected.
         let live = db.live().unwrap();
         let lookout = live.iter().find(|s| s.kind == CrewKind::Lookout).expect("a lookout");
-        assert!(lookout.ticket.is_none(), "the lookout is ticketless");
+        assert!(lookout.ticket.is_none(), "keyed by its ship, not a ticket");
+        assert!(lookout.ship.is_some(), "it reviews its ship");
         assert_eq!(lookout.worktree_path, "/project");
         let spawned = host.spawned.borrow();
         assert_eq!(spawned.len(), 1);
         let (name, cwd, cmd) = &spawned[0];
-        assert_eq!((name.as_str(), cwd.as_str()), ("lookout", "/project"));
+        assert_eq!((name.as_str(), cwd.as_str()), ("lookout-77", "/project"), "no ticket: named by iid");
         assert!(
             cmd.starts_with("FLEET_SHIP=77 claude --session-id ") && cmd.ends_with(" --agent lookout"),
             "cmd was: {cmd}"
@@ -2629,7 +2681,7 @@ mod tests {
     }
 
     #[test]
-    fn executes_stand_down_lookout_ends_the_singleton_session() {
+    fn executes_stand_down_lookout_ends_its_session() {
         let db = db();
         let id = SessionRepo::start(
             &db,
@@ -2644,6 +2696,7 @@ mod tests {
                 created_at: "t".into(),
                 ended_at: None,
                 anchored_at: None,
+                ship: None,
             },
         )
         .unwrap()
@@ -2855,7 +2908,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         let cogs = vec![dead_cog("PROJ-1", CrewKind::Sailor)];
         assert_eq!(
-            plan(&db, &cogs, true, 0, 0).unwrap(),
+            plan(&db, &cogs, true, &LIVE).unwrap(),
             vec![Action::StandDown { ticket: "PROJ-1".into(), kind: "sailor".into() }]
         );
     }
@@ -2868,7 +2921,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         let s = live_cog(&db, CrewKind::Sailor, "PROJ-1", Liveness::Dead);
         report(&db, &s, CogState::Sailor(SailorState::Escalated));
-        assert!(plan(&db, &[s], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[s], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -2878,7 +2931,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         let mut cog = dead_cog("PROJ-1", CrewKind::Sailor);
         cog.session.anchored_at = Some("t1".into());
-        assert!(plan(&db, &[cog], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[cog], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -2909,7 +2962,7 @@ mod tests {
         let s = live_cog(&db, CrewKind::Sailor, "PROJ-1", Liveness::Active);
         report(&db, &s, CogState::Sailor(SailorState::Sleeping));
         assert_eq!(
-            plan(&db, &[s], true, 0, 0).unwrap(),
+            plan(&db, &[s], true, &LIVE).unwrap(),
             vec![Action::StandDown { ticket: "PROJ-1".into(), kind: "sailor".into() }]
         );
     }
@@ -2921,7 +2974,7 @@ mod tests {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         let s = live_cog(&db, CrewKind::Sailor, "PROJ-1", Liveness::Active);
-        assert!(plan(&db, &[s], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[s], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -2932,7 +2985,7 @@ mod tests {
         let mut s = live_cog(&db, CrewKind::Sailor, "PROJ-1", Liveness::Active);
         report(&db, &s, CogState::Sailor(SailorState::Sleeping));
         s.session.anchored_at = Some("t1".into());
-        assert!(plan(&db, &[s], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[s], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -2943,7 +2996,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         order_wt(&db, "PROJ-1", true, Some("/wt"));
         ship(&db, 10, "PROJ-1", ShipState::Merged);
-        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
     }
 
     // ── parent roll-up (converge rollup_parent) ─────────────────────────────────────
@@ -2989,7 +3042,7 @@ mod tests {
         db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
         convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::InProgress); // nothing to do: it looks anyway
         assert_eq!(
-            plan(&db, &[], true, 900, 0).unwrap(),
+            plan(&db, &[], true, &Levers { captain_sleep_secs: 900, ..LIVE }).unwrap(),
             vec![Action::LaunchCaptain { convoy: "PROJ-100".into() }]
         );
     }
@@ -3000,12 +3053,12 @@ mod tests {
         db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
         let id = SessionRepo::start(&db, &captain_cog("PROJ-100").session).unwrap().expect("session start");
         SessionRepo::end(&db, &id, &now_rfc3339()).unwrap();
-        assert!(plan(&db, &[], true, 900, 0).unwrap().is_empty(), "finished just now: resting");
+        assert!(plan(&db, &[], true, &Levers { captain_sleep_secs: 900, ..LIVE }).unwrap().is_empty(), "finished just now: resting");
         let launch = vec![Action::LaunchCaptain { convoy: "PROJ-100".into() }];
-        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), launch, "rested");
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap(), launch, "rested");
         let id = SessionRepo::start(&db, &captain_cog("PROJ-100").session).unwrap().expect("session start");
         SessionRepo::end(&db, &id, "2000-01-01T00:00:00Z").unwrap();
-        assert!(plan(&db, &[], true, 900, 0).unwrap().is_empty(), "the latest finish counts");
+        assert!(plan(&db, &[], true, &Levers { captain_sleep_secs: 900, ..LIVE }).unwrap().is_empty(), "the latest finish counts");
     }
 
     #[test]
@@ -3026,9 +3079,9 @@ mod tests {
         let launch = vec![Action::LaunchCaptain { convoy: "PROJ-100".into() }];
         escalate("2000-01-01T00:00:00Z");
         finish(&now_rfc3339());
-        assert!(plan(&db, &[], true, 900, 0).unwrap().is_empty(), "escalated before the last pass: it rests");
+        assert!(plan(&db, &[], true, &Levers { captain_sleep_secs: 900, ..LIVE }).unwrap().is_empty(), "escalated before the last pass: it rests");
         escalate(&now_rfc3339());
-        assert_eq!(plan(&db, &[], true, 900, 0).unwrap(), launch, "escalated since: a pass is due");
+        assert_eq!(plan(&db, &[], true, &Levers { captain_sleep_secs: 900, ..LIVE }).unwrap(), launch, "escalated since: a pass is due");
     }
 
     #[test]
@@ -3037,7 +3090,7 @@ mod tests {
         let db = db();
         db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
         ConvoyRepo::anchor(&db, &ConvoyKey("PROJ-100".into()), "t2").unwrap();
-        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -3046,7 +3099,7 @@ mod tests {
         db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
         convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::Todo); // work waiting
         // an alive captain already holds the convoy → no second launch.
-        assert!(plan(&db, &[captain_cog("PROJ-100")], true, 0, 0).unwrap().is_empty());
+        assert!(plan(&db, &[captain_cog("PROJ-100")], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
@@ -3054,7 +3107,7 @@ mod tests {
         let db = db();
         // convoy never active (closed/gone) + a live captain → stand it down.
         assert_eq!(
-            plan(&db, &[captain_cog("PROJ-100")], true, 0, 0).unwrap(),
+            plan(&db, &[captain_cog("PROJ-100")], true, &LIVE).unwrap(),
             vec![Action::StandDownCaptain { convoy: "PROJ-100".into() }]
         );
     }
@@ -3067,9 +3120,9 @@ mod tests {
         db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
         let id = SessionRepo::start(&db, &captain_cog("PROJ-100").session).unwrap().expect("session start");
         let cog = Cog { session: SessionRepo::get(&db, &id).unwrap().unwrap(), liveness: Liveness::Active };
-        assert!(plan(&db, std::slice::from_ref(&cog), true, 0, 0).unwrap().is_empty(), "mid-pass, it holds the slot");
+        assert!(plan(&db, std::slice::from_ref(&cog), true, &LIVE).unwrap().is_empty(), "mid-pass, it holds the slot");
         report(&db, &cog, CogState::Captain(CaptainState::Done));
-        assert_eq!(plan(&db, &[cog], true, 0, 0).unwrap(), vec![Action::StandDownCaptain { convoy: "PROJ-100".into() }]);
+        assert_eq!(plan(&db, &[cog], true, &LIVE).unwrap(), vec![Action::StandDownCaptain { convoy: "PROJ-100".into() }]);
     }
 
     // ── admiralty ───────────────────────────────────────────────────────────────────
@@ -3101,6 +3154,7 @@ mod tests {
             created_at: at.into(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         };
         let id = SessionRepo::start(db, &session).unwrap().expect("session start");
         Cog { session: SessionRepo::get(db, &id).unwrap().unwrap(), liveness }
@@ -3116,11 +3170,11 @@ mod tests {
         let w = judged(&db, "PROJ-1", Verdict::Confirm, "2026-01-01T00:01:00Z");
         let r = judged(&db, "PROJ-2", Verdict::Refute, "2026-01-01T00:01:00Z");
         let cogs = [w, r];
-        assert_eq!(convened(plan(&db, &cogs, true, 0, 3).unwrap()), ["PROJ-1"], "a refute went back to its cog");
+        assert_eq!(convened(plan(&db, &cogs, true, &Levers { admirals: 3, ..LIVE }).unwrap()), ["PROJ-1"], "a refute went back to its cog");
 
         let a = admiral(&db, "PROJ-1", "2026-01-01T00:02:00Z", Liveness::Active);
         SessionRepo::end(&db, &a.session.id, "2026-01-01T00:03:00Z").unwrap(); // the operator closed it
-        assert!(convened(plan(&db, &cogs, true, 0, 3).unwrap()).is_empty(), "one admiral per verdict");
+        assert!(convened(plan(&db, &cogs, true, &Levers { admirals: 3, ..LIVE }).unwrap()).is_empty(), "one admiral per verdict");
     }
 
     #[test]
@@ -3131,13 +3185,13 @@ mod tests {
             judged(&db, "PROJ-2", Verdict::Confirm, "2026-01-01T00:01:00Z"),
             judged(&db, "PROJ-3", Verdict::Confirm, "2026-01-01T00:02:00Z"),
         ];
-        assert_eq!(convened(plan(&db, &cogs, true, 0, 2).unwrap()), ["PROJ-2", "PROJ-3"]);
-        assert_eq!(convened(plan(&db, &cogs, true, 0, -1).unwrap()).len(), 3, "-1: no cap");
-        assert!(convened(plan(&db, &cogs, true, 0, 0).unwrap()).is_empty(), "0: none");
+        assert_eq!(convened(plan(&db, &cogs, true, &Levers { admirals: 2, ..LIVE }).unwrap()), ["PROJ-2", "PROJ-3"]);
+        assert_eq!(convened(plan(&db, &cogs, true, &Levers { admirals: -1, ..LIVE }).unwrap()).len(), 3, "-1: no cap");
+        assert!(convened(plan(&db, &cogs, true, &LIVE).unwrap()).is_empty(), "0: none");
 
         let seated = admiral(&db, "PROJ-2", "2026-01-01T00:04:00Z", Liveness::Active);
         let cogs = [&cogs[..], &[seated]].concat();
-        assert_eq!(convened(plan(&db, &cogs, true, 0, 2).unwrap()), ["PROJ-3"], "a seated admiral takes a seat");
+        assert_eq!(convened(plan(&db, &cogs, true, &Levers { admirals: 2, ..LIVE }).unwrap()), ["PROJ-3"], "a seated admiral takes a seat");
     }
 
     #[test]
@@ -3151,12 +3205,12 @@ mod tests {
         };
 
         let (db, w, a) = seated(Liveness::Active);
-        assert!(plan(&db, &[w.clone(), a.clone()], true, 0, 3).unwrap().is_empty(), "the escalation stands");
+        assert!(plan(&db, &[w.clone(), a.clone()], true, &Levers { admirals: 3, ..LIVE }).unwrap().is_empty(), "the escalation stands");
         report(&db, &w, CogState::Worker(WorkerState::Implementing)); // the ruling unblocked it
-        assert_eq!(plan(&db, &[w, a], true, 0, 3).unwrap(), std::slice::from_ref(&stand_down));
+        assert_eq!(plan(&db, &[w, a], true, &Levers { admirals: 3, ..LIVE }).unwrap(), std::slice::from_ref(&stand_down));
 
         let (db, w, a) = seated(Liveness::Dead);
-        assert_eq!(plan(&db, &[w, a], true, 0, 3).unwrap(), std::slice::from_ref(&stand_down), "it died");
+        assert_eq!(plan(&db, &[w, a], true, &Levers { admirals: 3, ..LIVE }).unwrap(), std::slice::from_ref(&stand_down), "it died");
 
         let (db, w, a) = seated(Liveness::Active);
         let r = Report {
@@ -3170,7 +3224,7 @@ mod tests {
         let verdict = Inspection { session: w.session.id.clone(), reported_at: r.reported_at, verdict: Verdict::Confirm, body, inspected_at: "2026-01-01T00:04:00Z".into() };
         InspectionRepo::inspect(&db, &verdict).unwrap();
         assert_eq!(
-            plan(&db, &[w, a], true, 0, 3).unwrap(),
+            plan(&db, &[w, a], true, &Levers { admirals: 3, ..LIVE }).unwrap(),
             [stand_down, Action::LaunchAdmiral { ticket: "PROJ-1".into() }],
             "escalated anew: a fresh admiral"
         );
@@ -3197,7 +3251,7 @@ mod tests {
         let mut cog = captain_cog("PROJ-100");
         cog.liveness = Liveness::Dead; // finished its pass (or crashed) on a still-active convoy
         assert_eq!(
-            plan(&db, &[cog], true, 0, 0).unwrap(),
+            plan(&db, &[cog], true, &LIVE).unwrap(),
             vec![Action::StandDownCaptain { convoy: "PROJ-100".into() }]
         );
     }

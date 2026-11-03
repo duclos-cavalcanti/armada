@@ -60,7 +60,8 @@ pub struct ConvoyMemberCmd {
 }
 
 /// A cog-targeted control command (anchor / weigh / sink). `cog` is the required kind; the key is
-/// per-cog — worker/sailor/hand carry a `ticket`, a captain a `convoy`, the lookout neither. `/anchor`
+/// per-cog — worker/sailor/hand/admiral carry a `ticket`, a captain a `convoy`, a lookout the `iid`
+/// of the MR it reviews (none: every lookout). `/anchor`
 /// drops a graceful stop + hold on the live cog; `/weigh` lifts it; `/sink` scuttles it (hard kill +
 /// end the session). The daemon branches on `cog` to resolve the target.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -70,6 +71,8 @@ pub struct CogTarget {
     pub ticket: Option<String>,
     #[serde(default)]
     pub convoy: Option<String>,
+    #[serde(default)]
+    pub iid: Option<i64>,
 }
 
 /// Anchor a ticket (`POST /anchor-ticket`, `fleetc anchor <KEY>`): hold everything on it — the
@@ -210,17 +213,13 @@ pub struct TicketTextCmd {
     pub body: String,
 }
 
-/// An operator message pushed into a cog's tmux pane (`POST /send`). The target is the same per-cog
-/// addressing as the control verbs (worker/sailor/hand by `ticket`, a captain by `convoy`, the
-/// lookout as the singleton); `message` is typed into the pane and submitted (send-keys + Enter), so
-/// the cog receives it as a prompt. No DB gate — it's a nudge, not a hold.
+/// An operator message pushed into a cog's tmux pane (`POST /send`). The target is the control
+/// verbs' own; `message` is typed into the pane and submitted (send-keys + Enter), so the cog
+/// receives it as a prompt. No DB gate — it's a nudge, not a hold.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SendMsg {
-    pub cog: String,
-    #[serde(default)]
-    pub ticket: Option<String>,
-    #[serde(default)]
-    pub convoy: Option<String>,
+    #[serde(flatten)]
+    pub target: CogTarget,
     pub message: String,
 }
 

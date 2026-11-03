@@ -19,7 +19,7 @@
 #   fleet/dispatched   $1=ticket  $2=crew(worker|hand)
 #   fleet/impl         $1=ticket  $2=kind  $3=tmux_session  $4=state  $5=mr_iid
 #   fleet/merge        $1=ticket  $2=mr_iid  $3=url  $4=sailor_tmux  $5=sailor_state
-#   ships/list         $1=iid  $2=ticket  $3=pilot  $4=url
+#   ships/list         $1=iid  $2=ticket  $3=pilot  $4=url  $5=lookout_tmux
 #   board/tickets      $1=key  $2=status  $3=convoy
 #   convoys            $1=key  $2=title  $3=captain_tmux     (Fleet + Board)
 #   proposals          $1=kind(proposal|anchored)  $2=ref(proposal id | ticket key)   (Fleet + Board)
@@ -93,10 +93,10 @@ main() {
         fleet/merge/e) launch_admiral "${1:-}" ;;
 
         # ---- Ships --------------------------------------------------------
-        # m opens the MR — by its url ($4) if present, else by iid ($1); l attaches the lookout.
+        # m opens the MR — by its url ($4) if present, else by iid ($1); l attaches its lookout.
         ships/list/m) if [ -n "${4:-}" ]; then launch_browser "${4}"; else launch_mr "${1:-}"; fi ;;
         ships/list/t) [ -n "${2:-}" ] || fail "an allied ship has no ticket"; launch_ticket "${2:-}" ;;
-        ships/list/l) launch_tmux lookout "no lookout" ;;
+        ships/list/l) launch_tmux "${5:-}" "no lookout on !${1:-}" ;;
 
         # ---- Board · tickets -----------------------------------------------
         board/tickets/t) launch_ticket "${1:-}" ;;

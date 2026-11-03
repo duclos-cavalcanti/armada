@@ -179,6 +179,9 @@ const MIGRATIONS: &[&str] = &[
         SELECT id, kind, ticket, convoy, worktree_path, tmux_session, harness_session_id, created_at, ended_at, anchored_at FROM sessions;
     DROP TABLE sessions;
     ALTER TABLE sessions_v5 RENAME TO sessions;",
+    // v6: a lookout per allied ship, up to a cap, in place of the singleton.
+    "ALTER TABLE sessions ADD COLUMN ship INTEGER REFERENCES ships(id);
+    DROP INDEX IF EXISTS one_live_lookout;",
 ];
 
 /// The ledger's schema version (SQLite `user_version`): one past its last migration.
@@ -438,14 +441,15 @@ fn row_to_session(r: &rusqlite::Row) -> rusqlite::Result<Session> {
         created_at: r.get("created_at")?,
         ended_at: r.get("ended_at")?,
         anchored_at: r.get("anchored_at")?,
+        ship: r.get::<_, Option<i64>>("ship")?.map(ShipId),
     })
 }
 
 impl SessionRepo for Ledger {
     fn start(&self, s: &Session) -> Result<Option<SessionId>> {
         let res = self.conn.execute(
-            "INSERT INTO sessions(kind, ticket, convoy, worktree_path, tmux_session, harness_session_id, created_at, ended_at, anchored_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO sessions(kind, ticket, convoy, worktree_path, tmux_session, harness_session_id, created_at, ended_at, anchored_at, ship)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 s.kind.as_str(),
                 s.ticket.as_ref().map(|k| &k.0),
@@ -456,11 +460,12 @@ impl SessionRepo for Ledger {
                 s.created_at,
                 s.ended_at,
                 s.anchored_at,
+                s.ship.as_ref().map(|id| id.0),
             ],
         );
         match res {
             Ok(_) => Ok(Some(SessionId(self.conn.last_insert_rowid()))),
-            // A live-spawn lock (one_live_crew_per_ticket or one_live_captain_per_convoy)
+            // A live-spawn lock (one per ticket + kind, per convoy, per lookout's ship)
             // rejected a duplicate live cog: a benign skip (the slot is already held), NOT
             // an error. An FK, a CHECK, or any other constraint still propagates.
             Err(rusqlite::Error::SqliteFailure(e, _))
@@ -654,7 +659,7 @@ mod tests {
         db.record(&Report { session: worker.clone(), state, last_action: None, reported_at: "t1".into() }).unwrap();
         drop(db);
         // Back to v4: the same rebuild, without the admiral kind.
-        let v4 = MIGRATIONS[MIGRATIONS.len() - 1].replace(",'admiral'", "");
+        let v4 = MIGRATIONS[3].replace(",'admiral'", ""); // v5's rebuild
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} PRAGMA user_version = 4;")).unwrap();
         drop(conn);
@@ -710,6 +715,7 @@ mod tests {
             created_at: "t".into(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         }
     }
 
@@ -725,6 +731,7 @@ mod tests {
             created_at: "t".into(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         }
     }
 
@@ -1437,11 +1444,11 @@ impl ConvoyRepo for Ledger {
     }
 }
 
-// ── lookout (the singleton allied-ship reviewer's one control row) ──────────────────────
+// ── lookout (the review loop's one control row) ──────────────────────────────────────────
 
 impl LookoutRepo for Ledger {
     fn anchor(&self, at: &str) -> Result<()> {
-        // Set anchored_at on the singleton row + LookoutAnchored (CDC, same txn). No-op logs nothing.
+        // Set anchored_at on the one row + LookoutAnchored (CDC, same txn). No-op logs nothing.
         let tx = self.conn.unchecked_transaction()?;
         let n = tx.execute(
             "UPDATE lookout SET anchored_at = ?1 WHERE id = 1 AND anchored_at IS NULL",
@@ -1761,6 +1768,7 @@ mod repo_tests {
             created_at: "t".into(),
             ended_at: None,
             anchored_at: None,
+            ship: None,
         };
         let id = db.start(&worker).unwrap().unwrap();
         assert_eq!(db.inspection(&id).unwrap(), None, "never inspected");

@@ -117,7 +117,7 @@ The fleet turns tickets into merged code with a crew of agent **cogs** driven by
 **deterministic convergence**: `fleetd` (the daemon) reconciles the ledger against the tracker +
 forge and launches cogs; **`fleetc`** is the interface to it. The line: `fleetd` staffs a
 **captain** per open convoy, which dispatches its ready frontier → a **worker** implements one
-ticket to an open MR → a **sailor** lands it to merged; the singleton **lookout** reviews allied
+ticket to an open MR → a **sailor** lands it to merged; a **lookout** reviews each allied
 MRs. The **shipwright** maintains the kit's own machinery. The design docs are the drawings the
 whole fleet builds from, and you own and adjudicate them.
 
