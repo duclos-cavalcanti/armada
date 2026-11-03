@@ -16,7 +16,8 @@ fleetc ledger "SELECT s.kind, r.state, r.last_action FROM sessions s JOIN report
                WHERE s.ticket = '<KEY>' AND s.ended_at IS NULL"
 ```
 
-Inspect only a live cog whose state is `escalated`. None → say so and stop.
+Inspect only a live worker or sailor whose state is `escalated` (a captain finds them flagged
+`inspect` in `fleetc context`). None → say so and stop.
 
 ## Step 1 — Dispatch the surveyor
 
@@ -29,7 +30,15 @@ Nothing else — not your read of it. It gathers the evidence itself, so its ver
 
 ## Step 2 — Act on the verdict
 
-Show the operator the verdict as returned. Then:
+Record it, whichever it is — the ledger keeps every verdict, and the dashboard shows it:
+
+```bash
+fleetc inspection <KEY> --verdict <confirm|refute> --body - <<'EOF'
+<the verdict, as returned>
+EOF
+```
+
+In a chat with the operator (the admiral), show them the verdict too. Then:
 
 - **REFUTE** → send the cog its way out, so it unblocks itself:
   ```bash

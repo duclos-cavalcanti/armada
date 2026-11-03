@@ -128,10 +128,11 @@ pub trait ReportRepo {
     fn latest(&self, session: &SessionId) -> Result<Option<Report>>;
 }
 
-pub trait EscalationRepo {
-    fn raise(&self, e: &Escalation) -> Result<EscalationId>;
-    fn resolve(&self, id: &EscalationId, at: &str, resolution: &str) -> Result<()>;
-    fn list_open(&self) -> Result<Vec<Escalation>>;
+pub trait InspectionRepo {
+    /// Record a verdict on a cog's escalation and append an `EscalationInspected` event, in one txn.
+    fn inspect(&self, i: &Inspection) -> Result<()>;
+    /// The session's latest inspection; `None` = never inspected.
+    fn inspection(&self, session: &SessionId) -> Result<Option<Inspection>>;
 }
 
 pub trait ProposalRepo {

@@ -47,8 +47,8 @@ launch_ticket()  { local where; where="$(fleet ticket "$1" --where)" && open "$w
 launch_mr()      { local url; url="$(fleet ship --iid "$1" | jq -r '.ship.url')" && launch_browser "$url"; }
 # The fleetc command line for `fleet "$@"`, shell-quoted — for tmux to run.
 fleet_cmd()      { printf '%q ' fleetc -C "${FLEET_PROJECT_DIR:?}" "$@"; }
-# Read a proposal in full, in a tmux popup over the dashboard.
-read_proposal()  { tmux display-popup -E -w 90% -h 80% "$(fleet_cmd proposal "$1") | less"; }
+# Read `fleet "$@"`'s output in a tmux popup over the dashboard: a proposal, a verdict.
+popup()          { tmux display-popup -E -w 90% -h 80% "$(fleet_cmd "$@") | less"; }
 # Run `fleet "$@"` once the operator answers y in the tmux status line: `confirm_fleet <prompt> <args>…`.
 confirm_fleet()  { local prompt="$1"; shift; tmux confirm-before -p "$prompt (y/n)" "run-shell -b '$(fleet_cmd "$@")'"; }
 # Accept (a new ticket is filed into the tracker) or drop a proposal.
@@ -67,7 +67,7 @@ main() {
 
         # ---- Proposals (Fleet + Board): proposals + anchored convoy tickets ----
         # enter reads a proposal; a/d settle it; t opens an anchored ticket, w weighs it.
-        proposals/enter) [ "${1:-}" = proposal ] || fail "an anchored ticket: t opens it, w weighs it"; read_proposal "${2:-}" ;;
+        proposals/enter) [ "${1:-}" = proposal ] || fail "an anchored ticket: t opens it, w weighs it"; popup proposal "${2:-}" ;;
         proposals/t) [ "${1:-}" = anchored ] || fail "a proposal isn't a ticket yet: enter reads it"; launch_ticket "${2:-}" ;;
         proposals/a) [ "${1:-}" = proposal ] || fail "only a proposal is accepted"; settle_proposal accept "${2:-}" ;;
         proposals/d) [ "${1:-}" = proposal ] || fail "only a proposal is dropped"; settle_proposal drop "${2:-}" ;;
@@ -78,9 +78,11 @@ main() {
         fleet/impl/enter) launch_tmux "${3:-}" "${1:-} has no ${2:-cog} session" ;;
         fleet/impl/t) launch_ticket "${1:-}" ;;
         fleet/impl/m) [ -n "${5:-}" ] || fail "${1:-} has no MR yet"; launch_mr "${5}" ;;
+        fleet/impl/v) popup inspection "${1:-}" ;;
         fleet/merge/enter) launch_tmux "${4:-}" "${1:-} has no sailor" ;;
         fleet/merge/t) launch_ticket "${1:-}" ;;
         fleet/merge/m) launch_browser "${3:-}" ;;
+        fleet/merge/v) popup inspection "${1:-}" ;;
 
         # ---- Ships --------------------------------------------------------
         # m opens the MR — by its url ($4) if present, else by iid ($1); l attaches the lookout.

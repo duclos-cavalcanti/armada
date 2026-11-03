@@ -89,6 +89,7 @@ fn handle(
         (Some("POST"), Some("/anchor-ticket")) => handle_anchor_ticket(&request, cmds, true),
         (Some("POST"), Some("/weigh-ticket")) => handle_anchor_ticket(&request, cmds, false),
         (Some("POST"), Some("/rework")) => handle_rework(&request, cmds),
+        (Some("POST"), Some("/inspection")) => handle_inspection(&request, cmds),
         (Some("GET"), Some(p)) if p.starts_with("/packet") => handle_packet(cmds, p),
         (Some("GET"), Some(p)) if p.starts_with("/review") => handle_review(cmds, p),
         (Some("POST"), Some(p)) if p.starts_with("/rebase") => handle_rebase(cmds, p),
@@ -790,6 +791,34 @@ fn handle_send(request: &str, cmds: &Sender<Command>) -> String {
 
 /// `POST /anchor-ticket` | `/weigh-ticket` — anchor or weigh everything on a ticket. The route
 /// decides which; `/anchor-ticket` carries the `reason`, `/weigh-ticket` ignores it.
+/// `POST /inspection` — record a verdict on a ticket's escalated cog (`fleetc inspection`).
+fn handle_inspection(request: &str, cmds: &Sender<Command>) -> String {
+    let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+    let dto: wire::InspectionCmd = match serde_json::from_str(body) {
+        Ok(d) => d,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
+    };
+    let ticket = match parse_ticket(&dto.ticket) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    let Some(verdict) = domain::Verdict::parse(&dto.verdict) else {
+        return http_response("400 Bad Request", "text/plain", "verdict must be confirm or refute");
+    };
+    if dto.body.trim().is_empty() {
+        return http_response("400 Bad Request", "text/plain", "a verdict needs its body");
+    }
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::Inspect { ticket, verdict, body: dto.body, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(())) => http_response("200 OK", "text/plain", "ok"),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
 /// `POST /rework` — send a ticket back down the line to a builder (`fleetc rework`).
 fn handle_rework(request: &str, cmds: &Sender<Command>) -> String {
     let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
@@ -971,6 +1000,7 @@ mod tests {
                     | Command::Send { reply, .. }
                     | Command::AnchorTicket { reply, .. }
                     | Command::Rework { reply, .. }
+                    | Command::Inspect { reply, .. }
                     | Command::SetSetting { reply, .. }
                     | Command::Rebase { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetPacket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
@@ -1035,6 +1065,7 @@ mod tests {
                     | Command::Send { reply, .. }
                     | Command::AnchorTicket { reply, .. }
                     | Command::Rework { reply, .. }
+                    | Command::Inspect { reply, .. }
                     | Command::SetSetting { reply, .. }
                     | Command::Rebase { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetPacket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }

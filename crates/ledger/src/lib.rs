@@ -7,7 +7,7 @@
 
 use anyhow::Result;
 use domain::ports::{
-    ConvoyRepo, EscalationRepo, EventLog, LookoutRepo, OrderRepo, ProposalRepo, ReportRepo, SessionRepo,
+    ConvoyRepo, EventLog, InspectionRepo, LookoutRepo, OrderRepo, ProposalRepo, ReportRepo, SessionRepo,
     ShipRepo, TicketRepo,
 };
 use domain::*;
@@ -144,6 +144,8 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE ship_snapshots ADD COLUMN total_threads INTEGER NOT NULL DEFAULT 0;",
     // v3: the MRs declared as blocking it, so reconcile asks the forge only when they drift.
     "ALTER TABLE ship_snapshots ADD COLUMN blocked_by_json TEXT NOT NULL DEFAULT '[]';",
+    // v4: escalations were never written (an escalation is a report); inspections judge them.
+    "DROP TABLE IF EXISTS escalations;",
 ];
 
 /// The ledger's schema version (SQLite `user_version`): one past its last migration.
@@ -1416,53 +1418,47 @@ impl LookoutRepo for Ledger {
     }
 }
 
-// ── escalations ─────────────────────────────────────────────────────────────────
+// ── inspections ─────────────────────────────────────────────────────────────────
 
-fn row_to_escalation(r: &rusqlite::Row) -> rusqlite::Result<Escalation> {
-    let raised: String = r.get("raised_by")?;
-    let evidence_json: String = r.get("evidence_json")?;
-    Ok(Escalation {
-        id: EscalationId(r.get("id")?),
-        ticket: ticket_key(r.get("ticket")?)?,
-        raised_by: require(CrewKind::parse(&raised), 2, "raised_by")?,
-        summary: r.get("summary")?,
-        evidence: serde_json::from_str(&evidence_json).unwrap_or_default(),
-        ship_iid: r.get("ship_iid")?,
-        phase: r.get("phase")?,
-        created_at: r.get("created_at")?,
-        ended_at: r.get("ended_at")?,
-        resolution: r.get("resolution")?,
-    })
-}
-
-impl EscalationRepo for Ledger {
-    fn raise(&self, e: &Escalation) -> Result<EscalationId> {
-        let evidence = serde_json::to_string(&e.evidence)?;
-        self.conn.execute(
-            "INSERT INTO escalations(ticket, raised_by, summary, evidence_json, ship_iid, phase, created_at, ended_at, resolution)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+impl InspectionRepo for Ledger {
+    fn inspect(&self, i: &Inspection) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO inspections(session_id, reported_at, verdict, body, inspected_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![i.session.0, i.reported_at, i.verdict.as_str(), i.body, i.inspected_at],
+        )?;
+        tx.execute(
+            "INSERT INTO events(created_at, kind, entity_kind, entity_ref, payload_json) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
-                e.ticket.0, e.raised_by.as_str(), e.summary, evidence,
-                e.ship_iid, e.phase, e.created_at, e.ended_at, e.resolution,
+                i.inspected_at,
+                EventKind::EscalationInspected.as_str(),
+                EntityKind::Escalation.as_str(),
+                i.session.0.to_string(),
+                serde_json::json!({ "verdict": i.verdict.as_str(), "reported_at": i.reported_at }).to_string(),
             ],
         )?;
-        Ok(EscalationId(self.conn.last_insert_rowid()))
-    }
-
-    fn resolve(&self, id: &EscalationId, at: &str, resolution: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE escalations SET ended_at = ?2, resolution = ?3 WHERE id = ?1",
-            params![id.0, at, resolution],
-        )?;
+        tx.commit()?;
         Ok(())
     }
 
-    fn list_open(&self) -> Result<Vec<Escalation>> {
-        let mut stmt = self
+    fn inspection(&self, session: &SessionId) -> Result<Option<Inspection>> {
+        Ok(self
             .conn
-            .prepare("SELECT * FROM escalations WHERE ended_at IS NULL ORDER BY id")?;
-        let rows = stmt.query_map([], row_to_escalation)?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+            .query_row(
+                "SELECT * FROM inspections WHERE session_id = ?1 ORDER BY id DESC LIMIT 1",
+                params![session.0],
+                |r| {
+                    let verdict: String = r.get("verdict")?;
+                    Ok(Inspection {
+                        session: SessionId(r.get("session_id")?),
+                        reported_at: r.get("reported_at")?,
+                        verdict: require(Verdict::parse(&verdict), 3, "verdict")?,
+                        body: r.get("body")?,
+                        inspected_at: r.get("inspected_at")?,
+                    })
+                },
+            )
+            .optional()?)
     }
 }
 
@@ -1688,26 +1684,34 @@ mod repo_tests {
     }
 
     #[test]
-    fn escalation_raise_resolve() {
+    fn an_inspection_is_recorded_and_the_latest_counts() {
         let db = db_with("PROJ-1");
-        let esc = Escalation {
-            id: EscalationId(0),
-            ticket: TicketKey("PROJ-1".into()),
-            raised_by: CrewKind::Worker,
-            summary: "blocked on X".into(),
-            evidence: vec!["auth.rs:407".into(), "E0050".into()],
-            ship_iid: Some(42),
-            phase: Some("impl".into()),
+        let worker = Session {
+            id: SessionId(0),
+            kind: CrewKind::Worker,
+            ticket: Some(TicketKey("PROJ-1".into())),
+            convoy: None,
+            worktree_path: "/wt".into(),
+            tmux_session: "worker-PROJ-1".into(),
+            harness_session_id: None,
             created_at: "t".into(),
             ended_at: None,
-            resolution: None,
+            anchored_at: None,
         };
-        let id = db.raise(&esc).unwrap();
-        let open = db.list_open().unwrap();
-        assert_eq!(open.len(), 1);
-        assert_eq!(open[0].evidence, vec!["auth.rs:407".to_string(), "E0050".to_string()]);
-        db.resolve(&id, "t2", "wired the edge").unwrap();
-        assert!(db.list_open().unwrap().is_empty());
+        let id = db.start(&worker).unwrap().unwrap();
+        assert_eq!(db.inspection(&id).unwrap(), None, "never inspected");
+        let at = |reported: &str, verdict| Inspection {
+            session: id.clone(),
+            reported_at: reported.into(),
+            verdict,
+            body: "**Verdict:** …".into(),
+            inspected_at: "t9".into(),
+        };
+        db.inspect(&at("t1", Verdict::Refute)).unwrap();
+        db.inspect(&at("t2", Verdict::Confirm)).unwrap();
+        let got = db.inspection(&id).unwrap().unwrap();
+        assert_eq!((got.reported_at.as_str(), got.verdict), ("t2", Verdict::Confirm));
+        assert!(db.inspect(&Inspection { body: " ".into(), ..at("t3", Verdict::Confirm) }).is_err(), "a verdict says why");
     }
 
     #[test]

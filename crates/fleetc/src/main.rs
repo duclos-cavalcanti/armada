@@ -39,6 +39,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc sink     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>]   (scuttle — hard teardown)\n  \
      fleetc send     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] <message>   (message into the cog's pane)\n  \
      fleetc rework   <KEY-N> [--hand]   (its ACs changed: back to a worker — or a hand — in its worktree, on its MR)\n  \
+     fleetc inspection <KEY-N> [--verdict confirm|refute --body <text|->]   (the latest verdict on its cog's escalation; with --verdict, record one — /fleet-inspect)\n  \
      fleetc decommission <KEY-N> --reason <why> [--yes]   (withdraw it for good: close its MR, cancel it with the reason, reap its cogs + worktree)\n  \
      fleetc packet   [<KEY-N>]        (the cog's work-packet: order + ship + ticket)\n  \
      fleetc context  [--convoy <KEY>] [--format table]   (a captain's convoy slice)\n  \
@@ -98,6 +99,7 @@ fn run() -> Result<()> {
         Some("sink") => sink(&args[1..]),
         Some("send") => send(&args[1..]),
         Some("decommission") => decommission(&args[1..]),
+        Some("inspection") => inspection(&args[1..]),
         Some("rework") => rework(&args[1..]),
         Some("packet") => packet(&args[1..]),
         Some("context") => context(&args[1..]),
@@ -327,6 +329,43 @@ fn rework(args: &[String]) -> Result<()> {
         _ => bail!("usage: fleetc rework <KEY-N> [--hand]"),
     };
     submit("/rework", &wire::TicketRework { ticket: ticket_key(key, "rework")?, hand })
+}
+
+/// `fleetc inspection <KEY-N> [--verdict confirm|refute --body <text|->]` — the latest verdict on
+/// the escalation of the ticket's cog, or, with `--verdict`, record one against its current
+/// escalation. A captain, the admiral or the operator judges; a ticket's own cog can't.
+fn inspection(args: &[String]) -> Result<()> {
+    let usage = "usage: fleetc inspection <KEY-N> [--verdict confirm|refute --body <text|->]";
+    let ticket = ticket_key(args.first().ok_or_else(|| anyhow!("{usage}"))?, "inspection")?;
+    match &args[1..] {
+        [] => print_inspection(&ticket),
+        [v, verdict, b, body] if v == "--verdict" && b == "--body" => {
+            if own("FLEET_TICKET").is_some() || own("FLEET_SHIP").is_some() {
+                bail!("a cog doesn't judge escalations — a captain or the admiral does (/fleet-inspect)");
+            }
+            let body = body_text(body.clone())?;
+            submit("/inspection", &wire::InspectionCmd { ticket, verdict: verdict.clone(), body })
+        }
+        _ => bail!("{usage}"),
+    }
+}
+
+/// The ticket's latest inspection, read off the ledger: its verdict, when, and its text.
+fn print_inspection(ticket: &str) -> Result<()> {
+    use domain::ports::{InspectionRepo, SessionRepo};
+    let db = project_dir().ledger();
+    let ledger = ledger::Ledger::open_readonly(&db).map_err(|_| anyhow!("no ledger yet ({db})"))?;
+    let mut latest: Option<domain::Inspection> = None;
+    for s in SessionRepo::for_ticket(&ledger, &domain::TicketKey(ticket.to_string()))? {
+        if let Some(i) = ledger.inspection(&s.id)? {
+            if latest.as_ref().is_none_or(|l| i.inspected_at > l.inspected_at) {
+                latest = Some(i);
+            }
+        }
+    }
+    let i = latest.ok_or_else(|| anyhow!("{ticket} has no inspection yet"))?;
+    println!("{} · {}\n\n{}", i.verdict.as_str().to_uppercase(), i.inspected_at, i.body.trim_end());
+    Ok(())
 }
 
 /// `fleetc decommission <KEY-N> --reason <why> [--yes]` — withdraw a ticket from the fleet for good:

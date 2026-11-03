@@ -14,10 +14,11 @@ use crate::{context, now_rfc3339, reconcile, sync, Snapshot};
 use anyhow::{anyhow, bail, Context, Result};
 use domain::ports::{
     ConvoyRepo, EventLog, Forge, LookoutRepo, OrderRepo, ProposalRepo, ReportRepo, SessionHost, SessionRepo,
-    ShipRepo, TicketRepo, Tracker,
+    InspectionRepo, ShipRepo, TicketRepo, Tracker,
 };
 use domain::{
-    CogState, ConvoyKey, ConvoyTicketView, ConvoyView, CrewKind, EntityKind, EventKind, HandState, TicketLabel,
+    CogState, ConvoyKey, ConvoyTicketView, ConvoyView, CrewKind, EntityKind, EventKind, HandState, Inspection,
+    TicketLabel, Verdict,
     LivenessThresholds, MrDraft, Order, Packet, Proposal, ProposalId, Proposed, Report, Session, Ship, ShipState, TicketDraft,
     TicketKey, TicketStatus,
 };
@@ -71,6 +72,7 @@ pub enum Command {
     Send { target: ControlTarget, message: String, reply: Reply }, // push an operator message to the cog's pane
     AnchorTicket { ticket: TicketKey, anchor: bool, reason: Option<String>, reply: Reply }, // hold everything on it, or release it
     Rework { ticket: TicketKey, hand: bool, reply: Reply }, // send it back down the line to a builder
+    Inspect { ticket: TicketKey, verdict: Verdict, body: String, reply: Reply }, // a verdict on its cog's escalation
     GetPacket { ticket: TicketKey, reply: PacketReply }, // a read: the cog's composed work-packet
     GetConvoyView { convoy: ConvoyKey, reply: ConvoyReply }, // a read: the captain's convoy slice
     GetReview { iid: i64, reply: ReviewReply }, // a read: an MR's fresh review surface (forge)
@@ -235,6 +237,10 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         }
         Command::Rework { ticket, hand, reply } => {
             let res = rework(ledger, tracker, forge, host, &ticket, hand).map_err(|e| format!("{e:#}"));
+            let _ = reply.send(res);
+        }
+        Command::Inspect { ticket, verdict, body, reply } => {
+            let res = inspect(ledger, &ticket, verdict, body).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
         Command::GetPacket { ticket, reply } => {
@@ -556,6 +562,15 @@ fn hold_ship(ledger: &Ledger, forge: &dyn Forge, ship: &Ship) -> Result<()> {
     forge.set_draft(iid, true).with_context(|| format!("disarmed, but couldn't mark !{iid} draft"))
 }
 
+/// Record a verdict on the escalation of the ticket's live worker or sailor, against the report it
+/// judged — so the next escalation is uninspected until it's judged in turn.
+fn inspect(ledger: &Ledger, ticket: &TicketKey, verdict: Verdict, body: String) -> Result<()> {
+    let (session, report) = reconcile::escalation(ledger, ticket)?
+        .ok_or_else(|| anyhow!("{} has no escalated worker or sailor to inspect", ticket.0))?;
+    let i = Inspection { session: session.id, reported_at: report.reported_at, verdict, body, inspected_at: now_rfc3339() };
+    InspectionRepo::inspect(ledger, &i)
+}
+
 /// Rework a ticket whose ACs changed under its MR: send it back down the line. A worker re-enters
 /// at To Do (its spawn claims it back, once the blockers are Done); a hand starts at once, wherever
 /// the ticket is. Its live cogs are sunk and its MR held as a draft; the order is re-dated, so
@@ -654,6 +669,10 @@ fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Resul
         let waiting_on = waiting_on(ledger, &t.blocked_by)?;
         let held = if t.held { Some(ledger.held_reason(&t.key)?.unwrap_or_default()) } else { None };
         let hand = TicketRepo::is_hand(ledger, &t.key)?;
+        let inspect = match crate::reconcile::escalation(ledger, &t.key)? {
+            Some((s, r)) => !ledger.inspection(&s.id)?.is_some_and(|i| i.judges(&r)),
+            None => false,
+        };
         tickets.push(ConvoyTicketView {
             key: t.key,
             status: t.status,
@@ -665,6 +684,7 @@ fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Resul
             waiting_on,
             held,
             hand,
+            inspect,
         });
     }
     Ok(ConvoyView { convoy: convoy.clone(), plan: ConvoyRepo::plan(ledger, convoy)?, tickets })
@@ -1177,6 +1197,40 @@ mod tests {
         tracker.transition(&TicketKey("PROJ-2".into()), TicketStatus::Done).unwrap();
         sync::sync_board(&db, &tracker, "now").unwrap();
         record_status(&db, &me, concluded, None).unwrap();
+    }
+
+    #[test]
+    fn an_inspection_judges_the_cogs_current_escalation() {
+        let db = Ledger::in_memory().unwrap();
+        sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]), "now").unwrap();
+        let key = TicketKey("PROJ-1".into());
+        let worker = Session {
+            id: SessionId(0),
+            kind: CrewKind::Worker,
+            ticket: Some(key.clone()),
+            convoy: None,
+            worktree_path: "/wt".into(),
+            tmux_session: "worker-PROJ-1".into(),
+            harness_session_id: None,
+            created_at: "t".into(),
+            ended_at: None,
+            anchored_at: None,
+        };
+        let id = SessionRepo::start(&db, &worker).unwrap().expect("session start");
+        let report = |state, at: &str| Report { session: id.clone(), state, last_action: None, reported_at: at.into() };
+        ReportRepo::record(&db, &report(CogState::Worker(WorkerState::Implementing), "t1")).unwrap();
+        assert!(inspect(&db, &key, Verdict::Confirm, "x".into()).is_err(), "nothing escalated to judge");
+        ReportRepo::record(&db, &report(CogState::Worker(WorkerState::Escalated), "t2")).unwrap();
+        let convoy = ConvoyKey("PROJ-100".into());
+        add_to_convoy(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]), &convoy, &key).unwrap();
+        let flagged = |db: &Ledger| build_convoy_view(db, &convoy, true).unwrap().tickets[0].inspect;
+        assert!(flagged(&db), "escalated, unjudged: the captain inspects it");
+        inspect(&db, &key, Verdict::Confirm, "**Verdict:** CONFIRM".into()).unwrap();
+        let got = db.inspection(&id).unwrap().unwrap();
+        assert_eq!((got.reported_at.as_str(), got.verdict), ("t2", Verdict::Confirm), "judged against that report");
+        assert!(!flagged(&db), "judged");
+        ReportRepo::record(&db, &report(CogState::Worker(WorkerState::Escalated), "t3")).unwrap();
+        assert!(flagged(&db), "a fresh escalation is unjudged again");
     }
 
     #[test]

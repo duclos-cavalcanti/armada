@@ -155,18 +155,16 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at  TEXT NOT NULL
 );
 
--- Escalations. ended_at NULL = open; resolution folded in.
-CREATE TABLE IF NOT EXISTS escalations (
+-- Inspections — verdicts on a cog's escalation (/fleet-inspect). `reported_at` names the report
+-- judged (an escalation is a report), so a fresh escalation has none until it's inspected again.
+-- CONFIRM: it stands, the operator's; REFUTE: its way out was sent to the cog.
+CREATE TABLE IF NOT EXISTS inspections (
     id           INTEGER PRIMARY KEY,
-    ticket       TEXT NOT NULL REFERENCES tickets(key),
-    raised_by    TEXT NOT NULL CHECK (raised_by IN ('worker','sailor','hand')),
-    summary      TEXT NOT NULL,
-    evidence_json TEXT NOT NULL DEFAULT '[]',          -- opaque payload; JSON, not a child table
-    ship_iid     INTEGER,
-    phase        TEXT,
-    created_at   TEXT NOT NULL,
-    ended_at     TEXT,
-    resolution   TEXT
+    session_id   INTEGER NOT NULL REFERENCES sessions(id),
+    reported_at  TEXT NOT NULL,
+    verdict      TEXT NOT NULL CHECK (verdict IN ('confirm','refute')),
+    body         TEXT NOT NULL CHECK (length(trim(body)) > 0),
+    inspected_at TEXT NOT NULL
 );
 
 -- Proposals — work a cog found mid-ticket that isn't its own, held for the operator (or the

@@ -91,6 +91,15 @@ pub struct TicketRework {
     pub hand: bool,
 }
 
+/// A verdict on the escalation of a ticket's cog (`POST /inspection`, `fleetc inspection <KEY>`):
+/// `verdict` is `confirm` or `refute`, `body` the filled /fleet-inspect template.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InspectionCmd {
+    pub ticket: String,
+    pub verdict: String,
+    pub body: String,
+}
+
 /// Launch a ship — open the MR for the branch checked out in `worktree` (`POST /launch`). The
 /// target is `target`, else the ticket's order fork base, else origin's default branch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -23,6 +23,9 @@ Cycle with `Tab` / `S-Tab`:
   - **Implementation** — builders at work (workers + hands): state, liveness, MR + pipeline, last action;
   - **Merge** — our ships being landed: the sailor's state (dimmed once it's stood down),
     pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status;
+  - an escalation reads by who holds it: **flagged** (no captain has looked), **triage** (a
+    captain is inspecting it, or sent its way out), **escalated** (confirmed: yours). `v` reads
+    the verdict;
 - **Ships** — every open MR fleetd tracks, ours + allies; the title shows the lookout.
 - **Board** — the sprint tickets, with the Convoys and Proposals panes again (the same panes as
   on Fleet).
@@ -45,6 +48,7 @@ Cycle with `Tab` / `S-Tab`:
 | `enter` | switch to the row's tmux session (its cog) |
 | `m` | open the row's MR |
 | `t` | open the row's ticket |
+| `v` | read the verdict on the row's escalation (Implementation, Merge) |
 | any other | run `handler.sh <tab/pane> <key> <row fields…>` on the focused row |
 
 The keys are fixed, never "smart": `enter` on a row whose session is down (or has none) opens

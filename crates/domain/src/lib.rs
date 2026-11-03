@@ -74,7 +74,6 @@ pub fn is_key_prefix(p: &str) -> bool {
 
 id_newtype!(SessionId, i64);
 id_newtype!(ShipId, i64);
-id_newtype!(EscalationId, i64);
 id_newtype!(ProposalId, i64);
 id_newtype!(/// Monotonic event cursor (`GET /events?since=`).
             Seq, i64);
@@ -168,7 +167,7 @@ pub enum EventKind {
     TicketCreated, TicketSynced, TicketBlocked, TicketUnblocked,
     TicketHeld, TicketReleased, TicketDecommissioned,
     ShipOpened, ShipSynced, ShipMerged, ShipClosed,
-    EscalationRaised, EscalationResolved,
+    EscalationInspected,
     ConvoyOpened, ConvoyClosed,
     SessionAnchored, SessionWeighed,
     ConvoyAnchored, ConvoyWeighed,
@@ -316,6 +315,9 @@ pub struct ConvoyTicketView {
     /// The operator works it by hand (`convoy add --hand`): dispatch it to a hand, not a worker.
     #[serde(default)]
     pub hand: bool,
+    /// Its worker or sailor escalated, and no verdict judges that escalation yet: /fleet-inspect it.
+    #[serde(default)]
+    pub inspect: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -588,20 +590,31 @@ impl Proposed {
     }
 }
 
-/// A wall needing operator/SME judgment. No `kind` (categorized live at drain),
-/// no inspector `review`. Resolution folded in via `ended_at`.
+/// A verdict on a cog's escalation (/fleet-inspect): CONFIRM — it stands, the operator's to
+/// rule; REFUTE — its way out was in reach, and was sent to the cog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    Confirm,
+    Refute,
+}
+
+/// One inspection of a cog's escalation: the report it judged (that report's `reported_at`), the
+/// verdict, and the verdict's text (/fleet-inspect's template). The latest per session counts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Escalation {
-    pub id: EscalationId,
-    pub ticket: TicketKey,
-    pub raised_by: CrewKind,
-    pub summary: String,
-    pub evidence: Vec<String>, // "cite, never assert"
-    pub ship_iid: Option<i64>,
-    pub phase: Option<String>,
-    pub created_at: Timestamp,
-    pub ended_at: Option<Timestamp>, // None = open
-    pub resolution: Option<String>,
+pub struct Inspection {
+    pub session: SessionId,
+    pub reported_at: Timestamp,
+    pub verdict: Verdict,
+    pub body: String,
+    pub inspected_at: Timestamp,
+}
+
+impl Inspection {
+    /// This verdict judges that report — the escalation as it stands, not an earlier one.
+    pub fn judges(&self, r: &Report) -> bool {
+        self.session == r.session && self.reported_at == r.reported_at
+    }
 }
 
 /// The CDC change-log entry (PLAN §3.1 `events`). Appended in the same txn as the
@@ -648,6 +661,22 @@ impl Order {
 // ── SQL string mapping for the CHECK-constrained enums ──────────────────────────
 // Pure string forms (match the serde snake_case). The `ledger` adapter uses these
 // to map enum ↔ TEXT; `domain` stays free of any sqlite dependency.
+
+impl Verdict {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Verdict::Confirm => "confirm",
+            Verdict::Refute => "refute",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "confirm" => Some(Self::Confirm),
+            "refute" => Some(Self::Refute),
+            _ => None,
+        }
+    }
+}
 
 impl CrewKind {
     pub fn as_str(&self) -> &'static str {
@@ -807,6 +836,15 @@ impl CogState {
             CogState::Sailor(SailorState::Sleeping)
                 | CogState::Captain(CaptainState::Done)
                 | CogState::Lookout(LookoutState::Reviewed)
+        )
+    }
+    /// The cog escalated: it stopped for a ruling it can't make.
+    pub fn is_escalated(&self) -> bool {
+        matches!(
+            self,
+            CogState::Worker(WorkerState::Escalated)
+                | CogState::Sailor(SailorState::Escalated)
+                | CogState::Lookout(LookoutState::Escalated)
         )
     }
     /// A DELIBERATE non-terminal hold (an escalation, an anchor).
@@ -975,8 +1013,7 @@ impl EventKind {
             EventKind::ShipSynced => "ship_synced",
             EventKind::ShipMerged => "ship_merged",
             EventKind::ShipClosed => "ship_closed",
-            EventKind::EscalationRaised => "escalation_raised",
-            EventKind::EscalationResolved => "escalation_resolved",
+            EventKind::EscalationInspected => "escalation_inspected",
             EventKind::ConvoyOpened => "convoy_opened",
             EventKind::ConvoyClosed => "convoy_closed",
             EventKind::SessionAnchored => "session_anchored",
@@ -1005,8 +1042,7 @@ impl EventKind {
             "ship_synced" => Some(Self::ShipSynced),
             "ship_merged" => Some(Self::ShipMerged),
             "ship_closed" => Some(Self::ShipClosed),
-            "escalation_raised" => Some(Self::EscalationRaised),
-            "escalation_resolved" => Some(Self::EscalationResolved),
+            "escalation_inspected" => Some(Self::EscalationInspected),
             "convoy_opened" => Some(Self::ConvoyOpened),
             "convoy_closed" => Some(Self::ConvoyClosed),
             "session_anchored" => Some(Self::SessionAnchored),

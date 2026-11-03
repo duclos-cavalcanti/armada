@@ -169,7 +169,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let status = if app.fleet.fleetd_up { status } else { format!("fleetd down (see Log) · {status}") };
     let error = app.error.as_ref().filter(|(_, at)| at.elapsed().as_secs() < 5).map(|(msg, _)| format!(" ✗ {msg} "));
     let body = format!(
-        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-5 pane · j/k row · h/l swap · y/Y yank · enter tmux · m MR · t ticket",
+        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-5 pane · j/k row · h/l swap · y/Y yank · enter tmux · m MR · t ticket · v verdict",
         flash, zoom, status,
     );
     let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
@@ -502,6 +502,8 @@ fn pipeline(snap: Option<&ShipSnapshot>) -> (String, Style) {
 fn state_style(state: &str) -> Style {
     match state {
         "escalated" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        "flagged" => yellow().add_modifier(Modifier::BOLD),
+        "triage" => Style::default().fg(Color::Cyan),
         "anchored" => Style::default().fg(Color::Magenta),
         "concluded" | "done" | "merged" => green(),
         "sleeping" | "unmanned" | "·" => dim(),

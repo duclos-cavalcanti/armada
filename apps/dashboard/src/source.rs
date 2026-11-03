@@ -14,10 +14,11 @@
 //! AGE — `now − reported_at` — which catches a stalled cog without re-probing tmux.
 
 use domain::ports::{
-    ConvoyRepo, OrderRepo, ProposalRepo, ReportRepo, SessionRepo, ShipRepo, TicketRepo,
+    ConvoyRepo, InspectionRepo, OrderRepo, ProposalRepo, ReportRepo, SessionRepo, ShipRepo, TicketRepo,
 };
 use domain::{
-    Convoy, CrewKind, Event, Order, Proposal, Session, Ship, ShipSnapshot, Ticket, TicketKey, TicketStatus,
+    Convoy, ConvoyKey, CrewKind, Event, Order, Proposal, Report, Session, Ship, ShipSnapshot, Ticket, TicketKey,
+    TicketStatus, Verdict,
 };
 use ledger::Ledger;
 use std::collections::{HashMap, HashSet};
@@ -168,10 +169,13 @@ impl Fleet {
     fn try_load(ledger_path: &Path, liveness: HashMap<i64, String>) -> anyhow::Result<Self> {
         let db = Ledger::open_readonly(&ledger_path.to_string_lossy())?;
         let now = chrono::Utc::now();
+        let live = SessionRepo::live(&db)?;
+        let captained: HashSet<ConvoyKey> =
+            live.iter().filter(|s| s.kind == CrewKind::Captain).filter_map(|s| s.convoy.clone()).collect();
         let cog = |session: Session| -> anyhow::Result<CogRow> {
             let report = ReportRepo::latest(&db, &session.id)?;
             let (state, last_action, stamp) = match report {
-                Some(r) => (Some(r.state.as_str().to_string()), r.last_action, Some(r.reported_at)),
+                Some(r) => (Some(shown_state(&db, &session, &r, &captained)?), r.last_action, Some(r.reported_at)),
                 None => (None, None, None),
             };
             // Age off the last report if the cog reports; else off session start (captain/lookout).
@@ -181,7 +185,7 @@ impl Fleet {
         };
 
         let (mut workers, mut hands, mut crew) = (Vec::new(), Vec::new(), Vec::new());
-        for session in SessionRepo::live(&db)? {
+        for session in live {
             match session.kind {
                 CrewKind::Worker => workers.push(cog(session)?),
                 CrewKind::Hand => hands.push(cog(session)?),
@@ -333,6 +337,27 @@ pub fn open_blockers(t: &Ticket, board: &[Ticket]) -> Vec<String> {
         })
         .map(|b| b.0.clone())
         .collect()
+}
+
+/// A cog's state as the operator reads it. An escalation reads by who holds it: `flagged` (no
+/// captain has looked yet), `triage` (a captain is on it, or has sent its way out), `escalated` (a
+/// captain confirmed it: the operator's). A verdict counts only for the escalation it judged.
+fn shown_state(db: &Ledger, session: &Session, r: &Report, captained: &HashSet<ConvoyKey>) -> anyhow::Result<String> {
+    if !r.state.is_escalated() {
+        return Ok(r.state.as_str().to_string());
+    }
+    let label = match db.inspection(&session.id)?.filter(|i| i.judges(r)).map(|i| i.verdict) {
+        Some(Verdict::Confirm) => "escalated",
+        Some(Verdict::Refute) => "triage",
+        None => {
+            let convoy = match &session.ticket {
+                Some(t) => TicketRepo::get(db, t)?.and_then(|t| t.convoy),
+                None => None,
+            };
+            if convoy.is_some_and(|c| captained.contains(&c)) { "triage" } else { "flagged" }
+        }
+    };
+    Ok(label.to_string())
 }
 
 /// A ticket's NEWEST sailor session — live or ended — or `None` if no sailor has sailed it yet.

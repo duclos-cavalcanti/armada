@@ -257,7 +257,9 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, captain_sleep_secs: u64
                     && c.liveness != Liveness::Dead
                     && c.session.convoy.as_ref() == Some(&convoy.key)
             });
-        if !has_live_captain && rested(ledger.last_captain_finish(&convoy.key)?, captain_sleep_secs) {
+        let finished = ledger.last_captain_finish(&convoy.key)?;
+        let due = rested(finished.as_deref(), captain_sleep_secs) || escalated_since(ledger, &convoy.key, finished.as_deref())?;
+        if !has_live_captain && due {
             actions.push(Action::LaunchCaptain { convoy: convoy.key.0.clone() });
         }
     }
@@ -468,12 +470,44 @@ pub(crate) fn stack_base(ledger: &Ledger, ticket: &Ticket, armada: &[Ship], stac
         .map(|s| format!("origin/{}", s.source)))
 }
 
+/// The ticket's live worker or sailor whose latest report is an escalation, with that report.
+pub(crate) fn escalation(ledger: &Ledger, ticket: &TicketKey) -> Result<Option<(Session, Report)>> {
+    for s in SessionRepo::for_ticket(ledger, ticket)? {
+        if s.ended_at.is_some() || !matches!(s.kind, CrewKind::Worker | CrewKind::Sailor) {
+            continue;
+        }
+        if let Some(r) = ReportRepo::latest(ledger, &s.id)?.filter(|r| r.state.is_escalated()) {
+            return Ok(Some((s, r)));
+        }
+    }
+    Ok(None)
+}
+
 /// A convoy has rested once `sleep_secs` have passed since its last captain finished (`finished`).
 /// Never finished → rested. An unparseable time counts as rested: a needless pass is harmless.
-fn rested(finished: Option<String>, sleep_secs: u64) -> bool {
-    use time::{format_description::well_known::Rfc3339, OffsetDateTime};
-    let Some(at) = finished.and_then(|f| OffsetDateTime::parse(&f, &Rfc3339).ok()) else { return true };
-    OffsetDateTime::now_utc() - at >= time::Duration::seconds(sleep_secs as i64)
+fn rested(finished: Option<&str>, sleep_secs: u64) -> bool {
+    let Some(at) = finished.and_then(instant) else { return true };
+    time::OffsetDateTime::now_utc() - at >= time::Duration::seconds(sleep_secs as i64)
+}
+
+/// A worker or sailor in the convoy escalated after its last captain finished (`finished`): a pass
+/// is due to inspect it. Keyed on the finish, not on a missing verdict, so a pass that fails to
+/// inspect doesn't relaunch every tick — the escalation waits for the convoy's rest.
+fn escalated_since(ledger: &Ledger, convoy: &ConvoyKey, finished: Option<&str>) -> Result<bool> {
+    let since = finished.and_then(instant);
+    for t in TicketRepo::board(ledger)?.into_iter().filter(|t| t.convoy.as_ref() == Some(convoy)) {
+        if let Some((_, r)) = escalation(ledger, &t.key)? {
+            if since.is_none_or(|s| instant(&r.reported_at).is_none_or(|at| at > s)) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// An RFC 3339 time, parsed: the ledger's text times vary in their fraction, so never compare them as text.
+fn instant(t: &str) -> Option<time::OffsetDateTime> {
+    time::OffsetDateTime::parse(t, &time::format_description::well_known::Rfc3339).ok()
 }
 
 /// The live levers one reconcile pass reads (`settings`, re-read every tick).
@@ -2871,6 +2905,29 @@ mod tests {
         let id = SessionRepo::start(&db, &captain_cog("PROJ-100").session).unwrap().expect("session start");
         SessionRepo::end(&db, &id, "2000-01-01T00:00:00Z").unwrap();
         assert!(plan(&db, &[], true, 900).unwrap().is_empty(), "the latest finish counts");
+    }
+
+    #[test]
+    fn a_new_escalation_cuts_the_convoys_rest_short() {
+        let db = db();
+        db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
+        convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::InProgress);
+        let finish = |at: &str| {
+            let id = SessionRepo::start(&db, &captain_cog("PROJ-100").session).unwrap().expect("session start");
+            SessionRepo::end(&db, &id, at).unwrap();
+        };
+        session(&db, CrewKind::Worker, "PROJ-1", false);
+        let worker = SessionRepo::live(&db).unwrap().into_iter().find(|s| s.kind == CrewKind::Worker).unwrap();
+        let escalate = |at: &str| {
+            let r = Report { session: worker.id.clone(), state: CogState::Worker(WorkerState::Escalated), last_action: None, reported_at: at.into() };
+            ReportRepo::record(&db, &r).unwrap();
+        };
+        let launch = vec![Action::LaunchCaptain { convoy: "PROJ-100".into() }];
+        escalate("2000-01-01T00:00:00Z");
+        finish(&now_rfc3339());
+        assert!(plan(&db, &[], true, 900).unwrap().is_empty(), "escalated before the last pass: it rests");
+        escalate(&now_rfc3339());
+        assert_eq!(plan(&db, &[], true, 900).unwrap(), launch, "escalated since: a pass is due");
     }
 
     #[test]
