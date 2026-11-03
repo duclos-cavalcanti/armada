@@ -1444,6 +1444,11 @@ mod tests {
         assert_eq!(render_proposals(&[]), "no open proposals\n");
     }
 
+    /// The import tests run one at a time: they bind sockets and spawn `sqlite3`, and on macOS a
+    /// child forked between a socket's creation and its close-on-exec flag keeps it listening — so a
+    /// "crash-leftover" socket would answer as a live fleetd.
+    static IMPORT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// A throwaway project folder with a populated `.fleet/ledger.db`.
     fn project(tag: &str) -> (wire::Project, std::path::PathBuf) {
         let root = std::env::temp_dir().join(format!("fleetc-import-{}-{tag}", std::process::id()));
@@ -1457,6 +1462,7 @@ mod tests {
 
     #[test]
     fn import_restores_a_snapshot_and_drops_the_stale_wal() {
+        let _one = IMPORT.lock().unwrap_or_else(|e| e.into_inner());
         let (p, root) = project("ok");
         let export = root.join("snapshot.db");
         ledger::snapshot(&p.ledger(), &export.to_string_lossy()).unwrap();
@@ -1473,6 +1479,7 @@ mod tests {
 
     #[test]
     fn import_refuses_while_fleetd_answers_or_on_another_schema() {
+        let _one = IMPORT.lock().unwrap_or_else(|e| e.into_inner());
         let (p, root) = project("refuse");
         let export = root.join("snapshot.db");
         ledger::snapshot(&p.ledger(), &export.to_string_lossy()).unwrap();
@@ -1491,6 +1498,7 @@ mod tests {
 
     #[test]
     fn import_takes_an_older_snapshot_and_opening_it_migrates() {
+        let _one = IMPORT.lock().unwrap_or_else(|e| e.into_inner());
         let (p, root) = project("older");
         let export = root.join("snapshot.db");
         ledger::snapshot(&p.ledger(), &export.to_string_lossy()).unwrap();
