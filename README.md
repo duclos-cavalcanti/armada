@@ -124,6 +124,7 @@ armada/
 ├── apps/        standalone TUIs — crew, dashboard
 ├── agents/      the cogs + standing collaborators, stowed to ~/.claude/agents/
 ├── skills/      the kit's skills, stowed to ~/.claude/skills/
+├── local/       your own skills (local/skills/<name>/), stowed alike but never committed
 ├── .claude/     Claude config (settings, CLAUDE.md, scripts), stowed to ~/.claude/
 ├── .obsidian/   the Obsidian vault's config (notes on the repo); `make notes` fetches its plugin
 ├── harness/     apply.sh + gitignored per-deployment settings profiles

@@ -22,6 +22,7 @@
 #                        dir is shared with the operator's own agents)
 #   skills/<name>/     → <harness-home>/skills/<name>  (dir-as-unit fold, so
 #                        post-install edits propagate through the symlink)
+#   local/skills/<name>/ → the same: the operator's own skills, gitignored — never committed
 #   CLAUDE HARNESS ONLY, additionally:
 #   .claude/*          → ~/.claude/   (loose config: CLAUDE.md, settings.json,
 #                        keybindings.json, scripts/; agent-memory/ + settings.local.json
@@ -99,17 +100,24 @@ stow_agents() {
     stow --dir "$REPO" --target "$AGENTS_TARGET" \
         --restow --no-folding --verbose --ignore='^\.stow-manifest' agents
 }
+# The kit's skills, then the operator's own (local/skills/: stowed alike, never committed).
 stow_skills() {
-    stow --dir "$REPO" --target "$SKILLS_TARGET" \
-        --restow --verbose --ignore='^\.stow-manifest' skills
+    local dir
+    for dir in "$REPO" "$REPO/local"; do
+        stow --dir "$dir" --target "$SKILLS_TARGET" \
+            --restow --verbose --ignore='^\.stow-manifest' --ignore='^\.gitignore$' skills
+    done
 }
 unstow_agents() {
     stow --dir "$REPO" --target "$AGENTS_TARGET" \
         --delete --no-folding --verbose --ignore='^\.stow-manifest' agents
 }
 unstow_skills() {
-    stow --dir "$REPO" --target "$SKILLS_TARGET" \
-        --delete --verbose --ignore='^\.stow-manifest' skills
+    local dir
+    for dir in "$REPO" "$REPO/local"; do
+        stow --dir "$dir" --target "$SKILLS_TARGET" \
+            --delete --verbose --ignore='^\.stow-manifest' --ignore='^\.gitignore$' skills
+    done
 }
 
 # ---- claude-only: the loose .claude/ root config → ~/.claude ----
