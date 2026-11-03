@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# spawn_escalation.sh — spawn an admiral to rule on a ticket's confirmed escalation, and open it
+# admiralty.sh — spawn an admiral to rule on a ticket's confirmed escalation, and open it
 # in a floating tmux popup. The admiral grounds on the canon, then reads the verdict itself. Its
 # session (admiral-<KEY>) outlives the popup: run this again to attach to the same conversation.
 # --no-floating spawns it in the background only, so several can be queued while you work.
 #
-# Usage: scripts/spawn_escalation.sh [--no-floating] <project-dir> <KEY>
+# Usage: scripts/admiralty.sh [--no-floating] <project-dir> <KEY>
 set -euo pipefail
 
 die() { echo "$*" >&2; exit 1; }
@@ -37,7 +37,7 @@ start() {
 }
 
 main() {
-    local usage="usage: spawn_escalation.sh [--no-floating] <project-dir> <KEY>"
+    local usage="usage: admiralty.sh [--no-floating] <project-dir> <KEY>"
     local floating=1 project key session
     if [ "${1:-}" = "--no-floating" ]; then floating=0; shift; fi
     project="${1:?$usage}" key="${2:?$usage}"
