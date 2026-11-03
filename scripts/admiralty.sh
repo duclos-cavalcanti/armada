@@ -20,16 +20,21 @@ popup() {
     fi
 }
 
-# Start the admiral on a confirmed escalation (a REFUTE already went back to the cog).
-start() {
-    local project="$1" key="$2" session="$3" repo verdict ask
-    repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Refuse unless the ticket's latest verdict is CONFIRM — a REFUTE already went back to the cog.
+# Checked on every run: an admiral left over from an older escalation is no longer the one to ask.
+confirmed() {
+    local project="$1" key="$2" verdict
     verdict="$(fleetc -C "$project" inspection "$key")" || exit 1
     verdict="${verdict%%$'\n'*}"
     case "$verdict" in
         CONFIRM*) ;;
         *) die "$key's escalation isn't confirmed ($verdict): nothing to rule on" ;;
     esac
+}
+
+start() {
+    local project="$1" key="$2" session="$3" repo ask
+    repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     ask="Escalation on $key, confirmed by inspection. Read its verdict (fleetc inspection $key), then help me rule on it."
     # --add-dir first: it takes a list, and would swallow the message as another directory.
     tmux new-session -d -s "$session" -c "$project" \
@@ -43,6 +48,7 @@ main() {
     project="${1:?$usage}" key="${2:?$usage}"
     project="$(cd "$project" && pwd)" || die "no project folder $1"
     session="admiral-$key"
+    confirmed "$project" "$key"
     tmux has-session -t "=$session" 2>/dev/null || start "$project" "$key" "$session"
     if [ "$floating" = 1 ]; then popup "$session"; else echo "$session"; fi
 }
