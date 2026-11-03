@@ -134,7 +134,11 @@ pub fn run(
             // apply through the ports (the Gate D flip). Reuse the liveness poll's memoized cogs (no
             // extra tmux fan-out).
             let dry_run = settings::dry_run(&cfg, &ledger);
-            let levers = reconcile::Levers { dry_run, captain_sleep_secs: settings::captain_sleep_secs(&cfg, &ledger) };
+            let levers = reconcile::Levers {
+                dry_run,
+                captain_sleep_secs: settings::captain_sleep_secs(&cfg, &ledger),
+                admirals: settings::admirals(&cfg, &ledger),
+            };
             let cogs = snapshot.lock().unwrap().clone();
             match reconcile::tick(&ledger, tracker.as_ref(), &host, forge.as_ref(), &cogs, &cfg.project.path, &levers) {
                 Ok(n) if n > 0 => {
@@ -623,9 +627,13 @@ fn anchor_ticket<H: SessionHost>(
     reason: Option<&str>,
 ) -> Result<()> {
     TicketRepo::set_held(ledger, ticket, anchor, reason, &now_rfc3339())?;
+    // The ticket's working cogs — not its admiral, the operator's own seat.
+    let working = || -> Result<Vec<Session>> {
+        Ok(live_cogs_on(ledger, ticket)?.into_iter().filter(|s| s.kind != CrewKind::Admiral).collect())
+    };
     if anchor {
         tracing::warn!("anchor {}: {}", ticket.0, reason.unwrap_or("(no reason given)"));
-        hold_sessions(ledger, host, Verb::Anchor, live_cogs_on(ledger, ticket)?)?;
+        hold_sessions(ledger, host, Verb::Anchor, working()?)?;
     } else {
         tracing::info!("weigh {}", ticket.0);
     }
@@ -639,7 +647,7 @@ fn anchor_ticket<H: SessionHost>(
         refresh(ledger, forge, &ship);
     }
     if !anchor {
-        hold_sessions(ledger, host, Verb::Weigh, live_cogs_on(ledger, ticket)?)?;
+        hold_sessions(ledger, host, Verb::Weigh, working()?)?;
     }
     Ok(())
 }
@@ -738,7 +746,7 @@ impl ControlTarget {
     pub fn from_wire(t: wire::CogTarget) -> std::result::Result<Self, String> {
         let cog = CrewKind::parse(&t.cog).ok_or_else(|| format!("unknown --cog {:?}", t.cog))?;
         match cog {
-            CrewKind::Worker | CrewKind::Sailor | CrewKind::Hand => {
+            CrewKind::Worker | CrewKind::Sailor | CrewKind::Hand | CrewKind::Admiral => {
                 let ticket = t.ticket.ok_or_else(|| format!("--cog {} needs --ticket", cog.as_str()))?;
                 let ticket = TicketKey::parse(&ticket).map_err(|e| e.to_string())?;
                 Ok(ControlTarget::Cog { cog, ticket })
@@ -1436,11 +1444,11 @@ mod tests {
         assert_eq!((forge.disarmed.borrow().clone(), forge.drafted.borrow().clone()), (vec![7], vec![(7, true)]));
         assert!(OrderRepo::get(&db, &key).unwrap().unwrap().created_at.as_str() > at, "the order is re-dated");
         // The worker waits for its blocker, and no sailor launches on a ticket back in To Do.
-        assert!(reconcile::plan(&db, &[], true, 0).unwrap().is_empty());
+        assert!(reconcile::plan(&db, &[], true, 0, 0).unwrap().is_empty());
         tracker.transition(&TicketKey("PROJ-2".into()), TicketStatus::Done).unwrap();
         sync::sync_board(&db, &tracker, "now").unwrap();
         assert_eq!(
-            reconcile::plan(&db, &[], true, 0).unwrap(),
+            reconcile::plan(&db, &[], true, 0, 0).unwrap(),
             vec![reconcile::Action::Spawn { ticket: "PROJ-1".into(), kind: "worker".into() }]
         );
 
@@ -1452,7 +1460,7 @@ mod tests {
         assert_eq!(TicketRepo::get(&db, &key).unwrap().unwrap().status, Some(TicketStatus::InQa));
         assert!(!OrderRepo::get(&db, &key).unwrap().unwrap().auto_impl);
         assert_eq!(
-            reconcile::plan(&db, &[], true, 0).unwrap(),
+            reconcile::plan(&db, &[], true, 0, 0).unwrap(),
             vec![reconcile::Action::Spawn { ticket: "PROJ-1".into(), kind: "hand".into() }]
         );
     }
@@ -1495,6 +1503,8 @@ mod tests {
             anchored_at: None,
         };
         sailor.id = SessionRepo::start(&db, &sailor).unwrap().expect("session start");
+        let admiral = Session { kind: CrewKind::Admiral, tmux_session: "admiral-PROJ-1".into(), ..sailor.clone() };
+        let admiral = SessionRepo::start(&db, &admiral).unwrap().expect("session start");
         let (host, anchored) = (FakeHost::new(), |db: &Ledger| SessionRepo::get(db, &sailor.id).unwrap().unwrap().anchored_at.is_some());
 
         anchor_ticket(&db, &forge, &host, &key, true, Some("late dependency")).unwrap();
@@ -1502,13 +1512,14 @@ mod tests {
         assert_eq!(db.get_by_iid(7).unwrap().unwrap().swept, None, "swept cleared → re-sweep on weigh");
         assert!(TicketRepo::get(&db, &key).unwrap().unwrap().held);
         assert!(anchored(&db), "its sailor is anchored");
+        assert!(SessionRepo::get(&db, &admiral).unwrap().unwrap().anchored_at.is_none(), "its admiral is the operator's seat");
 
         anchor_ticket(&db, &forge, &host, &key, false, None).unwrap();
         assert_eq!(forge.disarmed.borrow().len(), 1, "weigh doesn't disarm");
         assert_eq!(*forge.drafted.borrow(), vec![(7, true), (7, false)], "anchor drafts, weigh readies");
         assert!(!TicketRepo::get(&db, &key).unwrap().unwrap().held);
         assert!(!anchored(&db), "its sailor resumes");
-        assert_eq!(host.sent.borrow().len(), 2, "the stop, then the resume, reached its pane");
+        assert_eq!(host.sent.borrow().len(), 2, "the stop, then the resume, reached its sailor's pane alone");
 
         // A forge without drafts: the hold + disarm stand, and the caller hears what failed.
         let no_drafts = FakeForge { no_drafts: true, ..Default::default() };

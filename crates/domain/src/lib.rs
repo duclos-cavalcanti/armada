@@ -81,10 +81,11 @@ id_newtype!(/// Monotonic event cursor (`GET /events?since=`).
 // ── enums ─────────────────────────────────────────────────────────────────────
 
 /// The crew roles that run in a session (inspector retired; human→hand; captain
-/// commands a convoy of sailors).
+/// commands a convoy of sailors). An admiral session is one fleetd convenes on a ticket's
+/// confirmed escalation, for the operator to rule with; it reports no states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CrewKind { Worker, Sailor, Hand, Captain, Lookout }
+pub enum CrewKind { Worker, Sailor, Hand, Captain, Lookout, Admiral }
 
 // Per-cog self-reported state (ex `<cog>-status` schemas). Each cog reports its own
 // vocabulary; `fleetc status` parses the report into the matching enum BEFORE the
@@ -686,6 +687,7 @@ impl CrewKind {
             CrewKind::Hand => "hand",
             CrewKind::Captain => "captain",
             CrewKind::Lookout => "lookout",
+            CrewKind::Admiral => "admiral",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -695,6 +697,7 @@ impl CrewKind {
             "hand" => Some(Self::Hand),
             "captain" => Some(Self::Captain),
             "lookout" => Some(Self::Lookout),
+            "admiral" => Some(Self::Admiral),
             _ => None,
         }
     }
@@ -820,6 +823,7 @@ impl CogState {
             CrewKind::Hand => HandState::parse(s).map(CogState::Hand),
             CrewKind::Captain => CaptainState::parse(s).map(CogState::Captain),
             CrewKind::Lookout => LookoutState::parse(s).map(CogState::Lookout),
+            CrewKind::Admiral => None, // an admiral reports nothing: the cog's own reports end it
         }
     }
     /// A builder's happy terminal — MR open + reviewed, ready to hand to a sailor.

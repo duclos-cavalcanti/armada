@@ -24,6 +24,9 @@ pub struct Config {
     pub reconcile_secs: u64,
     /// How long a convoy rests between captain passes, counted from the last captain's finish.
     pub captain_sleep_secs: u64,
+    /// How many admirals may sit at once, each convened on a confirmed escalation: -1 = no cap,
+    /// 0 = none convened.
+    pub admirals: i64,
     /// Reconcile mode: false (default, post-cutover) = apply the plan through the ports — fleetd
     /// drives the line; true = compute + log only, execute nothing (the parity look, opt in via
     /// `FLEET_DRY_RUN=true`). Flip via config/env, no recompile.
@@ -111,6 +114,7 @@ impl Default for Config {
             sync_secs: 300,
             reconcile_secs: 60,
             captain_sleep_secs: 900,
+            admirals: 3,
             dry_run: false,
             active_secs: domain::LIVENESS_ACTIVE_SECS,
             quiet_secs: domain::LIVENESS_QUIET_SECS,

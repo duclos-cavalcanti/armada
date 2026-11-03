@@ -26,8 +26,8 @@ CREATE TABLE IF NOT EXISTS ticket_blocks (
 -- Running crew members. ended_at NULL = live (the only lifecycle fact).
 CREATE TABLE IF NOT EXISTS sessions (
     id                 INTEGER PRIMARY KEY,
-    kind               TEXT NOT NULL CHECK (kind IN ('worker','sailor','hand','captain','lookout')),
-    ticket             TEXT REFERENCES tickets(key),    -- nullable; worker/sailor require one (CHECK below)
+    kind               TEXT NOT NULL CHECK (kind IN ('worker','sailor','hand','captain','lookout','admiral')),
+    ticket             TEXT REFERENCES tickets(key),    -- nullable; worker/sailor/admiral require one (CHECK below)
     convoy             TEXT,                             -- nullable; a captain commands one (CHECK below)
     worktree_path      TEXT NOT NULL,
     tmux_session       TEXT NOT NULL,
@@ -35,8 +35,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at         TEXT NOT NULL,
     ended_at           TEXT,
     anchored_at        TEXT,                            -- operator anchor (stop & hold); NULL = under way
-    -- a worker/sailor is bound to a ticket; a captain/hand/lookout/singleton may be ticketless.
-    CHECK (ticket IS NOT NULL OR kind NOT IN ('worker','sailor')),
+    -- a worker/sailor/admiral is bound to a ticket; a captain/hand/lookout may be ticketless.
+    CHECK (ticket IS NOT NULL OR kind NOT IN ('worker','sailor','admiral')),
     -- a captain commands a convoy.
     CHECK (kind <> 'captain' OR convoy IS NOT NULL)
 );

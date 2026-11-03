@@ -97,7 +97,7 @@ sequencing as `blocked_by` edges on the tickets, so the frontier reflects the or
 After dispatch, run `/fleet-inspect <TICKET>` for every ticket flagged **`inspect`**: the surveyor
 weighs the escalation, and the skill records the verdict. A REFUTE goes to the cog as its way
 out, and it carries on. A CONFIRM stays with the operator, who sees it as `escalated` on the
-dashboard. You never rule on an escalation yourself, and never act outside your lane on its
+dashboard; fleetd convenes an admiral on it for them. You never rule on an escalation yourself, and never act outside your lane on its
 account: a missing blocker edge or a ticket edit is a CONFIRM's recommendation, not yours to make.
 
 ## Close a delivered convoy

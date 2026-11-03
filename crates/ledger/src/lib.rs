@@ -142,8 +142,8 @@ impl Ledger {
 }
 
 fn init(conn: &Connection) -> Result<()> {
-    conn.pragma_update(None, "foreign_keys", "ON")?;
     migrate(conn)?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.execute_batch(SCHEMA)?;
     stamp(conn, SCHEMA_VERSION, "ledger")
 }
@@ -159,6 +159,26 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE ship_snapshots ADD COLUMN blocked_by_json TEXT NOT NULL DEFAULT '[]';",
     // v4: escalations were never written (an escalation is a report); inspections judge them.
     "DROP TABLE IF EXISTS escalations;",
+    // v5: an admiral session, convened on a confirmed escalation. SQLite can't alter a CHECK, so the
+    // table is rebuilt (its indexes come back with schema.sql).
+    "CREATE TABLE sessions_v5 (
+        id                 INTEGER PRIMARY KEY,
+        kind               TEXT NOT NULL CHECK (kind IN ('worker','sailor','hand','captain','lookout','admiral')),
+        ticket             TEXT REFERENCES tickets(key),
+        convoy             TEXT,
+        worktree_path      TEXT NOT NULL,
+        tmux_session       TEXT NOT NULL,
+        harness_session_id TEXT,
+        created_at         TEXT NOT NULL,
+        ended_at           TEXT,
+        anchored_at        TEXT,
+        CHECK (ticket IS NOT NULL OR kind NOT IN ('worker','sailor','admiral')),
+        CHECK (kind <> 'captain' OR convoy IS NOT NULL)
+    );
+    INSERT INTO sessions_v5 (id, kind, ticket, convoy, worktree_path, tmux_session, harness_session_id, created_at, ended_at, anchored_at)
+        SELECT id, kind, ticket, convoy, worktree_path, tmux_session, harness_session_id, created_at, ended_at, anchored_at FROM sessions;
+    DROP TABLE sessions;
+    ALTER TABLE sessions_v5 RENAME TO sessions;",
 ];
 
 /// The ledger's schema version (SQLite `user_version`): one past its last migration.
@@ -166,15 +186,20 @@ pub const SCHEMA_VERSION: i64 = 1 + MIGRATIONS.len() as i64;
 
 /// Run the migrations an older ledger is missing, in one transaction, and stamp it current. A fresh
 /// ledger (`0`) has nothing to migrate; one newer than this build is left for `stamp` to refuse.
+/// Runs with foreign keys off (SQLite's procedure for rebuilding a table), so it checks them itself
+/// before committing.
 fn migrate(conn: &Connection) -> Result<()> {
     let found: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     if found == 0 || found >= SCHEMA_VERSION {
         return Ok(());
     }
+    conn.pragma_update(None, "foreign_keys", "OFF")?; // a no-op inside a transaction: set it first
     let tx = conn.unchecked_transaction()?;
     for step in &MIGRATIONS[found as usize - 1..] {
         tx.execute_batch(step)?;
     }
+    let dangling: i64 = tx.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r.get(0))?;
+    anyhow::ensure!(dangling == 0, "migration left {dangling} dangling foreign key(s)");
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     tx.commit()?;
     Ok(())
@@ -613,6 +638,32 @@ mod tests {
             .query_row("SELECT EXISTS (SELECT 1 FROM pragma_table_info('ship_snapshots') WHERE name = 'total_threads')", [], |r| r.get(0))
             .unwrap();
         assert!(has, "the column was added");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_v4_ledger_rebuilds_sessions_to_take_an_admiral_and_keeps_its_rows() {
+        let dir = std::env::temp_dir().join(format!("ledger-migrate-v5-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ledger.db").to_string_lossy().into_owned();
+        let db = Ledger::open(&path).unwrap();
+        TicketRepo::upsert(&db, &bare_ticket("PROJ-1")).unwrap();
+        let worker = db.start(&worker_on("PROJ-1")).unwrap().expect("a session");
+        let state = CogState::Worker(WorkerState::Escalated);
+        db.record(&Report { session: worker.clone(), state, last_action: None, reported_at: "t1".into() }).unwrap();
+        drop(db);
+        // Back to v4: the same rebuild, without the admiral kind.
+        let v4 = MIGRATIONS[MIGRATIONS.len() - 1].replace(",'admiral'", "");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} PRAGMA user_version = 4;")).unwrap();
+        drop(conn);
+
+        let db = Ledger::open(&path).unwrap();
+        assert_eq!(schema_version(&path).unwrap(), SCHEMA_VERSION, "stamped current");
+        assert_eq!(ReportRepo::latest(&db, &worker).unwrap().map(|r| r.state), Some(state), "rows kept");
+        let admiral = Session { kind: CrewKind::Admiral, tmux_session: "admiral-PROJ-1".into(), ..worker_on("PROJ-1") };
+        assert!(db.start(&admiral).unwrap().is_some(), "an admiral is a kind now");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

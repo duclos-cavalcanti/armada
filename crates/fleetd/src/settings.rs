@@ -60,6 +60,9 @@ pub fn reconcile_secs(cfg: &Config, l: &Ledger) -> u64 {
 pub fn captain_sleep_secs(cfg: &Config, l: &Ledger) -> u64 {
     resolve_u64(l, Some("FLEET_CAPTAIN_SLEEP_SECS"), "captain_sleep_secs", cfg.captain_sleep_secs)
 }
+pub fn admirals(cfg: &Config, l: &Ledger) -> i64 {
+    resolve_i64(l, None, "admirals", cfg.admirals)
+}
 pub fn dry_run(cfg: &Config, l: &Ledger) -> bool {
     resolve_bool(l, Some("FLEET_DRY_RUN"), "dry_run", cfg.dry_run)
 }
@@ -111,6 +114,7 @@ const LEVERS: &[Lever] = &[
     Lever { key: "sync_secs", env: Some("FLEET_SYNC_SECS"), ty: Ty::U64 },
     Lever { key: "reconcile_secs", env: Some("FLEET_RECONCILE_SECS"), ty: Ty::U64 },
     Lever { key: "captain_sleep_secs", env: Some("FLEET_CAPTAIN_SLEEP_SECS"), ty: Ty::U64 },
+    Lever { key: "admirals", env: None, ty: Ty::I64 },
     Lever { key: "dry_run", env: Some("FLEET_DRY_RUN"), ty: Ty::Bool },
     Lever { key: "active_secs", env: Some("FLEET_ACTIVE_SECS"), ty: Ty::I64 },
     Lever { key: "quiet_secs", env: Some("FLEET_QUIET_SECS"), ty: Ty::I64 },
@@ -168,6 +172,7 @@ fn value_of(cfg: &Config, l: &Ledger, key: &str) -> String {
         "sync_secs" => sync_secs(cfg, l).to_string(),
         "reconcile_secs" => reconcile_secs(cfg, l).to_string(),
         "captain_sleep_secs" => captain_sleep_secs(cfg, l).to_string(),
+        "admirals" => admirals(cfg, l).to_string(),
         "dry_run" => dry_run(cfg, l).to_string(),
         "active_secs" => thresholds(cfg, l).active_secs.to_string(),
         "quiet_secs" => thresholds(cfg, l).quiet_secs.to_string(),

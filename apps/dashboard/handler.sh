@@ -12,7 +12,7 @@
 # on stderr — the dashboard shows it, in red, in its footer.
 #
 # The keys are fixed, never "smart": enter switches to the row's tmux session (or fails),
-# m opens the MR, t opens the ticket, e switches to the ticket's admiral (scripts/admiralty.sh).
+# m opens the MR, t opens the ticket, e switches to the ticket's admiral.
 #
 # Row-field contract per coordinate (coord + key are stripped, so $1 is the first
 # field — these positions match the dashboard's `focused_action()`):
@@ -39,9 +39,9 @@ launch_tmux() {
     tmux switch-client -t "=$1"
 }
 
-# Switch to the admiral ruling on a ticket's escalation — the session scripts/admiralty.sh spawned.
+# Switch to the admiral fleetd convened on a ticket's confirmed escalation.
 launch_admiral() {
-    tmux has-session -t "=admiral-$1" 2>/dev/null || fail "no admiral on $1 — spawn one: scripts/admiralty.sh"
+    tmux has-session -t "=admiral-$1" 2>/dev/null || fail "no admiral on $1 (yet): fleetd convenes one on a confirmed escalation"
     tmux switch-client -t "=admiral-$1"
 }
 

@@ -192,7 +192,8 @@ impl Fleet {
                 CrewKind::Worker => workers.push(cog(session)?),
                 CrewKind::Hand => hands.push(cog(session)?),
                 CrewKind::Captain | CrewKind::Lookout => crew.push(cog(session)?),
-                CrewKind::Sailor => {} // a sailor shows with its ship, in `landing`
+                CrewKind::Sailor => {}  // a sailor shows with its ship, in `landing`
+                CrewKind::Admiral => {} // reached from its cog's row (`e`)
             }
         }
         let building: HashSet<&TicketKey> = workers.iter().chain(&hands).filter_map(|c| c.session.ticket.as_ref()).collect();

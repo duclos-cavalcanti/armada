@@ -28,13 +28,13 @@ use crate::now_rfc3339;
 use crate::Cog;
 use anyhow::{anyhow, Result};
 use domain::ports::{
-    ConvoyRepo, EventLog, Forge, LookoutRepo, OrderRepo, ReportRepo, SessionHost, SessionRepo,
-    ShipRepo, TicketRepo, Tracker,
+    ConvoyRepo, EventLog, Forge, InspectionRepo, LookoutRepo, OrderRepo, ReportRepo, SessionHost,
+    SessionRepo, ShipRepo, TicketRepo, Tracker,
 };
 use domain::{
-    Classification, CogState, ConvoyKey, CrewKind, EntityKind, EventKind, HandState, Liveness, Order,
-    PipelineStatus, Report, Session, SessionId, Ship, ShipSnapshot, ShipState, Ticket, TicketKey,
-    TicketStatus, WorkerState,
+    Classification, CogState, ConvoyKey, CrewKind, EntityKind, EventKind, HandState, Inspection,
+    Liveness, Order, PipelineStatus, Report, Session, SessionId, Ship, ShipSnapshot, ShipState, Ticket,
+    TicketKey, TicketStatus, Verdict, WorkerState,
 };
 use ledger::Ledger;
 use serde::Serialize;
@@ -49,18 +49,19 @@ pub enum Action {
     Reap { ticket: String },                   // merged/terminal → end session + Jira Done
     Heal { ticket: String, kind: String },     // dead WARM session (worker/hand) → respawn in place
     Wake { ticket: String },                   // a waiting worker's blockers all merged → resume it
-    StandDown { ticket: String, kind: String }, // dead COLD session (sailor) → end it; re-spawn on change
+    StandDown { ticket: String, kind: String }, // dead COLD session (sailor) → end it; re-spawn on change. An admiral too
     LaunchCaptain { convoy: String },          // active convoy with a pass of work + no live captain → launch
     StandDownCaptain { convoy: String },       // captain finished its pass / convoy gone → end its session
     LaunchSailor { ticket: String },           // open ship changed since last sweep → launch a sailor
     LaunchLookout { iid: i64 },                // an allied ship changed since last review → launch the lookout on it
     StandDownLookout,                          // the singleton lookout finished its review → end its session
+    LaunchAdmiral { ticket: String },          // a confirmed escalation with no admiral since its verdict → convene one
 }
 
 /// Compute the reconcile plan from ledger state + the live cogs (session + derived
 /// liveness). Pure (reads only). `cogs` carry liveness for the heal/terminal checks; `stacks` is
 /// the forge's capability (`Forge::stacks`) — without it, no STACKED spawn and no BLOCK.
-pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, captain_sleep_secs: u64) -> Result<Vec<Action>> {
+pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, captain_sleep_secs: u64, admirals: i64) -> Result<Vec<Action>> {
     let mut actions = Vec::new();
 
     // DISPATCH — iterate the order queue (intent). Spawn a CLEAN (all blockers terminal) ticket OR
@@ -156,6 +157,9 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, captain_sleep_secs: u64
         // Ticketless cogs (captains, standing singletons) aren't part of the per-ticket
         // handoff/reap plan — skip them here.
         let Some(tkey) = &cog.session.ticket else { continue };
+        if cog.session.kind == CrewKind::Admiral {
+            continue; // the admiralty, below
+        }
         let status = TicketRepo::get(ledger, tkey)?.and_then(|t| t.status);
         if matches!(status, Some(TicketStatus::Done) | Some(TicketStatus::Cancelled)) {
             actions.push(Action::Reap { ticket: tkey.0.clone() });
@@ -309,6 +313,44 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, captain_sleep_secs: u64
             }
         }
     }
+
+    // ADMIRALTY — an admiral convenes on a ticket's CONFIRMED escalation, for the operator to rule
+    // with. It reports nothing: the cog's own reports end it. STAND DOWN an admiral that died, or
+    // whose escalation no longer stands confirmed since it convened (the cog was unblocked or ended,
+    // or a newer verdict replaced it). Then CONVENE on each
+    // confirmed escalation with no admiral since its verdict (one the operator closed isn't
+    // reconvened), oldest verdict first, up to `admirals` seated (-1 = no cap, 0 = none).
+    let mut seated = 0;
+    for cog in cogs {
+        if cog.session.kind != CrewKind::Admiral || cog.session.ended_at.is_some() {
+            continue;
+        }
+        let Some(tkey) = &cog.session.ticket else { continue };
+        let standing = confirmed(ledger, tkey)?.is_some_and(|v| after(&cog.session.created_at, &v.inspected_at));
+        if cog.liveness == Liveness::Dead || !standing {
+            actions.push(Action::StandDown { ticket: tkey.0.clone(), kind: CrewKind::Admiral.as_str().into() });
+        } else {
+            seated += 1;
+        }
+    }
+    let mut due = Vec::new();
+    for cog in cogs {
+        let Some(tkey) = &cog.session.ticket else { continue };
+        if !matches!(cog.session.kind, CrewKind::Worker | CrewKind::Sailor) || cog.session.ended_at.is_some() {
+            continue;
+        }
+        let Some(verdict) = confirmed(ledger, tkey)? else { continue };
+        let convened = SessionRepo::for_ticket(ledger, tkey)?
+            .iter()
+            .any(|s| s.kind == CrewKind::Admiral && after(&s.created_at, &verdict.inspected_at));
+        if !convened {
+            due.push((instant(&verdict.inspected_at), tkey.0.clone()));
+        }
+    }
+    due.sort();
+    due.dedup(); // a worker and a sailor on one ticket name the same escalation
+    let room = usize::try_from(admirals).map_or(usize::MAX, |cap| cap.saturating_sub(seated));
+    actions.extend(due.into_iter().take(room).map(|(_, ticket)| Action::LaunchAdmiral { ticket }));
 
     // De-dup identical actions (e.g. a merged ship + terminal ticket both → one Reap).
     let mut seen: Vec<Action> = Vec::new();
@@ -483,6 +525,22 @@ pub(crate) fn escalation(ledger: &Ledger, ticket: &TicketKey) -> Result<Option<(
     Ok(None)
 }
 
+/// The CONFIRM standing on the ticket's escalation: its escalated cog's latest verdict, if it
+/// confirms the escalation as it stands. `None` = no escalation, or not confirmed.
+fn confirmed(ledger: &Ledger, ticket: &TicketKey) -> Result<Option<Inspection>> {
+    let Some((session, report)) = escalation(ledger, ticket)? else { return Ok(None) };
+    let verdict = InspectionRepo::inspection(ledger, &session.id)?;
+    Ok(verdict.filter(|v| v.verdict == Verdict::Confirm && v.judges(&report)))
+}
+
+/// `a` is later than `b` (both RFC 3339; compared as text only when one won't parse).
+fn after(a: &str, b: &str) -> bool {
+    match (instant(a), instant(b)) {
+        (Some(a), Some(b)) => a > b,
+        _ => a > b,
+    }
+}
+
 /// A convoy has rested once `sleep_secs` have passed since its last captain finished (`finished`).
 /// Never finished → rested. An unparseable time counts as rested: a needless pass is harmless.
 fn rested(finished: Option<&str>, sleep_secs: u64) -> bool {
@@ -514,6 +572,7 @@ fn instant(t: &str) -> Option<time::OffsetDateTime> {
 pub struct Levers {
     pub dry_run: bool,
     pub captain_sleep_secs: u64,
+    pub admirals: i64,
 }
 
 /// Apply the reconcile plan through the ports. `dry_run=true` logs the plan and executes
@@ -529,7 +588,7 @@ pub fn tick<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
     project: &str,
     levers: &Levers,
 ) -> Result<usize> {
-    let actions = plan(ledger, cogs, forge.stacks(), levers.captain_sleep_secs)?;
+    let actions = plan(ledger, cogs, forge.stacks(), levers.captain_sleep_secs, levers.admirals)?;
     if levers.dry_run {
         ledger.append(
             &now_rfc3339(),
@@ -584,6 +643,7 @@ fn execute<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
         Action::LaunchSailor { ticket } => launch_sailor(ledger, forge, host, ticket),
         Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, project, *iid),
         Action::StandDownLookout => stand_down_lookout(ledger, host),
+        Action::LaunchAdmiral { ticket } => launch_admiral(ledger, host, project, ticket),
     }
 }
 
@@ -1170,6 +1230,47 @@ fn stand_down_lookout<H: SessionHost>(ledger: &Ledger, host: &H) -> Result<()> {
     Ok(())
 }
 
+/// LaunchAdmiral — convene an admiral on a ticket's confirmed escalation, in the project folder, for
+/// the operator to rule with (`admiral-<KEY>`; the dashboard's `e` switches to it). Its first order
+/// names the ticket. No `FLEET_TICKET`: it isn't a cog, and keeps the operator's verbs fleetc refuses
+/// a cog. A tmux session of that name already up is one the operator opened: a benign skip.
+fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, ticket: &str) -> Result<()> {
+    let tmux_session = format!("admiral-{ticket}");
+    if host.alive(&tmux_session)? {
+        return Ok(());
+    }
+    let hid = new_session_id();
+    let session_id = match SessionRepo::start(
+        ledger,
+        &Session {
+            id: SessionId(0),
+            kind: CrewKind::Admiral,
+            ticket: Some(TicketKey(ticket.to_string())),
+            convoy: None,
+            worktree_path: project.to_string(),
+            tmux_session: tmux_session.clone(),
+            harness_session_id: Some(hid.clone()),
+            created_at: now_rfc3339(),
+            ended_at: None,
+            anchored_at: None,
+        },
+    )? {
+        Some(id) => id,
+        None => return Ok(()), // the per-ticket lock holds → an admiral already sits. Benign skip.
+    };
+    // The key is `<PREFIX>-<n>`-validated, so the quoted order is shell-safe.
+    let cmd = format!("{} 'Rule on the confirmed escalation of {ticket}.'", launch_cmd("admiral", Launch::Fresh(&hid)));
+    host.spawn(&tmux_session, Path::new(project), &cmd)?;
+    ledger.append(
+        &now_rfc3339(),
+        EventKind::SessionStarted,
+        EntityKind::Session,
+        &session_id.0.to_string(),
+        &serde_json::json!({ "ticket": ticket, "kind": "admiral" }),
+    )?;
+    Ok(())
+}
+
 /// How a cog's claude starts. fleetd mints the session id, so the transcript lands at a known
 /// path (`Session::transcript`) that `fleetc transcript` resolves directly — no guessing.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1221,8 +1322,8 @@ fn new_session_id() -> String {
 mod tests {
     use super::*;
 
-    const LIVE: Levers = Levers { dry_run: false, captain_sleep_secs: 0 };
-    const DRY: Levers = Levers { dry_run: true, captain_sleep_secs: 0 };
+    const LIVE: Levers = Levers { dry_run: false, captain_sleep_secs: 0, admirals: 0 };
+    const DRY: Levers = Levers { dry_run: true, captain_sleep_secs: 0, admirals: 0 };
     use domain::ports::EventLog;
     use domain::*;
     use std::cell::RefCell;
@@ -1495,7 +1596,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::Todo, false, vec![]);
         order(&db, "PROJ-1", true);
         assert_eq!(
-            plan(&db, &[], true, 0).unwrap(),
+            plan(&db, &[], true, 0, 0).unwrap(),
             vec![Action::Spawn { ticket: "PROJ-1".into(), kind: "worker".into() }]
         );
     }
@@ -1505,7 +1606,7 @@ mod tests {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::Todo, false, vec![]);
         order(&db, "PROJ-1", false);
-        assert_eq!(plan(&db, &[], true, 0).unwrap()[0], Action::Spawn { ticket: "PROJ-1".into(), kind: "hand".into() });
+        assert_eq!(plan(&db, &[], true, 0, 0).unwrap()[0], Action::Spawn { ticket: "PROJ-1".into(), kind: "hand".into() });
     }
 
     #[test]
@@ -1515,14 +1616,14 @@ mod tests {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         order(&db, "PROJ-1", false); // hand order
-        assert_eq!(plan(&db, &[], true, 0).unwrap()[0], Action::Spawn { ticket: "PROJ-1".into(), kind: "hand".into() });
+        assert_eq!(plan(&db, &[], true, 0, 0).unwrap()[0], Action::Spawn { ticket: "PROJ-1".into(), kind: "hand".into() });
     }
 
     #[test]
     fn no_spawn_without_an_order() {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::Todo, false, vec![]);
-        assert!(plan(&db, &[], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -1531,7 +1632,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::Todo, false, vec![]);
         order(&db, "PROJ-1", true);
         session(&db, CrewKind::Worker, "PROJ-1", false);
-        assert!(plan(&db, &[], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -1541,7 +1642,7 @@ mod tests {
         order(&db, "PROJ-1", true);
         ticket(&db, "PROJ-2", TicketStatus::InProgress, false, vec![]);
         order(&db, "PROJ-2", true);
-        assert!(plan(&db, &[], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -1552,22 +1653,22 @@ mod tests {
         order(&db, "PROJ-1", true);
         let mut cog = live_cog(&db, CrewKind::Worker, "PROJ-1", Liveness::Idle);
         report(&db, &cog, CogState::Worker(WorkerState::Waiting));
-        assert!(plan(&db, std::slice::from_ref(&cog), true, 0).unwrap().is_empty(), "its blocker is open: it waits");
+        assert!(plan(&db, std::slice::from_ref(&cog), true, 0, 0).unwrap().is_empty(), "its blocker is open: it waits");
         cog.liveness = Liveness::Dead;
-        assert!(plan(&db, std::slice::from_ref(&cog), true, 0).unwrap().is_empty(), "nor healed while it waits");
+        assert!(plan(&db, std::slice::from_ref(&cog), true, 0, 0).unwrap().is_empty(), "nor healed while it waits");
 
         ticket(&db, "PROJ-2", TicketStatus::Done, false, vec![]);
         let heal = Action::Heal { ticket: "PROJ-1".into(), kind: "worker".into() };
-        assert_eq!(plan(&db, std::slice::from_ref(&cog), true, 0).unwrap(), vec![heal], "dead: healed first");
+        assert_eq!(plan(&db, std::slice::from_ref(&cog), true, 0, 0).unwrap(), vec![heal], "dead: healed first");
         cog.liveness = Liveness::Idle;
-        assert_eq!(plan(&db, std::slice::from_ref(&cog), true, 0).unwrap(), vec![Action::Wake { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, std::slice::from_ref(&cog), true, 0, 0).unwrap(), vec![Action::Wake { ticket: "PROJ-1".into() }]);
         wake(&db, &FakeHost::new(), "PROJ-1").unwrap();
         assert_eq!(
             ReportRepo::latest(&db, &cog.session.id).unwrap().map(|r| r.state),
             Some(CogState::Worker(WorkerState::Implementing)),
             "woken once: back to implementing"
         );
-        assert!(plan(&db, &[cog], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[cog], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -1576,9 +1677,9 @@ mod tests {
         ticket(&db, "PROJ-2", TicketStatus::InProgress, false, vec![]);
         ticket(&db, "PROJ-1", TicketStatus::Todo, false, vec!["PROJ-2"]);
         order(&db, "PROJ-1", true);
-        assert!(plan(&db, &[], true, 0).unwrap().is_empty(), "blocked while PROJ-2 is in progress");
+        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty(), "blocked while PROJ-2 is in progress");
         ticket(&db, "PROJ-2", TicketStatus::Done, false, vec![]);
-        assert_eq!(plan(&db, &[], true, 0).unwrap().len(), 1);
+        assert_eq!(plan(&db, &[], true, 0, 0).unwrap().len(), 1);
     }
 
     #[test]
@@ -1591,12 +1692,12 @@ mod tests {
         ship(&db, 101, "PROJ-1", ShipState::Open); // its open MR — the fork base
         ticket(&db, "PROJ-2", TicketStatus::Todo, false, vec!["PROJ-1"]); // child blocked_by parent
         order(&db, "PROJ-2", true); // forks off origin/master
-        assert!(!plan(&db, &[], true, 0).unwrap().contains(&spawn), "off master it isn't stacked: it waits");
+        assert!(!plan(&db, &[], true, 0, 0).unwrap().contains(&spawn), "off master it isn't stacked: it waits");
         let stacked = Order { fork_from: "origin/feature/PROJ-1".into(), ..OrderRepo::get(&db, &TicketKey("PROJ-2".into())).unwrap().unwrap() };
         OrderRepo::dispatch(&db, &stacked).unwrap();
-        assert!(plan(&db, &[], true, 0).unwrap().contains(&spawn), "off the parent's branch it spawns");
+        assert!(plan(&db, &[], true, 0, 0).unwrap().contains(&spawn), "off the parent's branch it spawns");
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]); // the parent, still building
-        assert!(!plan(&db, &[], true, 0).unwrap().contains(&spawn), "a parent still building isn't stacked on");
+        assert!(!plan(&db, &[], true, 0, 0).unwrap().contains(&spawn), "a parent still building isn't stacked on");
     }
 
     #[test]
@@ -1610,7 +1711,7 @@ mod tests {
         order(&db, "PROJ-2", true);
         let t2 = TicketRepo::get(&db, &TicketKey("PROJ-2".into())).unwrap().unwrap();
         assert_eq!(classify(&db, &t2, &db.armada().unwrap(), false).unwrap(), Some(Classification::Blocked));
-        assert!(!plan(&db, &[], false, 0).unwrap().iter().any(|a| matches!(a, Action::Spawn { .. })));
+        assert!(!plan(&db, &[], false, 0, 0).unwrap().iter().any(|a| matches!(a, Action::Spawn { .. })));
     }
 
     #[test]
@@ -1621,7 +1722,7 @@ mod tests {
         ticket(&db, "PROJ-2", TicketStatus::Todo, false, vec!["PROJ-1"]);
         order(&db, "PROJ-2", true);
         assert!(
-            !plan(&db, &[], true, 0).unwrap().iter().any(|a| matches!(a, Action::Spawn { .. })),
+            !plan(&db, &[], true, 0, 0).unwrap().iter().any(|a| matches!(a, Action::Spawn { .. })),
             "a blocked child with no parent ship to fork from doesn't spawn"
         );
     }
@@ -1634,7 +1735,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let w = live_cog(&db, CrewKind::Worker, "PROJ-1", Liveness::Quiet);
         report(&db, &w, CogState::Worker(WorkerState::Concluded));
-        assert_eq!(plan(&db, &[w], true, 0).unwrap(), vec![Action::Handoff { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, &[w], true, 0, 0).unwrap(), vec![Action::Handoff { ticket: "PROJ-1".into() }]);
     }
 
     #[test]
@@ -1643,7 +1744,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let w = live_cog(&db, CrewKind::Worker, "PROJ-1", Liveness::Active);
         report(&db, &w, CogState::Worker(WorkerState::Implementing)); // not done yet
-        assert!(plan(&db, &[w], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[w], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -1653,7 +1754,7 @@ mod tests {
         let w = live_cog(&db, CrewKind::Worker, "PROJ-1", Liveness::Quiet);
         report(&db, &w, CogState::Worker(WorkerState::Concluded));
         session(&db, CrewKind::Sailor, "PROJ-1", false); // sailor already sailing
-        assert!(plan(&db, &[w], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[w], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -1663,7 +1764,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let w = live_cog(&db, CrewKind::Worker, "PROJ-1", Liveness::Dead);
         report(&db, &w, CogState::Worker(WorkerState::Concluded));
-        assert_eq!(plan(&db, &[w], true, 0).unwrap(), vec![Action::Handoff { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, &[w], true, 0, 0).unwrap(), vec![Action::Handoff { ticket: "PROJ-1".into() }]);
     }
 
     // ── reap ──────────────────────────────────────────────────────────────────────
@@ -1674,7 +1775,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         session(&db, CrewKind::Sailor, "PROJ-1", false); // live sailor to reap
         ship(&db, 10, "PROJ-1", ShipState::Merged);
-        assert_eq!(plan(&db, &[], true, 0).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
     }
 
     #[test]
@@ -1682,7 +1783,7 @@ mod tests {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::Cancelled, false, vec![]);
         order(&db, "PROJ-1", true); // no session at all: nothing live to trigger the per-cog reap
-        assert_eq!(plan(&db, &[], true, 0).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
     }
 
     #[test]
@@ -1690,7 +1791,7 @@ mod tests {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::Done, false, vec![]);
         let cogs = vec![dead_cog("PROJ-1", CrewKind::Sailor)]; // live-in-ledger, ticket Done
-        assert_eq!(plan(&db, &cogs, true, 0).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, &cogs, true, 0, 0).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
     }
 
     // ── heal ──────────────────────────────────────────────────────────────────────
@@ -1717,7 +1818,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let cogs = vec![dead_cog("PROJ-1", CrewKind::Worker)];
         assert_eq!(
-            plan(&db, &cogs, true, 0).unwrap(),
+            plan(&db, &cogs, true, 0, 0).unwrap(),
             vec![Action::Heal { ticket: "PROJ-1".into(), kind: "worker".into() }]
         );
     }
@@ -1730,7 +1831,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let mut cog = dead_cog("PROJ-1", CrewKind::Worker);
         cog.session.anchored_at = Some("t1".into());
-        assert!(plan(&db, &[cog], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[cog], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -1740,7 +1841,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let w = live_cog(&db, CrewKind::Worker, "PROJ-1", Liveness::Dead);
         report(&db, &w, CogState::Worker(WorkerState::Escalated));
-        assert!(plan(&db, &[w], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[w], true, 0, 0).unwrap().is_empty());
     }
 
     // ── dry-run ───────────────────────────────────────────────────────────────────
@@ -2195,7 +2296,7 @@ mod tests {
         order_wt(&db, "PROJ-1", false, Some("/wt/PROJ-1"));
         let h = live_cog(&db, CrewKind::Hand, "PROJ-1", Liveness::Quiet);
         report(&db, &h, CogState::Hand(HandState::Done));
-        assert_eq!(plan(&db, std::slice::from_ref(&h), true, 0).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, std::slice::from_ref(&h), true, 0, 0).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
 
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
@@ -2212,7 +2313,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         order_wt(&db, "PROJ-1", true, Some("/wt/PROJ-1")); // an AUTO order with a worktree → sailor-eligible
         ship(&db, 10, "PROJ-1", ShipState::Open); // swept = None → first sweep always fires
-        assert_eq!(plan(&db, &[], true, 0).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-1".into() }]);
     }
 
     #[test]
@@ -2225,7 +2326,7 @@ mod tests {
         order_wt(&d1, "PROJ-1", false, Some("/wt/PROJ-1")); // auto_impl=false → hand
         ship(&d1, 10, "PROJ-1", ShipState::Open);
         assert_eq!(
-            plan(&d1, &[], true, 0).unwrap(),
+            plan(&d1, &[], true, 0, 0).unwrap(),
             vec![Action::Spawn { ticket: "PROJ-1".into(), kind: "hand".into() }],
             "a manual/hand order spawns a hand, never a cold-loop sailor",
         );
@@ -2233,7 +2334,7 @@ mod tests {
         let d2 = db();
         ticket(&d2, "PROJ-2", TicketStatus::InQa, false, vec![]); // no order at all
         ship(&d2, 11, "PROJ-2", ShipState::Open);
-        assert_eq!(plan(&d2, &[], true, 0).unwrap(), vec![Action::LaunchLookout { iid: 11 }], "no order → no sailor; an ally's to review");
+        assert_eq!(plan(&d2, &[], true, 0, 0).unwrap(), vec![Action::LaunchLookout { iid: 11 }], "no order → no sailor; an ally's to review");
     }
 
     #[test]
@@ -2245,17 +2346,17 @@ mod tests {
         ticket(&db, "PROJ-2", TicketStatus::InQa, false, vec!["PROJ-1"]);
         order_wt(&db, "PROJ-2", true, Some("/wt/PROJ-2"));
         ship(&db, 10, "PROJ-2", ShipState::Open);
-        assert_eq!(plan(&db, &[], true, 0).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-2".into() }]);
+        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-2".into() }]);
 
         // Swept while blocked (the sweep couldn't arm) → quiet while nothing changes…
         let s = db.armada().unwrap().into_iter().find(|s| s.iid == 10).unwrap();
         let snap = ShipRepo::snapshot(&db, &s.id).unwrap().unwrap();
         db.set_swept(&s.id, Some(&ship_fingerprint(&snap, true))).unwrap();
-        assert!(plan(&db, &[], true, 0).unwrap().is_empty(), "unchanged while PROJ-1 is open");
+        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty(), "unchanged while PROJ-1 is open");
 
         // …until PROJ-1 lands: the blocker lifting is itself a change → the sweep that arms.
         ticket(&db, "PROJ-1", TicketStatus::Done, false, vec![]);
-        assert_eq!(plan(&db, &[], true, 0).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-2".into() }]);
+        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-2".into() }]);
     }
 
     #[test]
@@ -2268,7 +2369,7 @@ mod tests {
         let s = db.armada().unwrap().into_iter().find(|s| s.iid == 10).unwrap();
         let snap = ShipRepo::snapshot(&db, &s.id).unwrap().unwrap();
         db.set_swept(&s.id, Some(&ship_fingerprint(&snap, false))).unwrap();
-        assert!(plan(&db, &[], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
     }
 
     /// Re-sync ship `iid`'s snapshot through `mutate`, then mark swept = its (new) fingerprint —
@@ -2293,7 +2394,7 @@ mod tests {
         ship(&db, 10, "PROJ-1", ShipState::Open);
         swept_with(&db, 10, |s| s.pipeline = Some(PipelineStatus::Failed));
         assert_eq!(
-            plan(&db, &[], true, 0).unwrap(),
+            plan(&db, &[], true, 0, 0).unwrap(),
             vec![Action::LaunchSailor { ticket: "PROJ-1".into() }]
         );
     }
@@ -2311,7 +2412,7 @@ mod tests {
             s.pipeline = Some(PipelineStatus::Failed);
             s.merge_status = Some("merge_request_blocked".into());
         });
-        assert!(plan(&db, &[], true, 0).unwrap().is_empty(), "a blocked ship doesn't re-launch while unchanged");
+        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty(), "a blocked ship doesn't re-launch while unchanged");
     }
 
     #[test]
@@ -2324,7 +2425,7 @@ mod tests {
         ship(&db, 10, "PROJ-1", ShipState::Open);
         swept_with(&db, 10, |s| s.pipeline = Some(PipelineStatus::Failed));
         session(&db, CrewKind::Sailor, "PROJ-1", false); // a live sailor holds the slot
-        assert!(plan(&db, &[], true, 0).unwrap().is_empty(), "a live sailor blocks re-launch");
+        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty(), "a live sailor blocks re-launch");
     }
 
     #[test]
@@ -2333,7 +2434,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InQa, true, vec![]); // held
         order_wt(&db, "PROJ-1", true, Some("/wt/PROJ-1"));
         ship(&db, 10, "PROJ-1", ShipState::Open);
-        assert!(plan(&db, &[], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -2343,7 +2444,7 @@ mod tests {
         order_wt(&db, "PROJ-1", true, Some("/wt/PROJ-1"));
         ship(&db, 10, "PROJ-1", ShipState::Open);
         session(&db, CrewKind::Sailor, "PROJ-1", false); // a live sailor holds it
-        assert!(plan(&db, &[], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -2406,7 +2507,7 @@ mod tests {
     fn launches_the_lookout_on_an_unreviewed_allied_ship() {
         let db = db();
         allied_ship(&db, 77, ShipState::Open); // an allied MR, reviewed = None → review it
-        assert_eq!(plan(&db, &[], true, 0).unwrap(), vec![Action::LaunchLookout { iid: 77 }]);
+        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), vec![Action::LaunchLookout { iid: 77 }]);
     }
 
     #[test]
@@ -2416,7 +2517,7 @@ mod tests {
         let db = db();
         allied_ship(&db, 77, ShipState::Open);
         LookoutRepo::anchor(&db, "t").unwrap();
-        assert!(plan(&db, &[], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -2426,7 +2527,7 @@ mod tests {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         ship(&db, 10, "PROJ-1", ShipState::Open);
-        let lookout = |db: &Ledger| plan(db, &[], true, 0).unwrap().into_iter().find(|a| matches!(a, Action::LaunchLookout { .. }));
+        let lookout = |db: &Ledger| plan(db, &[], true, 0, 0).unwrap().into_iter().find(|a| matches!(a, Action::LaunchLookout { .. }));
         assert_eq!(lookout(&db), Some(Action::LaunchLookout { iid: 10 }), "a peer's ticketed MR is an ally");
         order(&db, "PROJ-1", true);
         assert_eq!(lookout(&db), None, "no lookout on our own ship");
@@ -2437,14 +2538,14 @@ mod tests {
         let db = db();
         allied_ship(&db, 77, ShipState::Open);
         mark_reviewed(&db, 77); // reviewed == head → nothing changed
-        assert!(plan(&db, &[], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
     fn no_lookout_for_a_draft_ally() {
         let db = db();
         allied_ship(&db, 77, ShipState::Draft); // a draft ally isn't ready to review
-        assert!(plan(&db, &[], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -2452,7 +2553,7 @@ mod tests {
         // The singleton: a live lookout blocks launching another, even on a different unreviewed ally.
         let db = db();
         allied_ship(&db, 77, ShipState::Open);
-        assert!(plan(&db, &[lookout_cog()], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[lookout_cog()], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -2460,7 +2561,7 @@ mod tests {
         let db = db();
         let mut cog = lookout_cog();
         cog.liveness = Liveness::Dead;
-        assert_eq!(plan(&db, &[cog], true, 0).unwrap(), vec![Action::StandDownLookout]);
+        assert_eq!(plan(&db, &[cog], true, 0, 0).unwrap(), vec![Action::StandDownLookout]);
     }
 
     #[test]
@@ -2472,10 +2573,10 @@ mod tests {
         let id = SessionRepo::start(&db, &lookout_cog().session).unwrap().expect("session start");
         let cog = Cog { session: SessionRepo::get(&db, &id).unwrap().unwrap(), liveness: Liveness::Active };
         report(&db, &cog, CogState::Lookout(LookoutState::Escalated));
-        assert!(plan(&db, std::slice::from_ref(&cog), true, 0).unwrap().is_empty(), "an escalated lookout holds the slot");
+        assert!(plan(&db, std::slice::from_ref(&cog), true, 0, 0).unwrap().is_empty(), "an escalated lookout holds the slot");
         report(&db, &cog, CogState::Lookout(LookoutState::Reviewed));
         assert_eq!(
-            plan(&db, &[cog], true, 0).unwrap(),
+            plan(&db, &[cog], true, 0, 0).unwrap(),
             vec![Action::StandDownLookout, Action::LaunchLookout { iid: 77 }]
         );
     }
@@ -2754,7 +2855,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         let cogs = vec![dead_cog("PROJ-1", CrewKind::Sailor)];
         assert_eq!(
-            plan(&db, &cogs, true, 0).unwrap(),
+            plan(&db, &cogs, true, 0, 0).unwrap(),
             vec![Action::StandDown { ticket: "PROJ-1".into(), kind: "sailor".into() }]
         );
     }
@@ -2767,7 +2868,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         let s = live_cog(&db, CrewKind::Sailor, "PROJ-1", Liveness::Dead);
         report(&db, &s, CogState::Sailor(SailorState::Escalated));
-        assert!(plan(&db, &[s], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[s], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -2777,7 +2878,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         let mut cog = dead_cog("PROJ-1", CrewKind::Sailor);
         cog.session.anchored_at = Some("t1".into());
-        assert!(plan(&db, &[cog], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[cog], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -2808,7 +2909,7 @@ mod tests {
         let s = live_cog(&db, CrewKind::Sailor, "PROJ-1", Liveness::Active);
         report(&db, &s, CogState::Sailor(SailorState::Sleeping));
         assert_eq!(
-            plan(&db, &[s], true, 0).unwrap(),
+            plan(&db, &[s], true, 0, 0).unwrap(),
             vec![Action::StandDown { ticket: "PROJ-1".into(), kind: "sailor".into() }]
         );
     }
@@ -2820,7 +2921,7 @@ mod tests {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         let s = live_cog(&db, CrewKind::Sailor, "PROJ-1", Liveness::Active);
-        assert!(plan(&db, &[s], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[s], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -2831,7 +2932,7 @@ mod tests {
         let mut s = live_cog(&db, CrewKind::Sailor, "PROJ-1", Liveness::Active);
         report(&db, &s, CogState::Sailor(SailorState::Sleeping));
         s.session.anchored_at = Some("t1".into());
-        assert!(plan(&db, &[s], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[s], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -2842,7 +2943,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         order_wt(&db, "PROJ-1", true, Some("/wt"));
         ship(&db, 10, "PROJ-1", ShipState::Merged);
-        assert_eq!(plan(&db, &[], true, 0).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
+        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), vec![Action::Reap { ticket: "PROJ-1".into() }]);
     }
 
     // ── parent roll-up (converge rollup_parent) ─────────────────────────────────────
@@ -2888,7 +2989,7 @@ mod tests {
         db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
         convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::InProgress); // nothing to do: it looks anyway
         assert_eq!(
-            plan(&db, &[], true, 900).unwrap(),
+            plan(&db, &[], true, 900, 0).unwrap(),
             vec![Action::LaunchCaptain { convoy: "PROJ-100".into() }]
         );
     }
@@ -2899,12 +3000,12 @@ mod tests {
         db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
         let id = SessionRepo::start(&db, &captain_cog("PROJ-100").session).unwrap().expect("session start");
         SessionRepo::end(&db, &id, &now_rfc3339()).unwrap();
-        assert!(plan(&db, &[], true, 900).unwrap().is_empty(), "finished just now: resting");
+        assert!(plan(&db, &[], true, 900, 0).unwrap().is_empty(), "finished just now: resting");
         let launch = vec![Action::LaunchCaptain { convoy: "PROJ-100".into() }];
-        assert_eq!(plan(&db, &[], true, 0).unwrap(), launch, "rested");
+        assert_eq!(plan(&db, &[], true, 0, 0).unwrap(), launch, "rested");
         let id = SessionRepo::start(&db, &captain_cog("PROJ-100").session).unwrap().expect("session start");
         SessionRepo::end(&db, &id, "2000-01-01T00:00:00Z").unwrap();
-        assert!(plan(&db, &[], true, 900).unwrap().is_empty(), "the latest finish counts");
+        assert!(plan(&db, &[], true, 900, 0).unwrap().is_empty(), "the latest finish counts");
     }
 
     #[test]
@@ -2925,9 +3026,9 @@ mod tests {
         let launch = vec![Action::LaunchCaptain { convoy: "PROJ-100".into() }];
         escalate("2000-01-01T00:00:00Z");
         finish(&now_rfc3339());
-        assert!(plan(&db, &[], true, 900).unwrap().is_empty(), "escalated before the last pass: it rests");
+        assert!(plan(&db, &[], true, 900, 0).unwrap().is_empty(), "escalated before the last pass: it rests");
         escalate(&now_rfc3339());
-        assert_eq!(plan(&db, &[], true, 900).unwrap(), launch, "escalated since: a pass is due");
+        assert_eq!(plan(&db, &[], true, 900, 0).unwrap(), launch, "escalated since: a pass is due");
     }
 
     #[test]
@@ -2936,7 +3037,7 @@ mod tests {
         let db = db();
         db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
         ConvoyRepo::anchor(&db, &ConvoyKey("PROJ-100".into()), "t2").unwrap();
-        assert!(plan(&db, &[], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -2945,7 +3046,7 @@ mod tests {
         db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
         convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::Todo); // work waiting
         // an alive captain already holds the convoy → no second launch.
-        assert!(plan(&db, &[captain_cog("PROJ-100")], true, 0).unwrap().is_empty());
+        assert!(plan(&db, &[captain_cog("PROJ-100")], true, 0, 0).unwrap().is_empty());
     }
 
     #[test]
@@ -2953,7 +3054,7 @@ mod tests {
         let db = db();
         // convoy never active (closed/gone) + a live captain → stand it down.
         assert_eq!(
-            plan(&db, &[captain_cog("PROJ-100")], true, 0).unwrap(),
+            plan(&db, &[captain_cog("PROJ-100")], true, 0, 0).unwrap(),
             vec![Action::StandDownCaptain { convoy: "PROJ-100".into() }]
         );
     }
@@ -2966,9 +3067,127 @@ mod tests {
         db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
         let id = SessionRepo::start(&db, &captain_cog("PROJ-100").session).unwrap().expect("session start");
         let cog = Cog { session: SessionRepo::get(&db, &id).unwrap().unwrap(), liveness: Liveness::Active };
-        assert!(plan(&db, std::slice::from_ref(&cog), true, 0).unwrap().is_empty(), "mid-pass, it holds the slot");
+        assert!(plan(&db, std::slice::from_ref(&cog), true, 0, 0).unwrap().is_empty(), "mid-pass, it holds the slot");
         report(&db, &cog, CogState::Captain(CaptainState::Done));
-        assert_eq!(plan(&db, &[cog], true, 0).unwrap(), vec![Action::StandDownCaptain { convoy: "PROJ-100".into() }]);
+        assert_eq!(plan(&db, &[cog], true, 0, 0).unwrap(), vec![Action::StandDownCaptain { convoy: "PROJ-100".into() }]);
+    }
+
+    // ── admiralty ───────────────────────────────────────────────────────────────────
+
+    /// An escalated worker on `key`, its escalation judged `verdict` at `at`.
+    fn judged(db: &Ledger, key: &str, verdict: Verdict, at: &str) -> Cog {
+        ticket(db, key, TicketStatus::InProgress, false, vec![]);
+        let w = live_cog(db, CrewKind::Worker, key, Liveness::Active);
+        let reported_at = "2026-01-01T00:00:00Z".to_string();
+        let state = CogState::Worker(WorkerState::Escalated);
+        ReportRepo::record(db, &Report { session: w.session.id.clone(), state, last_action: None, reported_at: reported_at.clone() })
+            .unwrap();
+        let body = "the verdict".into();
+        InspectionRepo::inspect(db, &Inspection { session: w.session.id.clone(), reported_at, verdict, body, inspected_at: at.into() })
+            .unwrap();
+        w
+    }
+
+    /// An admiral convened on `key` at `at`.
+    fn admiral(db: &Ledger, key: &str, at: &str, liveness: Liveness) -> Cog {
+        let session = Session {
+            id: SessionId(0),
+            kind: CrewKind::Admiral,
+            ticket: Some(TicketKey(key.into())),
+            convoy: None,
+            worktree_path: "/project".into(),
+            tmux_session: format!("admiral-{key}"),
+            harness_session_id: None,
+            created_at: at.into(),
+            ended_at: None,
+            anchored_at: None,
+        };
+        let id = SessionRepo::start(db, &session).unwrap().expect("session start");
+        Cog { session: SessionRepo::get(db, &id).unwrap().unwrap(), liveness }
+    }
+
+    fn convened(actions: Vec<Action>) -> Vec<String> {
+        actions.into_iter().filter_map(|a| if let Action::LaunchAdmiral { ticket } = a { Some(ticket) } else { None }).collect()
+    }
+
+    #[test]
+    fn an_admiral_convenes_on_a_confirmed_escalation_once_per_verdict() {
+        let db = db();
+        let w = judged(&db, "PROJ-1", Verdict::Confirm, "2026-01-01T00:01:00Z");
+        let r = judged(&db, "PROJ-2", Verdict::Refute, "2026-01-01T00:01:00Z");
+        let cogs = [w, r];
+        assert_eq!(convened(plan(&db, &cogs, true, 0, 3).unwrap()), ["PROJ-1"], "a refute went back to its cog");
+
+        let a = admiral(&db, "PROJ-1", "2026-01-01T00:02:00Z", Liveness::Active);
+        SessionRepo::end(&db, &a.session.id, "2026-01-01T00:03:00Z").unwrap(); // the operator closed it
+        assert!(convened(plan(&db, &cogs, true, 0, 3).unwrap()).is_empty(), "one admiral per verdict");
+    }
+
+    #[test]
+    fn the_admirals_lever_seats_the_oldest_verdicts_first() {
+        let db = db();
+        let cogs = [
+            judged(&db, "PROJ-1", Verdict::Confirm, "2026-01-01T00:03:00Z"),
+            judged(&db, "PROJ-2", Verdict::Confirm, "2026-01-01T00:01:00Z"),
+            judged(&db, "PROJ-3", Verdict::Confirm, "2026-01-01T00:02:00Z"),
+        ];
+        assert_eq!(convened(plan(&db, &cogs, true, 0, 2).unwrap()), ["PROJ-2", "PROJ-3"]);
+        assert_eq!(convened(plan(&db, &cogs, true, 0, -1).unwrap()).len(), 3, "-1: no cap");
+        assert!(convened(plan(&db, &cogs, true, 0, 0).unwrap()).is_empty(), "0: none");
+
+        let seated = admiral(&db, "PROJ-2", "2026-01-01T00:04:00Z", Liveness::Active);
+        let cogs = [&cogs[..], &[seated]].concat();
+        assert_eq!(convened(plan(&db, &cogs, true, 0, 2).unwrap()), ["PROJ-3"], "a seated admiral takes a seat");
+    }
+
+    #[test]
+    fn an_admiral_stands_down_once_its_escalation_no_longer_stands_confirmed() {
+        let stand_down = Action::StandDown { ticket: "PROJ-1".into(), kind: "admiral".into() };
+        let seated = |liveness| {
+            let db = db();
+            let w = judged(&db, "PROJ-1", Verdict::Confirm, "2026-01-01T00:01:00Z");
+            let a = admiral(&db, "PROJ-1", "2026-01-01T00:02:00Z", liveness);
+            (db, w, a)
+        };
+
+        let (db, w, a) = seated(Liveness::Active);
+        assert!(plan(&db, &[w.clone(), a.clone()], true, 0, 3).unwrap().is_empty(), "the escalation stands");
+        report(&db, &w, CogState::Worker(WorkerState::Implementing)); // the ruling unblocked it
+        assert_eq!(plan(&db, &[w, a], true, 0, 3).unwrap(), std::slice::from_ref(&stand_down));
+
+        let (db, w, a) = seated(Liveness::Dead);
+        assert_eq!(plan(&db, &[w, a], true, 0, 3).unwrap(), std::slice::from_ref(&stand_down), "it died");
+
+        let (db, w, a) = seated(Liveness::Active);
+        let r = Report {
+            session: w.session.id.clone(),
+            state: CogState::Worker(WorkerState::Escalated),
+            last_action: None,
+            reported_at: "2026-01-01T00:03:00Z".into(),
+        };
+        ReportRepo::record(&db, &r).unwrap();
+        let body = "anew".into();
+        let verdict = Inspection { session: w.session.id.clone(), reported_at: r.reported_at, verdict: Verdict::Confirm, body, inspected_at: "2026-01-01T00:04:00Z".into() };
+        InspectionRepo::inspect(&db, &verdict).unwrap();
+        assert_eq!(
+            plan(&db, &[w, a], true, 0, 3).unwrap(),
+            [stand_down, Action::LaunchAdmiral { ticket: "PROJ-1".into() }],
+            "escalated anew: a fresh admiral"
+        );
+    }
+
+    #[test]
+    fn launch_admiral_convenes_it_in_the_project_with_its_order_and_no_cog_env() {
+        let db = db();
+        ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
+        let host = FakeHost::new();
+        launch_admiral(&db, &host, "/project", "PROJ-1").unwrap();
+        let (name, cwd, cmd) = host.spawned.borrow()[0].clone();
+        assert_eq!((name.as_str(), cwd.as_str()), ("admiral-PROJ-1", "/project"));
+        assert!(cmd.contains("--agent admiral 'Rule on the confirmed escalation of PROJ-1.'"), "{cmd}");
+        assert!(!cmd.contains("FLEET_TICKET"), "an admiral isn't a cog: {cmd}");
+        let live = SessionRepo::live(&db).unwrap();
+        assert!(live.iter().any(|s| s.kind == CrewKind::Admiral && s.ticket == Some(TicketKey("PROJ-1".into()))));
     }
 
     #[test]
@@ -2978,7 +3197,7 @@ mod tests {
         let mut cog = captain_cog("PROJ-100");
         cog.liveness = Liveness::Dead; // finished its pass (or crashed) on a still-active convoy
         assert_eq!(
-            plan(&db, &[cog], true, 0).unwrap(),
+            plan(&db, &[cog], true, 0, 0).unwrap(),
             vec![Action::StandDownCaptain { convoy: "PROJ-100".into() }]
         );
     }

@@ -737,11 +737,11 @@ fn transcript(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Does this live session match the cog target's key? Ticket for worker/sailor/hand, convoy for a
-/// captain, nothing for the singleton lookout (kind already matched by the caller).
+/// Does this live session match the cog target's key? Ticket for worker/sailor/hand/admiral, convoy
+/// for a captain, nothing for the singleton lookout (kind already matched by the caller).
 fn matches_target(s: &domain::Session, t: &wire::CogTarget) -> bool {
     match s.kind {
-        CrewKind::Worker | CrewKind::Sailor | CrewKind::Hand => {
+        CrewKind::Worker | CrewKind::Sailor | CrewKind::Hand | CrewKind::Admiral => {
             s.ticket.as_ref().map(|k| &k.0) == t.ticket.as_ref()
         }
         CrewKind::Captain => s.convoy.as_ref().map(|k| &k.0) == t.convoy.as_ref(),
