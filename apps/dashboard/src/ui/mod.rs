@@ -129,7 +129,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
         ),
         Pane::Convoys => (
             format!(" Convoys · {} open · enter captain · t ticket ", f.convoys.len()),
-            Some(header(&[("Convoy", 12), ("Captain", 8), ("Launched", 9), ("Open", 6), ("Title", 0)])),
+            Some(header(&[("Convoy", 12), ("Captain", 8), ("Launched", 9), ("Open", 6), ("Ref/Conf", 9), ("Title", 0)])),
             f.convoys.iter().map(|c| convoy_row(c, f)).collect(),
         ),
         Pane::Proposals => (
@@ -357,6 +357,10 @@ fn convoy_row(c: &Convoy, f: &crate::source::Fleet) -> Line<'static> {
         (live.0, 8, live.2),
         (launched, 9, dim()),
         (format!("{open}/{}", members.len()), 6, Style::default()),
+        match f.verdicts.get(&c.key.0) {
+            Some((refuted, confirmed)) => (format!("{refuted}/{confirmed}"), 9, Style::default()),
+            None => ("—".into(), 9, dim()),
+        },
         (format!("{anchor}{}", c.title.as_deref().unwrap_or("")), 0, Style::default()),
     ])
 }

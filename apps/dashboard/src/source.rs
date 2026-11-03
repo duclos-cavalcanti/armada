@@ -130,6 +130,8 @@ pub struct Fleet {
     pub convoys: Vec<Convoy>,
     /// Each open convoy's latest captain launch (its key → when), if it ever had one.
     pub captain_launched: HashMap<String, String>,
+    /// Each convoy's inspection verdicts: `(refuted, confirmed)`.
+    pub verdicts: HashMap<String, (i64, i64)>,
     /// Work cogs found mid-ticket, waiting on the operator to accept or drop it.
     pub proposals: Vec<Proposal>,
     /// Tickets anchored in an open convoy and never dispatched — a captain judged them not Ready, and
@@ -294,6 +296,7 @@ impl Fleet {
             armada,
             convoys,
             captain_launched,
+            verdicts: db.verdicts()?.into_iter().map(|(c, r, k)| (c.0, (r, k))).collect(),
             held,
             // A ledger older than the proposals table has none — fleetd adds it on its next start.
             proposals: db.pending().unwrap_or_default(),

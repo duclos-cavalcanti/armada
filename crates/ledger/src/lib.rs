@@ -60,6 +60,19 @@ impl Ledger {
         self.latest_captain("created_at", convoy)
     }
 
+    /// Each convoy's inspection verdicts so far: `(convoy, refuted, confirmed)`.
+    pub fn verdicts(&self) -> Result<Vec<(ConvoyKey, i64, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT coalesce(m.convoy, t.convoy) AS convoy,
+                    sum(i.verdict = 'refute'), sum(i.verdict = 'confirm')
+             FROM inspections i JOIN sessions s ON s.id = i.session_id JOIN tickets t ON t.key = s.ticket
+             LEFT JOIN convoy_members m ON m.ticket = t.key
+             WHERE coalesce(m.convoy, t.convoy) IS NOT NULL GROUP BY 1",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((ConvoyKey(r.get(0)?), r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// When the convoy's latest captain finished (`None`: none has) — its rest is counted from here.
     pub fn last_captain_finish(&self, convoy: &ConvoyKey) -> Result<Option<String>> {
         self.latest_captain("ended_at", convoy)
