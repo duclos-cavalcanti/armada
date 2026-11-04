@@ -12,7 +12,7 @@
 # on stderr — the dashboard shows it, in red, in its footer.
 #
 # The keys are fixed, never "smart": enter switches to the row's tmux session (or fails),
-# m opens the MR, t opens the ticket, e switches to the ticket's admiral.
+# m opens the MR, t opens the ticket, e switches to the ticket's admiral, a convenes one to investigate.
 #
 # Row-field contract per coordinate (coord + key are stripped, so $1 is the first
 # field — these positions match the dashboard's `focused_action()`):
@@ -44,6 +44,16 @@ launch_tmux() {
 launch_admiral() {
     tmux has-session -t "=admiral-$1" 2>/dev/null || fail "no admiral on $1 (yet): fleetd convenes one on a confirmed escalation"
     tmux switch-client -t "=admiral-$1"
+}
+
+# Convene an admiral to investigate a ticket that has no escalation. It opens in a window of the
+# operator's own session, named after the ticket. fleetd only convenes `admiral-<KEY>` sessions,
+# so this window never blocks an escalation's admiral. If one already sits, the launch is refused.
+investigate() {
+    [ -n "$1" ] || fail "no ticket on this row"
+    ! tmux has-session -t "=admiral-$1" 2>/dev/null || fail "an admiral already sits on $1 (its escalation): e switches to it"
+    tmux select-window -t ":=$1" 2>/dev/null && return
+    tmux new-window -n "$1" -c "$(cd "${FLEET_PROJECT_DIR:?}" && pwd)" "claude --agent admiral 'Investigate $1.'"
 }
 
 launch_browser() { open "$1"; }
@@ -87,11 +97,13 @@ main() {
         fleet/impl/m) [ -n "${5:-}" ] || fail "${1:-} has no MR yet"; launch_mr "${5}" ;;
         fleet/impl/v) popup inspection "${1:-}" ;;
         fleet/impl/e) launch_admiral "${1:-}" ;;
+        fleet/impl/a) investigate "${1:-}" ;;
         fleet/merge/enter) launch_tmux "${4:-}" "${1:-} has no sailor" ;;
         fleet/merge/t) launch_ticket "${1:-}" ;;
         fleet/merge/m) launch_browser "${3:-}" ;;
         fleet/merge/v) popup inspection "${1:-}" ;;
         fleet/merge/e) launch_admiral "${1:-}" ;;
+        fleet/merge/a) investigate "${1:-}" ;;
         fleet/reviews/enter) launch_tmux "${3:-}" "no lookout on !${1:-}" ;;
         fleet/reviews/m) launch_browser "${2:-}" ;;
 

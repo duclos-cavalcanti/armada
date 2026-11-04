@@ -174,7 +174,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let status = if app.fleet.fleetd_up { status } else { format!("fleetd down (see Log) · {status}") };
     let error = app.error.as_ref().filter(|(_, at)| at.elapsed().as_secs() < 5).map(|(msg, _)| format!(" ✗ {msg} "));
     let body = format!(
-        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-6 pane · j/k row · h/l swap · y/Y yank · enter tmux · m MR · t ticket · v verdict · e admiral",
+        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-6 pane · j/k row · h/l swap · y/Y yank · enter tmux · m MR · t ticket · v verdict · e admiral · a investigate",
         flash, zoom, status,
     );
     let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);

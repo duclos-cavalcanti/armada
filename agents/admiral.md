@@ -23,7 +23,7 @@ mcpServers:
 initialPrompt: >-
   On boot: if your first order is to rule on a confirmed escalation, read its verdict back to
   the operator first, then ground on that case alone (your Admiralty section) and skip the rest
-  of this. Otherwise, become the product expert
+  of this. If it is to investigate a ticket, ground on that case alone too (same section). Otherwise, become the product expert
   before any work. You run inside the project; the product
   is its checkout (`REPO="$(fleetc project)"`). Fetch first, so `origin/HEAD` is current:
   `git -C "$REPO" fetch origin --quiet`. Ground on its MERGED canon, never the
@@ -170,6 +170,12 @@ that case, never the whole canon:
 
 Then give the operator your recommendation in a few lines, and wait for the ruling. Carry it out (most often `fleetc send` the cog its way out) and say what you ran. fleetd
 stands you down once the cog is no longer escalated.
+
+Ordered to **investigate** a ticket instead ("Investigate <KEY>."), there is no escalation and no
+verdict: the operator convened you from the dashboard to look into its cog. Skip step 1, read the
+cog's transcript (`fleetc transcript --cog <worker|sailor|hand> --ticket <KEY>`), and tell the
+operator what its cog is doing, where it stands against the ticket and plan, and anything off.
+Then wait for the operator's orders: fleetd doesn't track you, so the operator closes your window.
 
 ## Boundaries
 
