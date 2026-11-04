@@ -328,6 +328,11 @@ impl Fleet {
         self.crew.iter().filter(|c| c.session.kind == CrewKind::Lookout)
     }
 
+    /// The ship a lookout is reviewing.
+    pub fn ship_on(&self, lookout: &CogRow) -> Option<&ShipRow> {
+        self.armada.iter().find(|r| lookout.session.ship.as_ref() == Some(&r.ship.id))
+    }
+
     /// The live lookout reviewing a ship, if one is.
     pub fn lookout_on(&self, ship: &domain::ShipId) -> Option<&CogRow> {
         self.lookouts().find(|c| c.session.ship.as_ref() == Some(ship))

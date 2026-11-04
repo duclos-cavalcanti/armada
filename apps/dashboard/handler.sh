@@ -19,10 +19,11 @@
 #   fleet/dispatched   $1=ticket  $2=crew(worker|hand)
 #   fleet/impl         $1=ticket  $2=kind  $3=tmux_session  $4=state  $5=mr_iid
 #   fleet/merge        $1=ticket  $2=mr_iid  $3=url  $4=sailor_tmux  $5=sailor_state
+#   fleet/reviews      $1=mr_iid  $2=url  $3=lookout_tmux
 #   ships/list         $1=iid  $2=ticket  $3=pilot  $4=url  $5=lookout_tmux
 #   board/tickets      $1=key  $2=status  $3=convoy
-#   convoys            $1=key  $2=title  $3=captain_tmux     (Fleet + Board)
-#   proposals          $1=kind(proposal|anchored)  $2=ref(proposal id | ticket key)   (Fleet + Board)
+#   fleet/convoys      $1=key  $2=title  $3=captain_tmux
+#   fleet/proposals    $1=kind(proposal|anchored)  $2=ref(proposal id | ticket key)
 #
 # Forge- and tracker-neutral: links come from the fleet itself (`fleetc -C "$FLEET_PROJECT_DIR"`,
 # the project folder the dashboard passes in), never from hardcoded hosts.
@@ -67,17 +68,17 @@ main() {
     shift 2   # remaining positionals ($1..) are the focused row's fields
 
     case "$coord/$key" in
-        # ---- Convoys (Fleet + Board) -------------------------------------
-        convoys/enter) launch_tmux "${3:-}" "convoy ${1:-} has no captain" ;;
-        convoys/t) launch_ticket "${1:-}" ;;
+        # ---- Fleet · convoys ----------------------------------------------
+        fleet/convoys/enter) launch_tmux "${3:-}" "convoy ${1:-} has no captain" ;;
+        fleet/convoys/t) launch_ticket "${1:-}" ;;
 
-        # ---- Proposals (Fleet + Board): proposals + anchored convoy tickets ----
+        # ---- Fleet · proposals: proposals + anchored convoy tickets --------
         # enter reads a proposal; a/d settle it; t opens an anchored ticket, w weighs it.
-        proposals/enter) [ "${1:-}" = proposal ] || fail "an anchored ticket: t opens it, w weighs it"; popup proposal "${2:-}" ;;
-        proposals/t) [ "${1:-}" = anchored ] || fail "a proposal isn't a ticket yet: enter reads it"; launch_ticket "${2:-}" ;;
-        proposals/a) [ "${1:-}" = proposal ] || fail "only a proposal is accepted"; settle_proposal accept "${2:-}" ;;
-        proposals/d) [ "${1:-}" = proposal ] || fail "only a proposal is dropped"; settle_proposal drop "${2:-}" ;;
-        proposals/w) [ "${1:-}" = anchored ] || fail "only an anchored ticket is weighed"; confirm_fleet "weigh ${2:-}?" weigh "${2:-}" ;;
+        fleet/proposals/enter) [ "${1:-}" = proposal ] || fail "an anchored ticket: t opens it, w weighs it"; popup proposal "${2:-}" ;;
+        fleet/proposals/t) [ "${1:-}" = anchored ] || fail "a proposal isn't a ticket yet: enter reads it"; launch_ticket "${2:-}" ;;
+        fleet/proposals/a) [ "${1:-}" = proposal ] || fail "only a proposal is accepted"; settle_proposal accept "${2:-}" ;;
+        fleet/proposals/d) [ "${1:-}" = proposal ] || fail "only a proposal is dropped"; settle_proposal drop "${2:-}" ;;
+        fleet/proposals/w) [ "${1:-}" = anchored ] || fail "only an anchored ticket is weighed"; confirm_fleet "weigh ${2:-}?" weigh "${2:-}" ;;
 
         # ---- Fleet · dispatched / impl / merge (the line, by phase) --------
         fleet/dispatched/t) launch_ticket "${1:-}" ;;
@@ -91,6 +92,8 @@ main() {
         fleet/merge/m) launch_browser "${3:-}" ;;
         fleet/merge/v) popup inspection "${1:-}" ;;
         fleet/merge/e) launch_admiral "${1:-}" ;;
+        fleet/reviews/enter) launch_tmux "${3:-}" "no lookout on !${1:-}" ;;
+        fleet/reviews/m) launch_browser "${2:-}" ;;
 
         # ---- Ships --------------------------------------------------------
         # m opens the MR — by its url ($4) if present, else by iid ($1); l attaches its lookout.

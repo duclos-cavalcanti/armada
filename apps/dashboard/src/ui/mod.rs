@@ -121,6 +121,11 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             ])),
             f.landing.iter().map(|r| landing_row(r, r.sailor.as_ref().is_some_and(|s| f.is_up(s)))).collect(),
         ),
+        Pane::Reviews => (
+            format!(" Reviews · {} on watch ", f.lookouts().count()),
+            Some(header(&[("MR", 7), ("Pilot", 14), ("Lookout", 10), ("Live", 7), ("Age", 6), ("Title", 0)])),
+            f.lookouts().map(|c| review_row(c, f.is_up(c), f.ship_on(c))).collect(),
+        ),
         Pane::Ships => (ships_title(app), None, ship_rows(app)),
         Pane::Tickets => (
             format!(" board · {} tickets ", f.board.len()),
@@ -169,7 +174,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let status = if app.fleet.fleetd_up { status } else { format!("fleetd down (see Log) · {status}") };
     let error = app.error.as_ref().filter(|(_, at)| at.elapsed().as_secs() < 5).map(|(msg, _)| format!(" ✗ {msg} "));
     let body = format!(
-        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-5 pane · j/k row · h/l swap · y/Y yank · enter tmux · m MR · t ticket · v verdict · e admiral",
+        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-6 pane · j/k row · h/l swap · y/Y yank · enter tmux · m MR · t ticket · v verdict · e admiral",
         flash, zoom, status,
     );
     let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
@@ -269,6 +274,21 @@ fn landing_row(r: &LandingRow, up: bool) -> Line<'static> {
         (blocked, 14, blocked_style),
         (fmt_age(age), 6, dim()),
         (merge_status, 0, Style::default()),
+    ])
+}
+
+/// A lookout on watch over an ally's MR: the MR, its author, the lookout's last report (`·` none
+/// yet), and the MR's title.
+fn review_row(c: &CogRow, up: bool, ship: Option<&ShipRow>) -> Line<'static> {
+    let state = c.state.clone().unwrap_or_else(|| "·".into());
+    let title = ship.and_then(|r| r.snapshot.as_ref()).map(|s| s.title.clone()).unwrap_or_else(|| "—".into());
+    cells(vec![
+        (ship.map_or_else(|| "—".into(), |r| format!("!{}", r.ship.iid)), 7, Style::default()),
+        (ship.map_or_else(|| "—".into(), |r| r.ship.pilot.clone()), 14, Style::default()),
+        (state.clone(), 10, state_style(&state)),
+        live_cell(c.liveness.as_deref(), up),
+        (fmt_age(c.age_secs), 6, dim()),
+        (title, 0, Style::default()),
     ])
 }
 

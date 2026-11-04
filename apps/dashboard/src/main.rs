@@ -28,7 +28,7 @@ struct Cli {
 }
 
 /// Top-level tabs, cycled by `Tab` / `S-Tab`. Fleet (the line, top-down by phase),
-/// Ships (every open MR, ours + allies), Board (tickets + convoys), Log (fleetd's log).
+/// Ships (every open MR, ours + allies), Board (the tickets), Log (fleetd's log).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TabId {
     Fleet,
@@ -53,14 +53,13 @@ impl TabId {
         let all = Self::all();
         all[(self as isize + delta).rem_euclid(all.len() as isize) as usize]
     }
-    /// The tab's panes, top to bottom — `1`..`5` focus them, `↑`/`↓` cycle them. The Fleet tab
+    /// The tab's panes, top to bottom — `1`..`6` focus them, `↑`/`↓` cycle them. The Fleet tab
     /// opens on the open convoys, then what waits on the operator before it can enter the line.
-    /// A pane may show on several tabs (Convoys, Proposals): one pane, one cursor, one coordinate.
     pub fn panes(self) -> &'static [Pane] {
         match self {
-            TabId::Fleet => &[Pane::Convoys, Pane::Proposals, Pane::Dispatched, Pane::Impl, Pane::Merge],
+            TabId::Fleet => &[Pane::Convoys, Pane::Proposals, Pane::Dispatched, Pane::Impl, Pane::Merge, Pane::Reviews],
             TabId::Ships => &[Pane::Ships],
-            TabId::Board => &[Pane::Tickets, Pane::Convoys, Pane::Proposals],
+            TabId::Board => &[Pane::Tickets],
             TabId::Log => &[Pane::Log],
         }
     }
@@ -68,13 +67,14 @@ impl TabId {
 
 /// Every pane on every tab. Fleet reads the line top-down: the open convoys → what waits on the
 /// operator (proposals, anchored convoy tickets) → dispatched orders → builders at work (impl phase)
-/// → ships being landed (merge phase).
+/// → ships being landed (merge phase) → allies' MRs under a lookout's review.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Pane {
     Dispatched,
     Impl,
     Hands,
     Merge,
+    Reviews,
     Ships,
     Tickets,
     Convoys,
@@ -83,18 +83,18 @@ pub enum Pane {
 }
 
 impl Pane {
-    const COUNT: usize = 9;
-    /// The coordinate the action handler keys on: `tab/pane`, or the bare pane name for a pane
-    /// shown on several tabs.
+    const COUNT: usize = 10;
+    /// The coordinate the action handler keys on: `tab/pane`.
     fn coordinate(self) -> &'static str {
         match self {
             Pane::Dispatched => "fleet/dispatched",
             Pane::Impl | Pane::Hands => "fleet/impl", // one row shape: a builder
             Pane::Merge => "fleet/merge",
+            Pane::Reviews => "fleet/reviews",
             Pane::Ships => "ships/list",
             Pane::Tickets => "board/tickets",
-            Pane::Convoys => "convoys",
-            Pane::Proposals => "proposals",
+            Pane::Convoys => "fleet/convoys",
+            Pane::Proposals => "fleet/proposals",
             Pane::Log => "log/fleetd",
         }
     }
@@ -183,6 +183,7 @@ impl App {
             Pane::Impl => f.workers.len(),
             Pane::Hands => f.hands.len(),
             Pane::Merge => f.landing.len(),
+            Pane::Reviews => f.lookouts().count(),
             Pane::Ships => f.armada.len(),
             Pane::Tickets => f.board.len(),
             Pane::Convoys => f.convoys.len(),
@@ -199,10 +200,11 @@ impl App {
     ///   fleet/dispatched   ticket  crew(worker|hand)
     ///   fleet/impl         ticket  kind  tmux_session  state  mr_iid
     ///   fleet/merge        ticket  mr_iid  url  sailor_tmux  sailor_state
+    ///   fleet/reviews      mr_iid  url  lookout_tmux
     ///   ships/list         iid  ticket  pilot  url  lookout_tmux
     ///   board/tickets      key  status  convoy
-    ///   convoys            key  title  captain_tmux
-    ///   proposals          kind(proposal|anchored)  ref(proposal id | ticket key)
+    ///   fleet/convoys      key  title  captain_tmux
+    ///   fleet/proposals    kind(proposal|anchored)  ref(proposal id | ticket key)
     fn focused_action(&self) -> Option<(String, Vec<String>)> {
         let pane = self.pane();
         let i = self.cursor(pane);
@@ -231,6 +233,14 @@ impl App {
                     r.ship.url.clone(),
                     tmux.unwrap_or_default(),
                     r.sailor.as_ref().and_then(|s| s.state.clone()).unwrap_or_default(),
+                ]
+            }),
+            Pane::Reviews => f.lookouts().nth(i).map(|c| {
+                let ship = f.ship_on(c);
+                vec![
+                    ship.map(|r| r.ship.iid.to_string()).unwrap_or_default(),
+                    ship.map(|r| r.ship.url.clone()).unwrap_or_default(),
+                    c.session.tmux_session.clone(),
                 ]
             }),
             Pane::Ships => f.armada.get(i).map(|r| {
@@ -332,7 +342,7 @@ impl App {
                 self.step_pane(1);
                 return;
             }
-            KeyCode::Char(c @ '1'..='5') => {
+            KeyCode::Char(c @ '1'..='6') => {
                 self.focus_nth_pane(c as usize - '1' as usize);
                 return;
             }
