@@ -54,6 +54,19 @@ impl Ledger {
             .optional()?)
     }
 
+    /// The convoy's plan history, oldest first: each `ConvoyPlanned` (`payload.plan`: the plan as
+    /// set; `null`: cleared). The read behind `fleetc convoy plan`.
+    pub fn plan_history(&self, convoy: &ConvoyKey) -> Result<Vec<Event>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT * FROM events WHERE kind = ?1 AND entity_kind = ?2 AND entity_ref = ?3 ORDER BY seq",
+        )?;
+        let rows = stmt.query_map(
+            params![EventKind::ConvoyPlanned.as_str(), EntityKind::Convoy.as_str(), convoy.0],
+            row_to_event,
+        )?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// When the convoy's latest captain was launched (`None`: never). A captain runs cold, one pass
     /// per launch, so this is how recently its convoy was looked at.
     pub fn last_captain_launch(&self, convoy: &ConvoyKey) -> Result<Option<String>> {
@@ -184,6 +197,9 @@ const MIGRATIONS: &[&str] = &[
     DROP INDEX IF EXISTS one_live_lookout;",
     // v7: a ship's review rounds (sailor sweeps), so its sailor escalates at 10.
     "ALTER TABLE ships ADD COLUMN rounds INTEGER NOT NULL DEFAULT 0;",
+    // v8: a convoy's plan keeps its history (ConvoyPlanned events); each standing plan seeds it.
+    "INSERT INTO events(created_at, kind, entity_kind, entity_ref, payload_json)
+        SELECT updated_at, 'convoy_planned', 'convoy', convoy, json_object('plan', body) FROM convoy_plans ORDER BY updated_at;",
 ];
 
 /// The ledger's schema version (SQLite `user_version`): one past its last migration.
@@ -653,6 +669,29 @@ mod tests {
     }
 
     #[test]
+    fn a_v7_ledger_seeds_each_standing_plan_as_its_history() {
+        let dir = std::env::temp_dir().join(format!("ledger-migrate-v8-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ledger.db").to_string_lossy().into_owned();
+        drop(Ledger::open(&path).unwrap());
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "INSERT INTO convoys(key, created_at) VALUES ('PROJ-100', 't1');
+             INSERT INTO convoy_plans(convoy, body, updated_at) VALUES ('PROJ-100', 'ship the seed', 't2');
+             PRAGMA user_version = 7;",
+        )
+        .unwrap();
+        drop(conn);
+
+        let db = Ledger::open(&path).unwrap();
+        let history = db.plan_history(&ConvoyKey("PROJ-100".into())).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!((history[0].created_at.as_str(), &history[0].payload["plan"]), ("t2", &serde_json::json!("ship the seed")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_v4_ledger_rebuilds_sessions_to_take_an_admiral_and_keeps_its_rows() {
         let dir = std::env::temp_dir().join(format!("ledger-migrate-v5-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -946,6 +985,28 @@ mod tests {
         assert!(db.set_plan(&k, Some("  \n"), "t4").is_err(), "a blank plan is refused");
         db.set_plan(&k, None, "t5").unwrap();
         assert_eq!(db.plan(&k).unwrap(), None);
+    }
+
+    #[test]
+    fn a_convoy_plan_keeps_its_history_and_an_unchanged_one_logs_nothing() {
+        let db = Ledger::in_memory().unwrap();
+        let k = ConvoyKey("PROJ-100".into());
+        db.open(&k, None, "t1").unwrap();
+        db.set_plan(&k, Some("ship the seed"), "t2").unwrap();
+        db.set_plan(&k, Some("ship the seed"), "t3").unwrap(); // a re-open with the same plan
+        db.set_plan(&k, Some("ship the seed, then the quorums"), "t4").unwrap();
+        db.set_plan(&k, None, "t5").unwrap();
+        db.set_plan(&k, None, "t6").unwrap();
+        let _ = db.set_plan(&k, Some(" "), "t7"); // refused: no event either
+        let history: Vec<_> = db.plan_history(&k).unwrap().into_iter().map(|e| (e.created_at, e.payload["plan"].clone())).collect();
+        assert_eq!(
+            history,
+            [
+                ("t2".to_string(), serde_json::json!("ship the seed")),
+                ("t4".to_string(), serde_json::json!("ship the seed, then the quorums")),
+                ("t5".to_string(), serde_json::Value::Null),
+            ]
+        );
     }
 
     #[test]
@@ -1432,14 +1493,30 @@ impl ConvoyRepo for Ledger {
     }
 
     fn set_plan(&self, key: &ConvoyKey, plan: Option<&str>, at: &str) -> Result<()> {
+        // Write the plan + ConvoyPlanned (CDC, same txn) — the plan's history. Unchanged logs nothing.
+        if self.plan(key)?.as_deref() == plan {
+            return Ok(());
+        }
+        let tx = self.conn.unchecked_transaction()?;
         match plan {
-            Some(body) => self.conn.execute(
+            Some(body) => tx.execute(
                 "INSERT INTO convoy_plans(convoy, body, updated_at) VALUES (?1, ?2, ?3)
                  ON CONFLICT(convoy) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at",
                 params![key.0, body, at],
             )?,
-            None => self.conn.execute("DELETE FROM convoy_plans WHERE convoy = ?1", params![key.0])?,
+            None => tx.execute("DELETE FROM convoy_plans WHERE convoy = ?1", params![key.0])?,
         };
+        tx.execute(
+            "INSERT INTO events(created_at, kind, entity_kind, entity_ref, payload_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                at,
+                EventKind::ConvoyPlanned.as_str(),
+                EntityKind::Convoy.as_str(),
+                key.0,
+                serde_json::json!({ "plan": plan }).to_string()
+            ],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 

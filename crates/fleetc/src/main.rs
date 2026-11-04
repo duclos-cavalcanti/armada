@@ -33,6 +33,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
      fleetc convoy   open <KEY> [--title <text>] [--plan <file|->] | close [<KEY>]   (the plan ties its tickets together; omitted: none)\n  \
      fleetc convoy   add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N>   (a ticket joins the convoy — its only one, for a hand with --hand — or an added one leaves)\n  \
+     fleetc convoy   plan [<KEY>]   (the plan's history: as first set, then each change as a diff)\n  \
      fleetc anchor   <KEY-N> [--reason <why>]   (hold everything on it: off the frontier, its cogs stopped, its MR disarmed + drafted)\n  \
      fleetc anchor   --cog <captain|lookout> [--convoy <KEY>]   (stop a ticketless cog; lookout: every one)\n  \
      fleetc weigh    <KEY-N> | --cog <captain|lookout> [--convoy <KEY>]   (release what anchor held)\n  \
@@ -258,8 +259,44 @@ fn convoy(args: &[String]) -> Result<()> {
             let cmd = wire::ConvoyMemberCmd { convoy: convoy_key(convoy, &what)?, ticket: ticket_key(ticket, &what)?, hand };
             post_and_print(&format!("/convoy-{verb}"), &cmd)
         }
-        _ => bail!("usage: fleetc convoy open <KEY> [--title <text>] [--plan <file|->] | close [<KEY>] | add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N>"),
+        Some("plan") => {
+            let key = args.get(1).cloned().or_else(|| own("FLEET_CONVOY")).ok_or_else(|| anyhow!("convoy plan needs <KEY>"))?;
+            convoy_plan(&convoy_key(&key, "convoy plan")?)
+        }
+        _ => bail!("usage: fleetc convoy open <KEY> [--title <text>] [--plan <file|->] | close [<KEY>] | add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N> | plan [<KEY>]"),
     }
+}
+
+/// `fleetc convoy plan <KEY>` — how the convoy's plan diverged: as first set, then each change as a
+/// unified diff against the one before. Reads the ledger read-only (like `plan`).
+fn convoy_plan(key: &str) -> Result<()> {
+    let ledger = ledger::Ledger::open_readonly(&project_dir().ledger())?;
+    let history = ledger.plan_history(&domain::ConvoyKey(key.to_string()))?;
+    let versions: Vec<_> = history.iter().map(|e| (e.created_at.as_str(), e.payload["plan"].as_str())).collect();
+    print!("{}", render_plan_history(key, &versions));
+    Ok(())
+}
+
+/// Render a plan's versions (`None`: cleared), oldest first: the first whole, each later one a diff.
+fn render_plan_history(key: &str, versions: &[(&str, Option<&str>)]) -> String {
+    if versions.is_empty() {
+        return format!("{key}: no plan set\n");
+    }
+    let mut out = String::new();
+    let mut prev = "";
+    for (i, (at, plan)) in versions.iter().enumerate() {
+        let body = plan.unwrap_or_default();
+        match (i, plan) {
+            (_, None) => out.push_str(&format!("── {at}  cleared\n")),
+            (0, _) => out.push_str(&format!("── {at}  set\n{body}\n")),
+            _ => out.push_str(&format!(
+                "── {at}  changed\n{}",
+                similar::TextDiff::from_lines(prev, body).unified_diff().context_radius(2)
+            )),
+        }
+        prev = body;
+    }
+    out
 }
 
 /// A convoy plan's text: the file at `path`, or stdin for `-`. An empty plan is a mistake, not "none".
@@ -1416,7 +1453,7 @@ mod tests {
         let ci = verb_usage("ci").unwrap();
         assert!(ci.starts_with("usage: fleetc") && ci.contains("fleetc ci       [--iid <N>]"), "{ci}");
         assert_eq!(ci.lines().count(), 2, "the header + its one form");
-        assert_eq!(verb_usage("convoy").unwrap().lines().count(), 3, "both convoy forms");
+        assert_eq!(verb_usage("convoy").unwrap().lines().count(), 4, "the header + its three lines");
         assert!(!verb_usage("ticket").unwrap().contains("fleetc propose"), "only that verb");
         assert_eq!(verb_usage("nope"), None);
     }
@@ -1601,6 +1638,18 @@ mod tests {
         let t = |args: &[&str]| ticketless_target(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "anchor");
         assert!(t(&["--cog", "lookout"]).is_ok());
         assert!(t(&["--cog", "worker", "--ticket", "PROJ-1"]).unwrap_err().to_string().contains("fleetc anchor <KEY-N>"));
+    }
+
+    #[test]
+    fn render_plan_history_shows_the_first_plan_whole_then_each_change_as_a_diff() {
+        let out = render_plan_history(
+            "PROJ-100",
+            &[("t1", Some("seed\nquorums\n")), ("t2", Some("seed\nquorums\nrollout\n")), ("t3", None)],
+        );
+        assert!(out.starts_with("── t1  set\nseed\nquorums\n"), "{out}");
+        assert!(out.contains("── t2  changed\n") && out.contains("+rollout\n") && !out.contains("-seed"), "{out}");
+        assert!(out.ends_with("── t3  cleared\n"), "{out}");
+        assert_eq!(render_plan_history("PROJ-100", &[]), "PROJ-100: no plan set\n");
     }
 
     #[test]
