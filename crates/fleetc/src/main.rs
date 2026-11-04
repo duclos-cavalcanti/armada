@@ -33,7 +33,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
      fleetc convoy   open <KEY> [--title <text>] [--plan <file|->] | close [<KEY>]   (the plan ties its tickets together; omitted: none)\n  \
      fleetc convoy   add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N>   (a ticket joins the convoy — its only one, for a hand with --hand — or an added one leaves)\n  \
-     fleetc convoy   plan [<KEY>]   (the plan's history: as first set, then each change as a diff)\n  \
+     fleetc convoy   list | plan [<KEY>] [--history]   (the active convoys + their open tickets | a convoy's plan; --history: each change as a diff)\n  \
      fleetc anchor   <KEY-N> [--reason <why>]   (hold everything on it: off the frontier, its cogs stopped, its MR disarmed + drafted)\n  \
      fleetc anchor   --cog <captain|lookout> [--convoy <KEY>]   (stop a ticketless cog; lookout: every one)\n  \
      fleetc weigh    <KEY-N> | --cog <captain|lookout> [--convoy <KEY>]   (release what anchor held)\n  \
@@ -259,20 +259,70 @@ fn convoy(args: &[String]) -> Result<()> {
             let cmd = wire::ConvoyMemberCmd { convoy: convoy_key(convoy, &what)?, ticket: ticket_key(ticket, &what)?, hand };
             post_and_print(&format!("/convoy-{verb}"), &cmd)
         }
+        Some("list") => convoy_list(),
         Some("plan") => {
-            let key = args.get(1).cloned().or_else(|| own("FLEET_CONVOY")).ok_or_else(|| anyhow!("convoy plan needs <KEY>"))?;
-            convoy_plan(&convoy_key(&key, "convoy plan")?)
+            let history = args.iter().any(|a| a == "--history");
+            let key = args[1..].iter().find(|a| *a != "--history").cloned().or_else(|| own("FLEET_CONVOY"));
+            convoy_plan(&convoy_key(&key.ok_or_else(|| anyhow!("convoy plan needs <KEY>"))?, "convoy plan")?, history)
         }
-        _ => bail!("usage: fleetc convoy open <KEY> [--title <text>] [--plan <file|->] | close [<KEY>] | add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N> | plan [<KEY>]"),
+        _ => bail!("usage: fleetc convoy open <KEY> [--title <text>] [--plan <file|->] | close [<KEY>] | add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N> | list | plan [<KEY>] [--history]"),
     }
 }
 
-/// `fleetc convoy plan <KEY>` — how the convoy's plan diverged: as first set, then each change as a
-/// unified diff against the one before. Reads the ledger read-only (like `plan`).
-fn convoy_plan(key: &str) -> Result<()> {
+/// `fleetc convoy list` — the active convoys, each with its open tickets (status, open MR's branch,
+/// title): what the fleet is building now. Reads the ledger read-only (like `plan`).
+fn convoy_list() -> Result<()> {
+    use domain::ports::{ConvoyRepo, ShipRepo, TicketRepo};
     let ledger = ledger::Ledger::open_readonly(&project_dir().ledger())?;
-    let history = ledger.plan_history(&domain::ConvoyKey(key.to_string()))?;
-    let versions: Vec<_> = history.iter().map(|e| (e.created_at.as_str(), e.payload["plan"].as_str())).collect();
+    let (board, armada) = (TicketRepo::board(&ledger)?, ShipRepo::armada(&ledger)?);
+    let convoys: Vec<ConvoyRow> = ConvoyRepo::active(&ledger)?
+        .into_iter()
+        .map(|c| {
+            let open = board.iter().filter(|t| t.convoy.as_ref() == Some(&c.key) && !matches!(t.status, Some(domain::TicketStatus::Done | domain::TicketStatus::Cancelled)));
+            let tickets = open
+                .map(|t| {
+                    let branch = armada.iter().find(|s| s.ticket.as_ref() == Some(&t.key) && s.ended_at.is_none()).map(|s| s.source.clone());
+                    (t.key.0.clone(), t.status.map_or("-", |s| s.as_str()).to_string(), branch, t.title.clone().unwrap_or_default())
+                })
+                .collect();
+            (c.key.0, c.title.unwrap_or_default(), tickets)
+        })
+        .collect();
+    print!("{}", render_convoy_list(&convoys));
+    Ok(())
+}
+
+/// A convoy for `convoy list`: key, title, open tickets (key, status, branch, title).
+type ConvoyRow = (String, String, Vec<(String, String, Option<String>, String)>);
+
+fn render_convoy_list(convoys: &[ConvoyRow]) -> String {
+    if convoys.is_empty() {
+        return "no active convoys\n".into();
+    }
+    let mut out = String::new();
+    for (key, title, tickets) in convoys {
+        out += &format!("{key}  {title}\n");
+        for (t, status, branch, title) in tickets {
+            out += &format!("  {t:<12} {status:<12} {:<40} {title}\n", branch.as_deref().unwrap_or("-"));
+        }
+    }
+    out
+}
+
+/// `fleetc convoy plan <KEY> [--history]` — the convoy's plan; `--history`: how it diverged, as
+/// first set, then each change as a unified diff against the one before. Reads the ledger read-only.
+fn convoy_plan(key: &str, history: bool) -> Result<()> {
+    let ledger = ledger::Ledger::open_readonly(&project_dir().ledger())?;
+    let convoy = domain::ConvoyKey(key.to_string());
+    if !history {
+        match domain::ports::ConvoyRepo::plan(&ledger, &convoy)? {
+            Some(plan) => println!("{plan}"),
+            None => println!("{key}: no plan set"),
+        }
+        return Ok(());
+    }
+    let events = ledger.plan_history(&convoy)?;
+    let versions: Vec<_> = events.iter().map(|e| (e.created_at.as_str(), e.payload["plan"].as_str())).collect();
     print!("{}", render_plan_history(key, &versions));
     Ok(())
 }
@@ -1638,6 +1688,23 @@ mod tests {
         let t = |args: &[&str]| ticketless_target(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "anchor");
         assert!(t(&["--cog", "lookout"]).is_ok());
         assert!(t(&["--cog", "worker", "--ticket", "PROJ-1"]).unwrap_err().to_string().contains("fleetc anchor <KEY-N>"));
+    }
+
+    #[test]
+    fn render_convoy_list_shows_each_convoy_then_its_open_tickets() {
+        let convoys = [(
+            "PROJ-100".to_string(),
+            "Seed".to_string(),
+            vec![
+                ("PROJ-1".to_string(), "in_qa".to_string(), Some("feature/PROJ-1-seed".to_string()), "Seed the quorum".to_string()),
+                ("PROJ-2".to_string(), "todo".to_string(), None, "Roll it out".to_string()),
+            ],
+        )];
+        let out = render_convoy_list(&convoys);
+        assert!(out.starts_with("PROJ-100  Seed\n  PROJ-1 "), "{out}");
+        assert!(out.contains("feature/PROJ-1-seed") && out.contains("Seed the quorum\n"), "{out}");
+        assert!(out.lines().nth(2).is_some_and(|l| l.contains("PROJ-2") && l.contains(" - ")), "{out}");
+        assert_eq!(render_convoy_list(&[]), "no active convoys\n");
     }
 
     #[test]
