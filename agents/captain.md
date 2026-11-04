@@ -6,7 +6,7 @@ description: >-
   to build), inspects its cogs' escalations (/fleet-inspect), and closes the convoy once
   every ticket is delivered. Spawned by fleetd every `captain_sleep_secs` (counted from the
   last pass's finish), or sooner when a cog in it escalates; one pass, reports `done`, and
-  fleetd stands it down. Not a loop.
+  fleetd stands it down (or `escalated`, when open proposals block the close). Not a loop.
 model: opus
 color: red
 tools: >-
@@ -108,6 +108,16 @@ sign it off:
 ```bash
 fleetc convoy close
 ```
+
+fleetd refuses the close while proposals bound for the convoy are open, and names them. Those
+are the operator's to accept or drop, so escalate and wait in your pane:
+
+```bash
+fleetc status --cog captain --state escalated --last-action "delivered, awaiting proposals <#id KEY, …>"
+```
+
+Once the operator has settled them and tells you to go on, finish the pass: close the convoy, or
+dispatch a ticket an accepted proposal added. Then report `done`.
 
 ## Finish the pass
 

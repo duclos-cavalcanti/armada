@@ -217,7 +217,7 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let _ = reply.send(res);
         }
         Command::CloseConvoy { key, reply } => {
-            let res = ledger.close(&key, &now_rfc3339()).map_err(|e| e.to_string());
+            let res = close_convoy(ledger, &key).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
         Command::Anchor { target, reply } => {
@@ -363,6 +363,21 @@ fn propose(ledger: &Ledger, tracker: &dyn Tracker, from: Option<TicketKey>, prop
     let proposed = Proposed::Existing { ticket: ticket.clone(), why, convoy: convoy.or(from_convoy) };
     let p = Proposal { id: ProposalId(0), from_ticket: from, proposed, created_at: now_rfc3339(), ended_at: None, accepted_as: None };
     Ok((ledger.propose(&p)?, ticket))
+}
+
+/// Close a convoy, unless an open proposal is still bound for it: accepting one would add a ticket to
+/// a convoy already signed off. The operator settles them first.
+fn close_convoy(ledger: &Ledger, key: &ConvoyKey) -> Result<()> {
+    let open: Vec<String> = ProposalRepo::pending(ledger)?
+        .into_iter()
+        .filter(|p| p.proposed.convoy() == Some(key))
+        .map(|p| match &p.proposed {
+            Proposed::Existing { ticket, .. } => format!("#{} {}", p.id.0, ticket.0),
+            Proposed::New(_) => format!("#{}", p.id.0),
+        })
+        .collect();
+    anyhow::ensure!(open.is_empty(), "{} has open proposals: {}; accept or drop them first", key.0, open.join(", "));
+    ledger.close(key, &now_rfc3339())
 }
 
 /// The ticket was filed for a proposal and not yet accepted.
@@ -1190,6 +1205,27 @@ mod tests {
         assert!(db.pending().unwrap().is_empty());
         assert_eq!(ProposalRepo::get(&db, &id).unwrap().unwrap().accepted_as, Some(key));
         assert!(accept_proposal(&db, &tracker, &id, None).is_err(), "an accepted proposal can't be accepted again");
+    }
+
+    #[test]
+    fn a_convoy_with_an_open_proposal_bound_for_it_wont_close() {
+        let db = Ledger::in_memory().unwrap();
+        let c9 = ConvoyKey("PROJ-9".into());
+        let mut t = tt("PROJ-1", TicketStatus::Done);
+        t.convoy = Some(c9.clone());
+        let tracker = FakeTracker::new(vec![t]);
+        sync::sync_board(&db, &tracker, "now").unwrap();
+        ConvoyRepo::open(&db, &c9, None, "t").unwrap();
+        let draft = TicketDraft { title: "Fix X".into(), kind: "bug".into(), description: "…".into(), convoy: None, blocked_by: vec![], labels: vec![] };
+        let (id, key) = propose(&db, &tracker, Some(TicketKey("PROJ-1".into())), Proposed::New(draft)).unwrap();
+
+        let err = close_convoy(&db, &c9).unwrap_err().to_string();
+        assert!(err.contains(&format!("#{} {}", id.0, key.0)), "names it: {err}");
+        assert_eq!(ConvoyRepo::active(&db).unwrap().len(), 1, "still open");
+
+        drop_proposal(&db, &tracker, &id).unwrap();
+        close_convoy(&db, &c9).unwrap();
+        assert!(ConvoyRepo::active(&db).unwrap().is_empty(), "settled: it closes");
     }
 
     #[test]

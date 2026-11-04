@@ -116,10 +116,11 @@ pub enum HandState { Awaiting, Implementing, Concluded, Done, Anchored }
 #[serde(rename_all = "snake_case")]
 pub enum LookoutState { Reviewed, Escalated }
 
-/// The captain's pass over its convoy: `done` (frontier worked, stand it down).
+/// The captain's pass over its convoy: `done` (frontier worked, stand it down) or `escalated` (a
+/// delivered convoy it can't close, open proposals still bound for it: wait for the operator in its pane).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CaptainState { Done }
+pub enum CaptainState { Done, Escalated }
 
 /// A crew member's self-reported state, typed per cog. The `reports` table stores the
 /// string (`as_str`); readers widen it back with the session's `kind` via `parse`.
@@ -792,10 +793,15 @@ impl CaptainState {
     pub fn as_str(&self) -> &'static str {
         match self {
             CaptainState::Done => "done",
+            CaptainState::Escalated => "escalated",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
-        (s == "done").then_some(Self::Done)
+        match s {
+            "done" => Some(Self::Done),
+            "escalated" => Some(Self::Escalated),
+            _ => None,
+        }
     }
 }
 
@@ -853,6 +859,7 @@ impl CogState {
             self,
             CogState::Worker(WorkerState::Escalated)
                 | CogState::Sailor(SailorState::Escalated)
+                | CogState::Captain(CaptainState::Escalated)
                 | CogState::Lookout(LookoutState::Escalated)
         )
     }

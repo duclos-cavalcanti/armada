@@ -3129,6 +3129,17 @@ mod tests {
         assert_eq!(plan(&db, &[cog], true, &LIVE).unwrap(), vec![Action::StandDownCaptain { convoy: "PROJ-100".into() }]);
     }
 
+    #[test]
+    fn an_escalated_captain_holds_its_convoy_for_the_operator() {
+        // Escalated isn't done: it waits in its pane, neither stood down nor doubled by a relaunch.
+        let db = db();
+        db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
+        let id = SessionRepo::start(&db, &captain_cog("PROJ-100").session).unwrap().expect("session start");
+        let cog = Cog { session: SessionRepo::get(&db, &id).unwrap().unwrap(), liveness: Liveness::Active };
+        report(&db, &cog, CogState::Captain(CaptainState::Escalated));
+        assert!(plan(&db, &[cog], true, &LIVE).unwrap().is_empty());
+    }
+
     // ── admiralty ───────────────────────────────────────────────────────────────────
 
     /// An escalated worker on `key`, its escalation judged `verdict` at `at`.

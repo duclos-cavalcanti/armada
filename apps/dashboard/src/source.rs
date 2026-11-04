@@ -353,11 +353,12 @@ pub fn open_blockers(t: &Ticket, board: &[Ticket]) -> Vec<String> {
         .collect()
 }
 
-/// A cog's state as the operator reads it. An escalation reads by who holds it: `flagged` (no
-/// captain has looked yet), `triage` (a captain is on it, or has sent its way out), `escalated` (a
-/// captain confirmed it: the operator's). A verdict counts only for the escalation it judged.
+/// A cog's state as the operator reads it. A worker's or sailor's escalation reads by who holds it:
+/// `flagged` (no captain has looked yet), `triage` (a captain is on it, or has sent its way out),
+/// `escalated` (a captain confirmed it: the operator's). A verdict counts only for the escalation it
+/// judged. Any other cog's escalation (a captain's, a lookout's) no captain inspects: it's the operator's.
 fn shown_state(db: &Ledger, session: &Session, r: &Report, captained: &HashSet<ConvoyKey>) -> anyhow::Result<String> {
-    if !r.state.is_escalated() {
+    if !r.state.is_escalated() || !matches!(session.kind, CrewKind::Worker | CrewKind::Sailor) {
         return Ok(r.state.as_str().to_string());
     }
     let label = match db.inspection(&session.id)?.filter(|i| i.judges(r)).map(|i| i.verdict) {

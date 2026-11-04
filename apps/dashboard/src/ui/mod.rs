@@ -134,7 +134,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
         ),
         Pane::Convoys => (
             format!(" Convoys · {} open · enter captain · t ticket ", f.convoys.len()),
-            Some(header(&[("Convoy", 12), ("Captain", 8), ("Launched", 9), ("Open", 6), ("Ref/Conf", 9), ("Title", 0)])),
+            Some(header(&[("Convoy", 12), ("Captain", 10), ("Launched", 9), ("Open", 6), ("Ref/Conf", 9), ("Title", 0)])),
             f.convoys.iter().map(|c| convoy_row(c, f)).collect(),
         ),
         Pane::Proposals => (
@@ -373,6 +373,7 @@ fn convoy_row(c: &Convoy, f: &crate::source::Fleet) -> Line<'static> {
         .filter(|t| !matches!(t.status, Some(domain::TicketStatus::Done) | Some(domain::TicketStatus::Cancelled)))
         .count();
     let live = match f.captain_of(&c.key) {
+        Some(cap) if cap.state.as_deref() == Some("escalated") => ("escalated".into(), 10, state_style("escalated")),
         Some(cap) => live_cell(cap.liveness.as_deref(), f.is_up(cap)),
         None => ("off".into(), 7, dim()),
     };
@@ -380,7 +381,7 @@ fn convoy_row(c: &Convoy, f: &crate::source::Fleet) -> Line<'static> {
     let launched = fmt_age(f.captain_launched.get(&c.key.0).and_then(|at| age_of(at)));
     cells(vec![
         (c.key.0.clone(), 12, Style::default()),
-        (live.0, 8, live.2),
+        (live.0, 10, live.2),
         (launched, 9, dim()),
         (format!("{open}/{}", members.len()), 6, Style::default()),
         match f.verdicts.get(&c.key.0) {
