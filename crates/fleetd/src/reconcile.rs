@@ -1259,7 +1259,9 @@ fn stand_down_lookout<H: SessionHost>(ledger: &Ledger, host: &H, id: &SessionId)
 /// LaunchAdmiral — convene an admiral on a ticket's confirmed escalation, in the project folder, for
 /// the operator to rule with (`admiral-<KEY>`; the dashboard's `e` switches to it). Its first order
 /// names the ticket. No `FLEET_TICKET`: it isn't a cog, and keeps the operator's verbs fleetc refuses
-/// a cog. A tmux session of that name already up is one the operator opened: a benign skip.
+/// a cog. The ticket's worktree rides in as `--add-dir`: the admiral reads the cog's files while its
+/// cwd stays the checkout, whose CLAUDE.md and settings are the merged canon's, not the branch's.
+/// A tmux session of that name already up is one the operator opened: a benign skip.
 fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, ticket: &str) -> Result<()> {
     let tmux_session = format!("admiral-{ticket}");
     if host.alive(&tmux_session)? {
@@ -1285,8 +1287,12 @@ fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, tick
         Some(id) => id,
         None => return Ok(()), // the per-ticket lock holds → an admiral already sits. Benign skip.
     };
+    let add_dir = OrderRepo::get(ledger, &TicketKey(ticket.to_string()))?
+        .and_then(|o| o.worktree_path)
+        .map(|wt| format!(" --add-dir '{}'", wt.replace('\'', r"'\''")))
+        .unwrap_or_default();
     // The key is `<PREFIX>-<n>`-validated, so the quoted order is shell-safe.
-    let cmd = format!("{} 'Rule on the confirmed escalation of {ticket}.'", launch_cmd("admiral", Launch::Fresh(&hid)));
+    let cmd = format!("{}{add_dir} 'Rule on the confirmed escalation of {ticket}.'", launch_cmd("admiral", Launch::Fresh(&hid)));
     host.spawn(&tmux_session, Path::new(project), &cmd)?;
     ledger.append(
         &now_rfc3339(),
@@ -3263,6 +3269,18 @@ mod tests {
         assert!(!cmd.contains("FLEET_TICKET"), "an admiral isn't a cog: {cmd}");
         let live = SessionRepo::live(&db).unwrap();
         assert!(live.iter().any(|s| s.kind == CrewKind::Admiral && s.ticket == Some(TicketKey("PROJ-1".into()))));
+    }
+
+    #[test]
+    fn launch_admiral_adds_the_tickets_worktree() {
+        let db = db();
+        ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
+        order_wt(&db, "PROJ-1", true, Some("/wt/chore-PROJ-1-it's"));
+        let host = FakeHost::new();
+        launch_admiral(&db, &host, "/project", "PROJ-1").unwrap();
+        let (_, cwd, cmd) = host.spawned.borrow()[0].clone();
+        assert_eq!(cwd, "/project", "its cwd stays the checkout");
+        assert!(cmd.contains(r"--add-dir '/wt/chore-PROJ-1-it'\''s' 'Rule on"), "{cmd}");
     }
 
     #[test]

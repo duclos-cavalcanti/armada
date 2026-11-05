@@ -49,6 +49,7 @@ launch_admiral() {
 # Convene an admiral to investigate a ticket that has no escalation. It opens in a window of the
 # operator's own session, named after the ticket. fleetd only convenes `admiral-<KEY>` sessions,
 # so this window never blocks an escalation's admiral. If one already sits, the launch is refused.
+# Like fleetd's, it runs in the checkout with the ticket's worktree as `--add-dir`.
 investigate() {
     [ -n "$1" ] || fail "no ticket on this row"
     ! tmux has-session -t "=admiral-$1" 2>/dev/null || fail "an admiral already sits on $1 (its escalation): e switches to it"
@@ -56,7 +57,12 @@ investigate() {
         echo "an admiral is already investigating $1: switched to its window"
         return
     fi
-    tmux new-window -n "$1" -c "$(cd "${FLEET_PROJECT_DIR:?}" && pwd)" "claude --agent admiral 'Investigate $1.'"
+    local checkout wt cmd
+    checkout="$(fleet project)" || fail "fleetd unreachable: no checkout to open the admiral in"
+    wt="$(fleet packet "$1" 2>/dev/null | jq -r '.order.worktree_path // empty')" || wt=
+    cmd="claude --agent admiral"
+    [ -z "$wt" ] || [ ! -d "$wt" ] || cmd+=" --add-dir $(printf %q "$wt")"
+    tmux new-window -n "$1" -c "$checkout" "$cmd 'Investigate $1.'"
     echo "convened an admiral to investigate $1 (window $1)"
 }
 
