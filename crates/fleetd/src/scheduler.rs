@@ -631,8 +631,9 @@ fn refresh(ledger: &Ledger, forge: &dyn Forge, ship: &Ship) {
 /// stop applies where its target exists: the ticket is held (off the frontier; `fleetc arm`
 /// refuses), its live cogs are anchored, and its open MR is disarmed + drafted. An armed MR merges
 /// on the forge's own say, past every fleet gate, hence the disarm; its `swept` clears so the first
-/// pass after release re-sweeps; a draft can't merge even if re-armed. Weighing readies the MR,
-/// then resumes the cogs. A forge step that fails is reported with what already happened, so the
+/// pass after release re-sweeps; a draft can't merge even if re-armed. Weighing readies the MR
+/// only in the sailor's phase (In QA): a worker's MR was a draft before the anchor and stays one
+/// until it concludes. Then it resumes the cogs. A forge step that fails is reported with what already happened, so the
 /// caller can react (e.g. a forge without drafts).
 fn anchor_ticket<H: SessionHost>(
     ledger: &Ledger,
@@ -656,7 +657,7 @@ fn anchor_ticket<H: SessionHost>(
     if let Some(ship) = open_ship(ledger, ticket)? {
         if anchor {
             hold_ship(ledger, forge, &ship).context("anchored")?;
-        } else {
+        } else if TicketRepo::get(ledger, ticket)?.and_then(|t| t.status) == Some(TicketStatus::InQa) {
             let iid = ship.iid;
             forge.set_draft(iid, false).with_context(|| format!("weighed, but couldn't mark !{iid} ready"))?;
         }
@@ -1611,6 +1612,13 @@ mod tests {
         assert!(!TicketRepo::get(&db, &key).unwrap().unwrap().held);
         assert!(!anchored(&db), "its sailor resumes");
         assert_eq!(host.sent.borrow().len(), 2, "the stop, then the resume, reached its sailor's pane alone");
+
+        // In the worker's phase the MR was a draft before the anchor: weigh leaves it one.
+        let worker_phase = FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]);
+        sync::sync_board(&db, &worker_phase, "now").unwrap();
+        anchor_ticket(&db, &forge, &host, &key, true, None).unwrap();
+        anchor_ticket(&db, &forge, &host, &key, false, None).unwrap();
+        assert_eq!(forge.drafted.borrow().last(), Some(&(7, true)), "a worker's MR stays a draft");
 
         // A forge without drafts: the hold + disarm stand, and the caller hears what failed.
         let no_drafts = FakeForge { no_drafts: true, ..Default::default() };
