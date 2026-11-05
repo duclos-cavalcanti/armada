@@ -863,14 +863,14 @@ impl CogState {
                 | CogState::Lookout(LookoutState::Escalated)
         )
     }
-    /// A DELIBERATE non-terminal hold (an escalation, an anchor).
+    /// A DELIBERATE non-terminal hold (a wait on blockers, an anchor).
     /// reconcile must not heal or stand down a cog reporting this even when its liveness is Dead —
-    /// it stopped on purpose.
+    /// it stopped on purpose. An escalation isn't one: a dead escalated cog is healed in place.
     pub fn is_paused(&self) -> bool {
         matches!(
             self,
-            CogState::Worker(WorkerState::Waiting | WorkerState::Escalated | WorkerState::Anchored)
-                | CogState::Sailor(SailorState::Escalated | SailorState::Anchored)
+            CogState::Worker(WorkerState::Waiting | WorkerState::Anchored)
+                | CogState::Sailor(SailorState::Anchored)
                 | CogState::Hand(HandState::Anchored)
         )
     }

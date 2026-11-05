@@ -212,12 +212,15 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
         // cog (worker/hand) is a crash → heal (respawn in place, resume from its status drop). A
         // COLD cog (sailor) has finished its one-shot watch — a clean exit and a crash look
         // identical (both Dead) → stand it down (end the session) so the sweep trigger re-launches
-        // on the next change. An operator anchor is the authoritative hold: never touch an
-        // anchored session, even if it died before self-reporting `anchored`.
+        // on the next change. An ESCALATED cog, worker or sailor, waits on the operator: heal it in
+        // place too, so a restart doesn't strand its pane and transcript. An operator anchor is the
+        // authoritative hold: never touch an anchored session, even if it died before self-reporting
+        // `anchored`.
         let paused = state.is_some_and(|s| s.is_paused());
         if cog.liveness == Liveness::Dead && !paused && cog.session.anchored_at.is_none() {
             let (ticket, kind) = (tkey.0.clone(), cog.session.kind.as_str().into());
-            actions.push(if matches!(cog.session.kind, CrewKind::Worker | CrewKind::Hand) {
+            let warm = matches!(cog.session.kind, CrewKind::Worker | CrewKind::Hand);
+            actions.push(if warm || state.is_some_and(|s| s.is_escalated()) {
                 Action::Heal { ticket, kind }
             } else {
                 Action::StandDown { ticket, kind }
@@ -1872,12 +1875,26 @@ mod tests {
     }
 
     #[test]
-    fn no_heal_when_the_cog_reported_a_deliberate_pause() {
-        // Escalated → waiting on an operator drain, not a crash: leave it alone.
+    fn a_dead_escalated_cog_is_healed_in_place_worker_or_sailor() {
+        // A restart mustn't strand an escalation: it comes back in its pane, still escalated.
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let w = live_cog(&db, CrewKind::Worker, "PROJ-1", Liveness::Dead);
         report(&db, &w, CogState::Worker(WorkerState::Escalated));
+        assert_eq!(plan(&db, &[w], true, &LIVE).unwrap(), vec![Action::Heal { ticket: "PROJ-1".into(), kind: "worker".into() }]);
+        ticket(&db, "PROJ-2", TicketStatus::InQa, false, vec![]);
+        let s = live_cog(&db, CrewKind::Sailor, "PROJ-2", Liveness::Dead);
+        report(&db, &s, CogState::Sailor(SailorState::Escalated));
+        assert_eq!(plan(&db, &[s], true, &LIVE).unwrap(), vec![Action::Heal { ticket: "PROJ-2".into(), kind: "sailor".into() }]);
+    }
+
+    #[test]
+    fn no_heal_when_the_cog_reported_an_anchor() {
+        // Anchored → the operator's hold, not a crash: leave it alone.
+        let db = db();
+        ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
+        let w = live_cog(&db, CrewKind::Worker, "PROJ-1", Liveness::Dead);
+        report(&db, &w, CogState::Worker(WorkerState::Anchored));
         assert!(plan(&db, &[w], true, &LIVE).unwrap().is_empty());
     }
 
@@ -2915,17 +2932,6 @@ mod tests {
             plan(&db, &cogs, true, &LIVE).unwrap(),
             vec![Action::StandDown { ticket: "PROJ-1".into(), kind: "sailor".into() }]
         );
-    }
-
-    #[test]
-    fn an_escalated_sailor_is_left_alone() {
-        // `escalated` is a deliberate hold (it waits for the operator): even Dead, it is neither
-        // stood down nor re-launched over — the live-sailor lock holds the slot.
-        let db = db();
-        ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
-        let s = live_cog(&db, CrewKind::Sailor, "PROJ-1", Liveness::Dead);
-        report(&db, &s, CogState::Sailor(SailorState::Escalated));
-        assert!(plan(&db, &[s], true, &LIVE).unwrap().is_empty());
     }
 
     #[test]
