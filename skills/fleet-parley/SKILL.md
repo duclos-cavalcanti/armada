@@ -1,5 +1,5 @@
 ---
-description: Answer the open review threads on the ticket's MR — treat each finding as false until you prove it against the code, docs and a run, then fix it your way or push back with the evidence; defer nits to one follow-up ticket; reply, resolve — through `fleetc review` / `fleetc reply` (forge-neutral). Count-gated, and surfaces floating review notes before declaring the MR clean.
+description: Answer the open review threads on the ticket's MR — treat each finding as false until you prove it against the code, docs and a run, then fix it your way (its remedy tested against every case), propose it when no AC of the ticket needs it, or push back with the evidence; escalate a finding that keeps coming back; defer nits to one follow-up ticket; reply, resolve — through `fleetc review` / `fleetc reply` (forge-neutral). Count-gated, and surfaces floating review notes before declaring the MR clean.
 argument-hint:
 ---
 
@@ -63,16 +63,26 @@ Then classify each proven finding — the first that fires wins:
    - **Two reviewers conflict** on the same lines; both can't be satisfied.
    - **It would amend an acceptance criterion, a design decision, or an invariant**: that's
      the ticket author's call, not a patch.
-2. **Scope expansion** — the ask goes beyond the ticket (tightening, tests, better errors, and
-   lint stay *inside* scope). Propose it (`/fleet-propose`); the reply names its key.
-3. **Defer a nit** — always: a nit is what the reviewer labels one (`nit`, `[nit]`), or a pure
-   style / naming / polish ask that changes no behaviour, correctness, test, or doc accuracy.
-   It goes to the MR's nits ticket (Step 3), never into this MR.
+   - **It keeps coming back**: this MR already fixed the same lines or rule for it twice
+     (`git log --oneline -L<from>,<to>:<path> "origin/$(printf '%s' "$PACKET" | jq -r .ship.target)..HEAD"`
+     shows the rewrites). Stop patching: reply "<n>th failure of this rule; needs a design
+     ruling, escalated", and leave it open. Don't wait for the sailor's round cap.
+2. **True, not this ticket** — ask whether one of *this* ticket's acceptance criteria needs it.
+   If none does, it's a follow-up, however true: propose it (`/fleet-propose`), or add it to a
+   follow-up this MR already proposed on the same subject. Reply "Proven, but outside <KEY>'s
+   ACs (<the ACs you checked>). Proposed as <KEY-N>." and resolve. The exception: a proven
+   correctness or security defect in what this MR itself adds is fixed here (Apply).
+3. **Defer a nit** — always, approved MR or not: a nit is what the reviewer labels one (`nit`,
+   `[nit]`), or a pure style / naming / polish ask that changes no behaviour, correctness, test,
+   or doc accuracy. It goes to the MR's nits ticket (Step 3), never into this MR, even when it's
+   a one-line fix.
 4. **Apply** — the fix is yours, held to the same proof as the finding:
    - **Prove the remedy.** A reviewer's suggested fix or text is a second claim, and it can be
      wrong where the finding was right. Never paste it: write the fix from your own reading, and
-     prove every statement your fix makes as you proved the finding. **Right problem, wrong
-     remedy**: apply your own fix; the reply says both.
+     prove every statement your fix makes as you proved the finding. Test the remedy, the
+     reviewer's or yours, against **every case** the rule or text covers, not just the one
+     reported, and list the cases in the reply. **Right problem, wrong remedy**: "Right problem;
+     your remedy fails <case> (<file:line>). Applied <X> instead."
    - **Fix the class.** A finding is one sighting of a mistake. Name the mistake (the wrong
      claim, assumption or shape), search your whole diff for it, and fix every instance now: the
      reply lists each site. Fix only the sighting, and the next round finds the rest one by one.
@@ -84,8 +94,9 @@ review round. Apply only a proven defect — wrong behaviour, a correctness or s
 acceptance criterion not met. Anything short of that (readability, a refactor, a test beyond
 the ACs, doc polish) is deferred to the nits ticket like a nit.
 
-A proven finding is fixed now, except a nit, or a non-defect on an approved MR, which is
-deferred; an unproven one is pushed back. Nothing is "ticketed for later" otherwise.
+A proven finding is fixed now, except: a nit, or a non-defect on an approved MR, is deferred;
+one no AC needs is proposed; one that keeps coming back is escalated. An unproven one is pushed
+back. Nothing is "ticketed for later" otherwise.
 
 ## Step 2 — Fix, verify, push
 
