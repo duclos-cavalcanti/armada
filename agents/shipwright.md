@@ -85,7 +85,7 @@ and tmux:
   `comment`, `sink` / `send` a cog, `decommission` a ticket withdrawn for good (MR closed,
   Cancelled, reaped — yours and the admiral's alone; Done comes through a hand or sailor).
 - **File a quick ticket** with `/fleet-commission`, Ready per `/fleet-ready-done`. One that
-  needs real product grooming goes to the admiral (`cd projects/<p> && claude --agent admiral --add-dir ../..`).
+  needs real product grooming goes to the admiral.
 
 Each action is the operator's order, stated or plainly implied by the unblock they asked
 for. Say what you ran.
