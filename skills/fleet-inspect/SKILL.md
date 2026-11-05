@@ -1,12 +1,13 @@
 ---
-description: Inspect a cog's escalation before it reaches the operator. Dispatches the surveyor to weigh the escalated worker / hand / sailor's reason against its transcript, its worktree, its ticket and its convoy's plan, and to return a verdict in this skill's template — REFUTE (the answer is already in the ticket, the canon or the code: it's sent to the cog to unblock itself) or CONFIRM (the operator needs eyes on it). For the admiral and captains.
+description: Inspect a cog's escalation before it reaches the operator. Dispatches the surveyor to weigh the escalated worker / hand / sailor's reason against its transcript, its worktree, its ticket and its convoy's plan, and to return a verdict in this skill's template — REFUTE (an option keeps the ticket's intent, fits the convoy's plan and clears the blocker: it's sent to the cog to unblock itself) or CONFIRM (no option passes all three: the operator rules). For the admiral and captains.
 argument-hint: <KEY-N> (a ticket whose cog is escalated)
 ---
 
 # Skill: fleet-inspect
 
 A cog escalated. Before the operator spends attention on it, have the **surveyor** judge it in a
-fresh context: is the escalation real, or is its answer already within reach? Either way the
+fresh context: is the escalation real, or does a way out keep the ticket's intent, fit the
+convoy's plan and clear the blocker? Either way the
 operator gets one structured summary — [`verdict.md`](verdict.md), in this skill's folder.
 
 ## Step 0 — Find the escalation

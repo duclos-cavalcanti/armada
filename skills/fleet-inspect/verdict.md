@@ -5,6 +5,7 @@
   - **Ticket:** <how it stalls the goal / which ACs>
   - **Convoy:** <tickets it holds up; how it bends the plan>
   - **Options:**
-    - <op1> — <cost> — <cite>
-    - <op2> — <cost> — <cite>
-- **Recommendation:** <an option, or "operator's ruling"> — <why; who acts>
+    - <op1> — ticket ✓|✗ · convoy ✓|✗ · resolves ✓|✗ — <cost> — <cite>
+    - <op2> — ticket ✓|✗ · convoy ✓|✗ · resolves ✓|✗ — <cost> — <cite>
+- **Recommendation:** <the option passing all three, or "operator's ruling": which check each
+  option fails> — <why; who acts>
