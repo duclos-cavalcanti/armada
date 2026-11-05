@@ -65,9 +65,14 @@ Each finding is:
 ```
 [<severity>] <file>:<line> — <the violated property or desired outcome>
   evidence: <the diff line, quoted snippet, or doctrine you're citing>
+  also:     <every other site of the same defect in the diff, or omit>
   impact:   <what goes wrong if it ships>
   candidate fix (non-binding): <one approach the author may take or ignore>
 ```
+
+One finding per defect, with every site it reaches, never one finding per site. Offer a
+candidate fix only once you've checked it against the same ground truth as the finding;
+otherwise leave it out.
 
 Severities:
 

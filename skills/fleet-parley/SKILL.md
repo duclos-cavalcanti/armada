@@ -68,8 +68,14 @@ Then classify each proven finding — the first that fires wins:
 3. **Defer a nit** — always: a nit is what the reviewer labels one (`nit`, `[nit]`), or a pure
    style / naming / polish ask that changes no behaviour, correctness, test, or doc accuracy.
    It goes to the MR's nits ticket (Step 3), never into this MR.
-4. **Apply** — derive the fix (the reviewer's suggestion is one input, not an instruction) and
-   apply it. **Right problem, wrong remedy**: apply your own fix; the reply says both.
+4. **Apply** — the fix is yours, held to the same proof as the finding:
+   - **Prove the remedy.** A reviewer's suggested fix or text is a second claim, and it can be
+     wrong where the finding was right. Never paste it: write the fix from your own reading, and
+     prove every statement your fix makes as you proved the finding. **Right problem, wrong
+     remedy**: apply your own fix; the reply says both.
+   - **Fix the class.** A finding is one sighting of a mistake. Name the mistake (the wrong
+     claim, assumption or shape), search your whole diff for it, and fix every instance now: the
+     reply lists each site. Fix only the sighting, and the next round finds the rest one by one.
 5. **Asks nothing** (a verdict, a pass, an acknowledgement): reply with the disposition and
    resolve it now.
 
@@ -100,8 +106,8 @@ For each other thread you handled (a push-back cites its evidence):
 
 ```bash
 fleetc reply --thread <id> --resolve --body - <<'EOF'
-<what you changed and why — or, for "right problem, wrong remedy", the diagnosis you
-accepted and the fix you chose instead>
+<what you changed and why, and every site of the class — or, for "right problem, wrong
+remedy", the diagnosis you accepted and the fix you chose instead>
 EOF
 ```
 
