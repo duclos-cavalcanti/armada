@@ -17,11 +17,19 @@ pub fn sync_board(ledger: &Ledger, tracker: &dyn Tracker, now: &str) -> Result<u
     for t in &tickets {
         TicketRepo::sync(ledger, t, now)?;
     }
+    let mut done: HashSet<TicketKey> = tickets.iter().map(|t| t.key.clone()).collect();
+    // A board ticket's blocker off the board (another convoy's, out of sprint) isn't in the ledger,
+    // so its edge was dropped: pull the blocker in, then re-write the edges, or the ticket reads as
+    // unblocked — dispatched early, and its worker can't report `waiting` on it.
+    for t in &tickets {
+        if t.blocked_by.iter().any(|b| !done.contains(b)) {
+            sync_with_blockers(ledger, tracker, t, &mut done, now)?;
+        }
+    }
     // Off the board (no sprint, or another team's), the fleet still tracks an open convoy's
     // tickets, what it works (an order), and what those wait on: refresh them too, or their status
     // and `is blocked by` edges go stale — a captain would miss a ticket, a sailor would boot blind
     // to its blocker, and the gate would never lift.
-    let mut done: HashSet<TicketKey> = tickets.iter().map(|t| t.key.clone()).collect();
     for convoy in ConvoyRepo::active(ledger)? {
         if let Err(e) = sync_convoy_with(ledger, tracker, &convoy.key, &mut done, now) {
             tracing::warn!("sync: convoy {} not refreshed: {e:#}", convoy.key.0);
@@ -399,6 +407,20 @@ mod tests {
             TicketRepo::get(&db, &TicketKey("PROJ-1".into())).unwrap().unwrap().status,
             Some(TicketStatus::InProgress)
         );
+    }
+
+    #[test]
+    fn a_board_tickets_blocker_off_the_board_is_pulled_in_with_its_edge() {
+        // PROJ-1 is in the sprint; its blocker PROJ-9 (another convoy's) isn't.
+        let db = Ledger::in_memory().unwrap();
+        let mut blocked = tt("PROJ-1", TicketStatus::InProgress);
+        blocked.blocked_by = vec![TicketKey("PROJ-9".into())];
+        let tracker = FakeTracker(vec![blocked], vec![tt("PROJ-9", TicketStatus::Todo)]);
+
+        sync_board(&db, &tracker, "now").unwrap();
+        let t = TicketRepo::get(&db, &TicketKey("PROJ-1".into())).unwrap().unwrap();
+        assert_eq!(t.blocked_by, vec![TicketKey("PROJ-9".into())], "the edge holds");
+        assert_eq!(TicketRepo::get(&db, &TicketKey("PROJ-9".into())).unwrap().unwrap().status, Some(TicketStatus::Todo));
     }
 
     #[test]
