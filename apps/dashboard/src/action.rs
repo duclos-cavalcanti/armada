@@ -10,6 +10,9 @@ use crossterm::event::{KeyCode, KeyModifiers};
 /// action, edit the script; the binary never changes.
 const HANDLER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/handler.sh");
 
+/// What an action said back: `Ok` its reply, `Err` its failure. The footer shows the last one.
+pub type Reply = Result<String, String>;
+
 /// Convert a (KeyCode, KeyModifiers) tuple to the canonical lowercase key name
 /// passed to the handler. Returns `None` for keys the handler is never sent.
 ///
@@ -74,6 +77,7 @@ pub fn is_reserved(code: KeyCode, mods: KeyModifiers) -> bool {
             | KeyCode::Char('5')
             | KeyCode::Char('6')
             | KeyCode::Char(' ')
+            | KeyCode::Char('?')
     )
 }
 
@@ -81,14 +85,15 @@ pub fn is_reserved(code: KeyCode, mods: KeyModifiers) -> bool {
 ///   handler.sh <coordinate> <key> <field>...
 /// — a direct exec (no `sh -c`), so row fields are distinct argv entries and need
 /// no shell quoting. Its output never reaches the terminal (it'd corrupt the TUI's
-/// alternate screen): on a failure, the last line of its stderr goes to `errors`
-/// for the footer. An unhandled (coordinate, key) is the handler's no-op.
+/// alternate screen): its reply goes to `replies` for the footer, the last line of its stdout on
+/// success (if it said anything), of its stderr on a failure. An unhandled (coordinate, key) is
+/// the handler's silent no-op.
 pub fn spawn(
     project: &std::path::Path,
     coordinate: &str,
     key: &str,
     fields: Vec<String>,
-    errors: std::sync::mpsc::Sender<String>,
+    replies: std::sync::mpsc::Sender<Reply>,
 ) {
     let (project, coordinate, key) = (project.to_path_buf(), coordinate.to_string(), key.to_string());
     std::thread::spawn(move || {
@@ -99,11 +104,15 @@ pub fn spawn(
             .args(&fields)
             .stdin(std::process::Stdio::null())
             .output();
-        let failure = match out {
-            Ok(o) if o.status.success() => return,
-            Ok(o) => String::from_utf8_lossy(&o.stderr).lines().rfind(|l| !l.trim().is_empty()).map(str::to_string),
-            Err(e) => Some(format!("handler: {e}")),
+        let last = |b: &[u8]| String::from_utf8_lossy(b).lines().rfind(|l| !l.trim().is_empty()).map(str::to_string);
+        let reply = match out {
+            Ok(o) if o.status.success() => match last(&o.stdout) {
+                Some(said) => Ok(said),
+                None => return,
+            },
+            Ok(o) => Err(last(&o.stderr).unwrap_or_else(|| format!("{coordinate} {key} failed"))),
+            Err(e) => Err(format!("handler: {e}")),
         };
-        let _ = errors.send(failure.unwrap_or_else(|| format!("{coordinate} {key} failed")));
+        let _ = replies.send(reply);
     });
 }

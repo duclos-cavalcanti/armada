@@ -8,8 +8,8 @@
 #
 # This script owns the ENTIRE (coordinate, key) → action mapping. Adding or
 # changing an action is a one-arm edit here; the dashboard binary never changes.
-# An unhandled (coordinate, key) pair is a silent no-op. A failure exits non-zero with one line
-# on stderr — the dashboard shows it, in red, in its footer.
+# An unhandled (coordinate, key) pair is a silent no-op. The footer shows an action's reply: the
+# last line it prints on stdout, or, on a failure (non-zero exit), its last line on stderr, in red.
 #
 # The keys are fixed, never "smart": enter switches to the row's tmux session (or fails),
 # m opens the MR, t opens the ticket, e switches to the ticket's admiral, a convenes one to investigate.
@@ -52,8 +52,12 @@ launch_admiral() {
 investigate() {
     [ -n "$1" ] || fail "no ticket on this row"
     ! tmux has-session -t "=admiral-$1" 2>/dev/null || fail "an admiral already sits on $1 (its escalation): e switches to it"
-    tmux select-window -t ":=$1" 2>/dev/null && return
+    if tmux select-window -t ":=$1" 2>/dev/null; then
+        echo "an admiral is already investigating $1: switched to its window"
+        return
+    fi
     tmux new-window -n "$1" -c "$(cd "${FLEET_PROJECT_DIR:?}" && pwd)" "claude --agent admiral 'Investigate $1.'"
+    echo "convened an admiral to investigate $1 (window $1)"
 }
 
 launch_browser() { open "$1"; }

@@ -9,7 +9,7 @@ use domain::{Convoy, Event, PipelineStatus, Proposal, Proposed, ShipSnapshot, Ti
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs};
 use ratatui::Frame;
 use std::collections::HashMap;
 
@@ -23,6 +23,41 @@ pub fn render(f: &mut Frame, app: &App) {
     render_tab_strip(f, chunks[0], app);
     render_body(f, chunks[1], app);
     render_footer(f, chunks[2], app);
+    if app.help {
+        render_help(f);
+    }
+}
+
+/// The keys, one per line: `?` shows them over the dashboard.
+const HELP: &[(&str, &str)] = &[
+    ("q / Esc", "quit"),
+    ("r", "refresh"),
+    ("Tab / S-Tab", "next / previous tab"),
+    ("↑↓ ^n^p 1-6", "focus a pane"),
+    ("j / k", "row down / up"),
+    ("h / l", "swap a pane for its alternate"),
+    ("space", "zoom the focused pane"),
+    ("y / Y", "yank the pane / the page"),
+    ("enter", "switch to the row's tmux session"),
+    ("m", "open the MR"),
+    ("t", "open the ticket"),
+    ("v", "read the verdict"),
+    ("e", "switch to the ticket's escalation admiral"),
+    ("a", "convene an admiral to investigate (Impl, Merge); accept (Proposals)"),
+    ("d / w", "drop a proposal / weigh an anchored ticket"),
+    ("?", "this help"),
+];
+
+fn render_help(f: &mut Frame) {
+    let lines: Vec<Line> = HELP
+        .iter()
+        .map(|(k, what)| Line::from(vec![Span::styled(format!(" {k:<14}"), Style::default().fg(Color::Cyan)), Span::raw(*what)]))
+        .collect();
+    let area = f.area();
+    let (w, h) = (area.width.min(84), (lines.len() as u16 + 2).min(area.height));
+    let popup = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+    f.render_widget(Clear, popup);
+    f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" keys · ? or Esc closes ")), popup);
 }
 
 fn render_tab_strip(f: &mut Frame, area: Rect, app: &App) {
@@ -172,13 +207,13 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         None => tick_summary(&app.fleet.tick),
     };
     let status = if app.fleet.fleetd_up { status } else { format!("fleetd down (see Log) · {status}") };
-    let error = app.error.as_ref().filter(|(_, at)| at.elapsed().as_secs() < 5).map(|(msg, _)| format!(" ✗ {msg} "));
-    let body = format!(
-        " {}{}{}  ·  keys: q quit · r refresh · space zoom · Tab tabs · ↑↓/^n^p/1-6 pane · j/k row · h/l swap · y/Y yank · enter tmux · m MR · t ticket · v verdict · e admiral · a investigate",
-        flash, zoom, status,
-    );
-    let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
-    let line = Line::from(error.map(|e| Span::styled(e, red)).into_iter().chain([Span::styled(body, dim)]).collect::<Vec<_>>());
+    let reply = match &app.reply {
+        Some(Ok(said)) => Span::styled(format!(" › {said} "), Style::default().fg(Color::Cyan)),
+        Some(Err(failed)) => Span::styled(format!(" ✗ {failed} "), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        None => Span::raw(""),
+    };
+    let body = format!(" {flash}{zoom}{status}  ·  ? keys");
+    let line = Line::from(vec![Span::styled(body, dim), reply]);
     f.render_widget(Paragraph::new(line), area);
 }
 

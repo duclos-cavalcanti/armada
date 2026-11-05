@@ -126,10 +126,12 @@ pub struct App {
     swapped: [bool; Pane::COUNT],
     /// Transient footer notice (e.g. yank feedback); shown for ~3s.
     pub flash: Option<(String, Instant)>,
-    /// The last action that failed (the handler's stderr); shown in red for ~5s.
-    pub error: Option<(String, Instant)>,
-    /// Where the action handler's failures arrive from its background thread.
-    errors: (std::sync::mpsc::Sender<String>, std::sync::mpsc::Receiver<String>),
+    /// The last action's reply (a failure in red); the footer shows it until the next one.
+    pub reply: Option<action::Reply>,
+    /// Where the action handler's replies arrive from its background thread.
+    replies: (std::sync::mpsc::Sender<action::Reply>, std::sync::mpsc::Receiver<action::Reply>),
+    /// The key help popup; `?` toggles it.
+    pub help: bool,
     /// Set by `y`/`Y`; the run loop captures it on the next draw.
     pub yank_requested: Option<YankScope>,
     /// Zoom: the focused pane fills the body; `space` toggles it.
@@ -148,8 +150,9 @@ impl App {
             cursors: [0; Pane::COUNT],
             swapped: [false; Pane::COUNT],
             flash: None,
-            error: None,
-            errors: std::sync::mpsc::channel(),
+            reply: None,
+            replies: std::sync::mpsc::channel(),
+            help: false,
             yank_requested: None,
             zoomed: false,
             fleet: Fleet::load(&project),
@@ -304,8 +307,17 @@ impl App {
                 _ => {}
             }
         }
+        // The help popup takes the next key: `?` or Esc closes it, anything else is ignored.
+        if self.help {
+            self.help = !matches!(key.code, KeyCode::Char('?') | KeyCode::Esc);
+            return;
+        }
         // Reserved navigation keys — handled here, never routed to the action handler.
         match key.code {
+            KeyCode::Char('?') => {
+                self.help = true;
+                return;
+            }
             KeyCode::Char('q') | KeyCode::Esc => {
                 self.quit = true;
                 return;
@@ -372,7 +384,7 @@ impl App {
         let Some((coordinate, fields)) = self.focused_action() else {
             return;
         };
-        action::spawn(&self.project.root, &coordinate, &key_name, fields, self.errors.0.clone());
+        action::spawn(&self.project.root, &coordinate, &key_name, fields, self.replies.0.clone());
     }
 
     fn refresh(&mut self, force: bool) {
@@ -462,8 +474,8 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, project: wire
             }
         }
 
-        if let Ok(e) = app.errors.1.try_recv() {
-            app.error = Some((e, Instant::now()));
+        if let Ok(r) = app.replies.1.try_recv() {
+            app.reply = Some(r);
         }
         app.refresh(false);
 
