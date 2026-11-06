@@ -208,6 +208,24 @@ impl Tracker for JiraTracker {
         detail_from_issue(&self.view(key)?).with_context(|| format!("jira issue view {}: unexpected shape", key.0))
     }
 
+    /// One JQL search (`key in (…)`) per hundred keys. The search index lags a create by seconds,
+    /// so a key it doesn't return yet is read directly.
+    fn read_many(&self, keys: &[TicketKey]) -> Result<Vec<TicketDetail>> {
+        let mut found = Vec::new();
+        for chunk in keys.chunks(100) {
+            let jql = format!("key in ({})", chunk.iter().map(|k| k.0.as_str()).collect::<Vec<_>>().join(", "));
+            let page: serde_json::Value = serde_json::from_str(&self.raw_page(&jql, 0)?)?;
+            let issues = page.get("issues").and_then(|i| i.as_array()).or_else(|| page.as_array());
+            found.extend(issues.into_iter().flatten().filter_map(detail_from_issue));
+        }
+        for key in keys {
+            if !found.iter().any(|d: &TicketDetail| &d.ticket.key == key) {
+                found.extend(self.read(key).ok());
+            }
+        }
+        Ok(found)
+    }
+
     fn create(&self, d: &TicketDraft) -> Result<TicketKey> {
         let kind = capitalized(&d.kind); // jira's type names: Story, Bug, Task, Epic
         let mut args = vec!["issue", "create", "-p", &self.project, "-t", &kind, "-s", &d.title, "-b", &d.description];

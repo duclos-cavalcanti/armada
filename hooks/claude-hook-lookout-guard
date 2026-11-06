@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Claude Code PreToolUse hook (Bash) for a lookout: fleetd attaches it to every lookout it launches
+# (`claude --settings`). A lookout reads and reviews; it never points git at another repository and
+# never writes the git state every worker shares. The kit's ref guard (git-hook-reference-transaction)
+# refuses branch, tag and stash changes inside git itself; this one stops what that guard can't see —
+# a borrowed git dir, settings writes, worktrees, pushes — before the command runs. Exit 2 blocks the
+# command and hands the lookout the reason.
+
+cmd=$(jq -r '.tool_input.command // empty')
+[ -n "$cmd" ] || exit 0
+
+refuse() {
+    echo "fleet: refused — $1. You review in your own review worktree, which fleetd already checked out at the MR's head and fetched its target into; read there, and escalate if you truly need more." >&2
+    exit 2
+}
+
+# Another repository: a borrowed git dir or work tree (set, not merely mentioned), or a setting that
+# redirects one.
+re_redirect='(^|[^A-Za-z0-9_])(GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_INDEX_FILE)=|--git-dir|--work-tree|core\.(worktree|hooksPath)'
+[[ $cmd =~ $re_redirect ]] && refuse "a lookout never points git at another repository (GIT_DIR, GIT_WORK_TREE, --git-dir, core.worktree)"
+
+# Its identity: the ref guard knows a lookout by FLEET_SHIP.
+[[ $cmd =~ (unset|env[[:space:]]+-u)[[:space:]]+FLEET_SHIP|FLEET_SHIP= ]] && refuse "a lookout keeps its FLEET_SHIP"
+
+# git subcommands that write what every worktree shares, or reach past this one.
+git_=$'(^|[;&|(`[:space:]])git([[:space:]]+(-c[[:space:]]+[^[:space:]]+|-C[[:space:]]+[^[:space:]]+|--[a-z-]+(=[^[:space:]]+)?))*[[:space:]]+'
+[[ $cmd =~ ${git_}(init|worktree|push|update-ref|filter-branch|replace|gc|prune)([[:space:]]|$) ]] &&
+    refuse "a lookout never runs git ${BASH_REMATCH[5]}"
+[[ $cmd =~ ${git_}remote[[:space:]]+(add|set-url|remove|rm|rename|set-head|prune) ]] && refuse "a lookout never changes the remotes"
+if [[ $cmd =~ ${git_}config([[:space:]]|$) ]] &&
+    ! [[ $cmd =~ ${git_}config[[:space:]]+(.*[[:space:]])?(--get|--get-all|--get-regexp|--list|-l|--show-origin|--show-scope|get|list)([[:space:]]|$) ]]; then
+    refuse "a lookout never writes git settings (git config is read-only for it: --get, --list)"
+fi
+[[ $cmd =~ ${git_}-C[[:space:]] ]] && refuse "a lookout runs git only in its review worktree (no git -C)"
+exit 0

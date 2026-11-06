@@ -49,6 +49,8 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc review   [--iid <N>]       (an MR's fresh review surface: open threads + floating notes)\n  \
      fleetc reply    [--iid <N>] --thread <id> --body <text|-> [--resolve]   (answer a review thread)\n  \
      fleetc ship     [--iid <N>]       (one MR, ours or an ally's: ship + snapshot + fetch ref, as JSON)\n  \
+     fleetc crossings [--iid <N>] [--brief]   (the MR beside our open tickets: shared paths + folders, and each ticket's text unless --brief, as JSON)\n  \
+     fleetc diff     --iid <N> --path <file>   (one MR's diff of one file)\n  \
      fleetc review-post [--iid <N>] --body <text|-> [--approve | --thread]   (post one review comment, approving if clean; or open one review thread)\n  \
      fleetc rebase   [--iid <N>]       (server-side rebase an MR)\n  \
      fleetc ci       [--iid <N>]       (the MR's CI: status + each failed job's log excerpt, as JSON)\n  \
@@ -111,6 +113,8 @@ fn run() -> Result<()> {
         Some("ci") => ci(&args[1..]),
         Some("reply") => reply(&args[1..]),
         Some("ship") => ship(&args[1..]),
+        Some("crossings") => crossings(&args[1..]),
+        Some("diff") => diff(&args[1..]),
         Some("export") => export(&args[1..]),
         Some("ledger") => read_ledger(&args[1..]),
         Some("import") => import(&args[1..]),
@@ -1027,6 +1031,37 @@ fn ship(args: &[String]) -> Result<()> {
         bail!("fleetd ({code}): {body}");
     }
     println!("{body}");
+    Ok(())
+}
+
+/// `fleetc crossings [--iid <N>] [--brief]` — the MR (default: `FLEET_SHIP`) beside our open tickets,
+/// as JSON: what each one's MR shares with it, and each ticket's text unless `--brief`.
+fn crossings(args: &[String]) -> Result<()> {
+    let brief = args.iter().any(|a| a == "--brief");
+    let rest: Vec<String> = args.iter().filter(|a| *a != "--brief").cloned().collect();
+    let iid = require_iid(&rest, "crossings")?;
+    let (code, body) = wire::get_json(&socket(), &format!("/crossings?iid={iid}{}", if brief { "&brief=1" } else { "" }))?;
+    anyhow::ensure!(code == 200, "fleetd ({code}): {body}");
+    println!("{body}");
+    Ok(())
+}
+
+/// `fleetc diff --iid <N> --path <file>` — one MR's diff of one file, as the forge shows it.
+fn diff(args: &[String]) -> Result<()> {
+    let (mut iid, mut path) = (None, None);
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
+        match flag.as_str() {
+            "--iid" => iid = Some(take()?.parse::<i64>().map_err(|_| anyhow!("--iid must be a number"))?),
+            "--path" => path = Some(take()?),
+            other => bail!("diff: unknown flag {other:?}"),
+        }
+    }
+    let (iid, path) = (iid.ok_or_else(|| anyhow!("diff needs --iid <N>"))?, path.ok_or_else(|| anyhow!("diff needs --path <file>"))?);
+    let (code, body) = wire::get_json(&socket(), &format!("/diff?iid={iid}&path={}", wire::pct_encode(&path)))?;
+    anyhow::ensure!(code == 200, "fleetd ({code}): {body}");
+    print!("{body}");
     Ok(())
 }
 

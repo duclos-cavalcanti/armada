@@ -7,10 +7,12 @@
 
 mod collector;
 mod config;
+mod crossings;
 mod filesystem;
 mod git;
 mod github;
 mod gitlab;
+mod health;
 mod jira;
 mod logbook;
 mod otlp;
@@ -130,10 +132,11 @@ fn checks(
     forge: &dyn Forge,
     tracker: &dyn Tracker,
     host: &dyn SessionHost,
-) -> [(&'static str, Result<String>); 5] {
+) -> [(&'static str, Result<String>); 6] {
     [
         ("runtime", preflight::runtime(project)),
         ("project", git::GitWorktrees::new(&cfg.project.path).preflight()),
+        ("health", health::preflight(&cfg.project.path)),
         ("forge", forge.preflight()),
         ("tracker", tracker.preflight()),
         ("host", host.preflight()),
@@ -170,6 +173,16 @@ fn boot(project: &wire::Project, cfg: config::Config) -> Result<()> {
     tracing::info!("preflight · {}", project.root.display());
     preflight::log(&checks(project, &cfg, forge.as_ref(), tracker.as_ref(), &host))?;
     let ledger = Ledger::open(&project.ledger())?;
+
+    // Strike the review worktrees left behind while fleetd was down; a live lookout keeps its own.
+    let berthed: Vec<String> = SessionRepo::live(&ledger)?
+        .into_iter()
+        .filter(|s| s.kind == domain::CrewKind::Lookout)
+        .map(|s| s.worktree_path)
+        .collect();
+    if let Err(e) = git::GitWorktrees::new(&cfg.project.path).sweep_reviews(&berthed) {
+        tracing::warn!("review worktree sweep failed (non-fatal): {e:#}");
+    }
 
     // Seed the snapshot once so /context isn't empty before the first poll.
     let snapshot: Snapshot = Arc::new(Mutex::new(context(&ledger, &host, &cfg.thresholds())?));

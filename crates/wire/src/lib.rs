@@ -309,6 +309,32 @@ pub fn split_dir_flag(mut args: Vec<String>) -> Result<(Option<std::path::PathBu
     Ok((Some(dir), args))
 }
 
+/// Percent-encode a query value (a file path) for a GET line: every byte but the unreserved ones.
+pub fn pct_encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// Decode a percent-encoded query value; `None` on a malformed escape or invalid UTF-8.
+pub fn pct_decode(s: &str) -> Option<String> {
+    let (mut out, bytes) = (Vec::new(), s.as_bytes());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            out.push(u8::from_str_radix(s.get(i + 1..i + 3)?, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
 /// POST a JSON body to `path` on the fleetd socket; returns `(status_code, body)`.
 /// GET `path` over the UDS and return `(status, body)` — the read twin of `post_json` (no body).
 pub fn get_json(socket: &str, path: &str) -> Result<(u16, String)> {
@@ -350,6 +376,14 @@ fn parse_response(resp: &str) -> Result<(u16, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_survives_the_query_line() {
+        let p = "crates/a b/ü&x=1.rs";
+        assert_eq!(pct_encode(p), "crates/a%20b/%C3%BC%26x%3D1.rs");
+        assert_eq!(pct_decode(&pct_encode(p)).as_deref(), Some(p));
+        assert_eq!(pct_decode("%zz"), None);
+    }
 
     #[test]
     fn project_is_the_nearest_folder_holding_fleet_toml() {

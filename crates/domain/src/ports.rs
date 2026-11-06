@@ -217,6 +217,15 @@ pub trait Forge {
     fn post_thread(&self, iid: i64, _body: &str) -> Result<()> {
         anyhow::bail!("!{iid}: this forge has no top-level review threads")
     }
+    /// The paths each MR changes, every iid at once where the forge allows (one query on GitLab):
+    /// what a lookout's crossing check holds a review against, with no branch fetched.
+    fn changed_paths(&self, _iids: &[i64]) -> Result<Vec<(i64, Vec<String>)>> {
+        anyhow::bail!("this forge can't list an MR's changed paths")
+    }
+    /// The MR's diff of one file — its hunks, as the forge shows them.
+    fn file_diff(&self, iid: i64, _path: &str) -> Result<String> {
+        anyhow::bail!("!{iid}: this forge can't show an MR's diff")
+    }
     /// Re-run the MR's failed CI jobs (a transient failure's fix — no commit).
     fn retry_ci(&self, iid: i64) -> Result<()>;
     /// Hand our MR to the team's review: mark it ready (a draft is the pre-review state), resolve
@@ -248,6 +257,11 @@ pub trait Tracker {
     fn children(&self, parent: &TicketKey) -> Result<Vec<TrackerTicket>>;
     /// The ticket's full text — its board facts, type, and description (`fleetc ticket <KEY>`).
     fn read(&self, key: &TicketKey) -> Result<TicketDetail>;
+    /// Several tickets' full text, in one call where the tracker allows (one search on Jira); one
+    /// `read` each otherwise. A key it can't read is left out.
+    fn read_many(&self, keys: &[TicketKey]) -> Result<Vec<TicketDetail>> {
+        Ok(keys.iter().filter_map(|k| self.read(k).ok()).collect())
+    }
     /// Create a ticket in To Do from `draft`, with its "is blocked by" edges and labels; returns its key.
     fn create(&self, draft: &TicketDraft) -> Result<TicketKey>;
     /// Replace the ticket's description with `description` (markdown, as `read` returns it).

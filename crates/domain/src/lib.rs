@@ -176,6 +176,7 @@ pub enum EventKind {
     ConvoyAnchored, ConvoyWeighed,
     LookoutAnchored, LookoutWeighed,
     TickRan,
+    HealthChecked,
 }
 
 // ── entities (facts) ───────────────────────────────────────────────────────────
@@ -391,6 +392,38 @@ pub struct ShipView {
     /// The fleet dispatched its ticket (an order): one of our MRs, not an ally's.
     #[serde(default)]
     pub ours: bool,
+}
+
+/// `fleetc crossings` — what a lookout's crossing check holds an MR against: the paths it changes,
+/// and each of our open tickets beside it (in an active convoy, or carried by one of our MRs), with
+/// the ticket's text and what its own MR, if any, shares with this one. Read-layer, never a table.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Crossings {
+    pub iid: i64,
+    pub title: String,
+    pub paths: Vec<String>,
+    pub tickets: Vec<Crossing>,
+}
+
+/// One of our open tickets, beside the MR under review.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Crossing {
+    pub key: TicketKey,
+    pub title: String,
+    pub status: Option<TicketStatus>,
+    pub convoy: Option<ConvoyKey>,
+    /// Its open MR, if any.
+    pub iid: Option<i64>,
+    pub branch: Option<String>,
+    /// The paths both MRs change.
+    pub shared_paths: Vec<String>,
+    /// The folders both MRs change files in (a file's folder, to three levels), beyond the shared
+    /// paths: the same crate or module, touched apart.
+    pub shared_folders: Vec<String>,
+    /// The ticket's text as the tracker holds it (its goal and acceptance criteria). Left out of a
+    /// brief answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
 }
 
 /// A ship as the **forge** reports it (a `Forge` port DTO) — facts + mirror fields
@@ -1046,6 +1079,7 @@ impl EventKind {
             EventKind::LookoutAnchored => "lookout_anchored",
             EventKind::LookoutWeighed => "lookout_weighed",
             EventKind::TickRan => "tick_ran",
+            EventKind::HealthChecked => "health_checked",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -1076,6 +1110,7 @@ impl EventKind {
             "lookout_anchored" => Some(Self::LookoutAnchored),
             "lookout_weighed" => Some(Self::LookoutWeighed),
             "tick_ran" => Some(Self::TickRan),
+            "health_checked" => Some(Self::HealthChecked),
             _ => None,
         }
     }

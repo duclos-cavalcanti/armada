@@ -333,6 +333,31 @@ impl Forge for GlabForge {
         Ok(())
     }
 
+    fn changed_paths(&self, iids: &[i64]) -> Result<Vec<(i64, Vec<String>)>> {
+        let mut all = Vec::new();
+        for chunk in iids.chunks(100) {
+            let list = chunk.iter().map(|i| format!("\"{i}\"")).collect::<Vec<_>>().join(",");
+            let query = format!(
+                r#"{{ projects(ids: ["gid://gitlab/Project/{}"]) {{ nodes {{ mergeRequests(iids: [{list}], first: 100) {{
+                     nodes {{ iid diffStats {{ path }} }} }} }} }} }}"#,
+                self.project
+            );
+            let out = Command::new("glab").args(["api", "graphql", "-f", &format!("query={query}")]).output()?;
+            ensure!(out.status.success(), "glab api graphql (diffStats) failed: {}", crate::preflight::one_line(&out.stderr));
+            let v: serde_json::Value = serde_json::from_slice(&out.stdout)?;
+            if let Some(errors) = v.get("errors") {
+                anyhow::bail!("glab api graphql (diffStats): {errors}");
+            }
+            all.extend(gql_changed_paths(&v));
+        }
+        Ok(all)
+    }
+
+    fn file_diff(&self, iid: i64, path: &str) -> Result<String> {
+        let files = self.api_paginate(&format!("projects/{}/merge_requests/{iid}/diffs?per_page=100", self.project))?;
+        diff_of(&files, path, "diff").ok_or_else(|| anyhow!("!{iid} doesn't change {path}"))
+    }
+
     fn retry_ci(&self, iid: i64) -> Result<()> {
         let (pid, _) = self.latest_pipeline(iid)?.ok_or_else(|| anyhow!("!{iid}: no pipeline to retry"))?;
         let path = format!("projects/{}/pipelines/{pid}/retry", self.project);
@@ -488,6 +513,30 @@ const MR_FIELDS: &str = "iid title webUrl sourceBranch targetBranch state draft 
 
 /// One GraphQL MR node (`MR_FIELDS`) → a ship. GraphQL's enums are upper-case (`OPENED`,
 /// `CI_MUST_PASS`, `SUCCESS`); the fleet keeps REST's lower-case vocabulary.
+/// Each MR's changed paths, from a `mergeRequests { nodes { iid diffStats { path } } }` answer.
+fn gql_changed_paths(v: &serde_json::Value) -> Vec<(i64, Vec<String>)> {
+    let nodes = v.pointer("/data/projects/nodes/0/mergeRequests/nodes").and_then(|n| n.as_array());
+    nodes
+        .into_iter()
+        .flatten()
+        .filter_map(|n| {
+            let iid = n.get("iid")?.as_str()?.parse().ok()?;
+            let stats = n.get("diffStats")?.as_array()?;
+            Some((iid, stats.iter().filter_map(|s| Some(s.get("path")?.as_str()?.to_string())).collect()))
+        })
+        .collect()
+}
+
+/// One file's diff out of an MR's changed files (GitLab's `/diffs` entries, GitHub's `/files`),
+/// matched by its new path or, for a rename or deletion, its old one. `field` names the hunks.
+pub(crate) fn diff_of(files: &[serde_json::Value], path: &str, field: &str) -> Option<String> {
+    files.iter().find_map(|f| {
+        let named = |k: &str| f.get(k).and_then(|p| p.as_str()) == Some(path);
+        (named("new_path") || named("old_path") || named("filename") || named("previous_filename"))
+            .then(|| f.get(field).and_then(|d| d.as_str()).unwrap_or("").to_string())
+    })
+}
+
 fn gql_to_ship(m: &serde_json::Value, prefix: &str) -> Option<ForgeShip> {
     let iid = m.get("iid")?.as_str()?.parse().ok()?;
     let s = |k: &str| m.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -581,6 +630,29 @@ mod tests {
        "approvalsRequired":2,"approvalsLeft":2,"resolvableDiscussionsCount":0,"resolvedDiscussionsCount":0,
        "headPipeline":null,"blockingMergeRequests":{"visibleMergeRequests":[]}}
     ]"#;
+
+    #[test]
+    fn changed_paths_and_one_files_diff_read_off_the_forges_answers() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"data":{"projects":{"nodes":[{"mergeRequests":{"nodes":[
+                 {"iid":"2409","diffStats":[{"path":"infra/a.py"},{"path":"docs/b.md"}]},
+                 {"iid":"2411","diffStats":[]}]}}]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            gql_changed_paths(&v),
+            vec![(2409, vec!["infra/a.py".to_string(), "docs/b.md".to_string()]), (2411, vec![])]
+        );
+
+        let files: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[{"old_path":"a.rs","new_path":"a.rs","diff":"@@ -1 +1 @@\n-x\n+y"},
+                {"old_path":"old.rs","new_path":"new.rs","diff":"@@ rename"}]"#,
+        )
+        .unwrap();
+        assert_eq!(diff_of(&files, "a.rs", "diff").as_deref(), Some("@@ -1 +1 @@\n-x\n+y"));
+        assert_eq!(diff_of(&files, "old.rs", "diff").as_deref(), Some("@@ rename"), "a rename, by its old path");
+        assert_eq!(diff_of(&files, "c.rs", "diff"), None);
+    }
 
     fn ships(prefix: &str) -> Vec<ForgeShip> {
         let v: serde_json::Value = serde_json::from_str(NODES).unwrap();

@@ -71,6 +71,13 @@ git update-index --no-skip-worktree .claude/settings.json
 git checkout .claude/settings.json
 ```
 
+Each project's checkout carries the kit's ref guard, linked into its `.git/hooks` (every
+worktree of the checkout runs it). fleetd refuses to start without it:
+
+```bash
+FLEET_PROJECT=<name> ./install.sh --hooks   # link hooks/git-hook-* into the project's checkout
+```
+
 ### 3. Run
 
 ```bash
@@ -102,6 +109,25 @@ folder, so you come back to it exactly as you left it.
 `make snapshot` (a consistent copy, safe beside a running fleet) and restore it with
 `make import` (with the fleet stopped).
 
+#### Dry-run
+
+Start fleetd planning only: nothing is spawned, nothing transitioned.
+
+```bash
+FLEET_DRY_RUN=true make restart FLEET_PROJECT=<name>
+fleetc settings set dry_run true      # make it stick in the ledger too
+```
+
+`dry_run` resolves the environment, then the ledger (`fleetc settings`), then `fleet.toml`: the
+variable beats a live `dry_run=false` in the ledger, which beats the file. Reconcile then only plans
+and logs: no spawn, heal, wake, handoff, reap, captain or lookout, so no tracker transitions and no
+forge writes. Still live: the sync (it reads the tracker and forge into the ledger) and every
+`fleetc` command you or a cog sends.
+
+To go live, restart without the variable (the ledger keeps it dry), then
+`fleetc settings set dry_run false`. While the variable is set, that command has no effect. Expect
+a burst of queued actions on the first live tick.
+
 ### 4. Notes (optional)
 
 The repo root is an Obsidian vault, with Excalidraw for drawings:
@@ -128,13 +154,16 @@ armada/
 ├── .claude/     Claude config (settings, CLAUDE.md, scripts), stowed to ~/.claude/
 ├── .obsidian/   the Obsidian vault's config (notes on the repo); `make notes` fetches its plugin
 ├── harness/     apply.sh + gitignored per-deployment settings profiles
+├── hooks/       the guards: git's ref guard (linked into each checkout by `install.sh --hooks`)
+│                and the lookouts' command guard (attached to each lookout by fleetd)
 ├── demos/       architecture decks (open-slide) + the fleet viewer (React Flow)
 ├── Brewfile     dependency manifest
-├── install.sh   install / --uninstall (gates on Brewfile + stows + installs fleetc)
+├── install.sh   install / --uninstall (gates on Brewfile + stows + installs fleetc) / --hooks
 ├── fleet.sh     start, stop and watch a project's fleet (`make` wraps it)
 ├── Makefile     one-word wrappers (run `make` for the cheat sheet)
 ├── TODO.md      the forward backlog
 ├── KNOWN_ISSUES.md  accepted edge cases + workarounds
 └── projects/    one folder per project: fleet.toml + .fleet/ state + checkout + ticket worktrees
+                 + review/ (the lookouts' review worktrees)
                  (gitignored, except the armada-test showcase's config + tickets)
 ```

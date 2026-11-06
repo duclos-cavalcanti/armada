@@ -96,6 +96,8 @@ fn handle(
         (Some("GET"), Some(p)) if p.starts_with("/ci?") => handle_ci(cmds, p),
         (Some("POST"), Some("/reply")) => handle_reply(&request, cmds),
         (Some("GET"), Some(p)) if p.starts_with("/ship?") => handle_ship(cmds, p),
+        (Some("GET"), Some(p)) if p.starts_with("/crossings?") => handle_crossings(cmds, p),
+        (Some("GET"), Some(p)) if p.starts_with("/diff?") => handle_diff(cmds, p),
         (Some("POST"), Some("/review-post")) => handle_review_post(&request, cmds),
         (Some("POST"), Some(p)) if p.starts_with("/retry-ci?") => handle_retry_ci(cmds, p),
         (Some("POST"), Some("/launch")) => handle_launch(&request, cmds, deployment),
@@ -377,6 +379,45 @@ fn handle_ship(cmds: &Sender<Command>, path: &str) -> String {
         Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
         Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
     }
+}
+
+/// `GET /crossings?iid=N[&brief=1]` — the MR beside our open tickets: what their MRs share with it,
+/// and (unless brief) each ticket's text.
+fn handle_crossings(cmds: &Sender<Command>, path: &str) -> String {
+    let Some(iid) = parse_iid(path) else {
+        return http_response("400 Bad Request", "text/plain", "missing/invalid ?iid=");
+    };
+    let brief = query(path, "brief").is_some_and(|b| b == "1");
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::GetCrossings { iid, brief, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(c)) => http_response("200 OK", "application/json", &serde_json::to_string(&c).unwrap_or_default()),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
+/// `GET /diff?iid=N&path=<percent-encoded>` — the MR's diff of one file.
+fn handle_diff(cmds: &Sender<Command>, path: &str) -> String {
+    let (Some(iid), Some(file)) = (parse_iid(path), query(path, "path").and_then(wire::pct_decode)) else {
+        return http_response("400 Bad Request", "text/plain", "missing/invalid ?iid= or &path=");
+    };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::GetDiff { iid, path: file, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(diff)) => http_response("200 OK", "text/plain", &diff),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
+/// One query parameter's raw (still encoded) value.
+fn query<'a>(path: &'a str, key: &str) -> Option<&'a str> {
+    path.split_once('?')?.1.split('&').find_map(|kv| kv.strip_prefix(key)?.strip_prefix('='))
 }
 
 /// `POST /review-post` — post one review comment on an MR, approving it when asked.
@@ -1023,6 +1064,8 @@ mod tests {
                     Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Reply { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetShip { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::GetCrossings { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::GetDiff { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::PostReview { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::RetryCi { reply, .. } => { let _ = reply.send(Ok(())); }
                 }
@@ -1088,6 +1131,8 @@ mod tests {
                     Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Reply { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetShip { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::GetCrossings { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::GetDiff { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::PostReview { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::RetryCi { reply, .. } => { let _ = reply.send(Ok(())); }
                 }

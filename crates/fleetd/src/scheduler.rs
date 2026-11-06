@@ -52,6 +52,8 @@ type ShipReply = std::sync::mpsc::Sender<std::result::Result<domain::ShipView, S
 type CiReply = std::sync::mpsc::Sender<std::result::Result<domain::CiReport, String>>;
 /// A ticket read's reply — its full text.
 type TicketReply = std::sync::mpsc::Sender<std::result::Result<domain::TicketDetail, String>>;
+/// A crossings read's reply — the MR under review beside our open tickets.
+type CrossingsReply = std::sync::mpsc::Sender<std::result::Result<domain::Crossings, String>>;
 /// A launch's reply — the new MR's URL.
 type UrlReply = std::sync::mpsc::Sender<std::result::Result<String, String>>;
 /// A settings-list read's reply — every live lever's effective value + source.
@@ -79,6 +81,8 @@ pub enum Command {
     Rebase { iid: i64, reply: Reply },          // an action: server-side rebase an MR (forge)
     Reply { cmd: wire::ReplyCmd, reply: Reply },
     GetShip { iid: i64, reply: ShipReply },           // a read: one ship + snapshot + fetch ref (ledger + forge)
+    GetCrossings { iid: i64, brief: bool, reply: CrossingsReply }, // a read: the MR beside our open tickets (ledger + forge + tracker)
+    GetDiff { iid: i64, path: String, reply: UrlReply }, // a read: an MR's diff of one file (forge)
     PostReview { cmd: wire::ReviewPostCmd, reply: Reply }, // an action: a summary review comment (+ approve) (forge) // an action: answer (and resolve) a review thread (forge)
     GetCi { iid: i64, reply: CiReply },         // a read: an MR's CI status + failed jobs (forge)
     RetryCi { iid: i64, reply: Reply },         // an action: re-run an MR's failed CI jobs (forge)
@@ -113,6 +117,8 @@ pub fn run(
 ) {
     let (mut next_poll, mut next_sync, mut next_reconcile) =
         (Instant::now(), Instant::now(), Instant::now());
+    // The last health check's misses (`None`: not run yet). Boot passed it; each sync re-runs it.
+    let mut health: Option<Vec<String>> = None;
 
     // The cadences + thresholds + dry_run are LIVE levers (`settings` overlay): each tick re-reads
     // the effective value off the ledger, so a `fleetc settings set` takes effect with no restart.
@@ -127,6 +133,9 @@ pub fn run(
             if let Err(e) = tick_sync(&ledger, forge.as_ref(), tracker.as_ref()) {
                 tracing::error!("sync tick error: {e:#}");
             }
+            if let Err(e) = tick_health(&ledger, &cfg.project.path, &mut health) {
+                tracing::error!("health check error: {e:#}");
+            }
             next_sync = now + Duration::from_secs(settings::sync_secs(&cfg, &ledger));
         }
         if now >= next_reconcile {
@@ -136,6 +145,7 @@ pub fn run(
             let dry_run = settings::dry_run(&cfg, &ledger);
             let levers = reconcile::Levers {
                 dry_run,
+                healthy: health.as_ref().is_none_or(|p| p.is_empty()),
                 captain_sleep_secs: settings::captain_sleep_secs(&cfg, &ledger),
                 admirals: settings::admirals(&cfg, &ledger),
                 lookouts: settings::lookouts(&cfg, &ledger),
@@ -269,6 +279,12 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         }
         Command::GetShip { iid, reply } => {
             let _ = reply.send(ship_view(ledger, forge, iid).map_err(|e| format!("{e:#}")));
+        }
+        Command::GetCrossings { iid, brief, reply } => {
+            let _ = reply.send(crate::crossings::crossings(ledger, tracker, forge, iid, brief).map_err(|e| format!("{e:#}")));
+        }
+        Command::GetDiff { iid, path, reply } => {
+            let _ = reply.send(forge.file_diff(iid, &path).map_err(|e| format!("{e:#}")));
         }
         Command::PostReview { cmd, reply } => {
             let _ = reply.send(post_review(ledger, forge, &cmd).map_err(|e| format!("{e:#}")));
@@ -1031,11 +1047,35 @@ pub fn tick_sync(ledger: &Ledger, forge: &dyn Forge, tracker: &dyn Tracker) -> R
     Ok(())
 }
 
+/// Re-run the health check after a sync. A change (or the first run) is recorded as a
+/// `health_checked` event, which the dashboard's `fleet:` light reads, and logged: a miss loudly, as
+/// it holds the lookouts until a check passes.
+fn tick_health(ledger: &Ledger, checkout: &str, last: &mut Option<Vec<String>>) -> Result<()> {
+    let problems = crate::health::problems(checkout);
+    if last.as_ref() == Some(&problems) {
+        return Ok(());
+    }
+    match problems.as_slice() {
+        [] => tracing::info!("health: ok"),
+        misses => tracing::error!("health: {} — lookouts held until it passes", misses.join("; ")),
+    }
+    ledger.append(
+        &now_rfc3339(),
+        EventKind::HealthChecked,
+        EntityKind::Ticker,
+        "health",
+        &serde_json::json!({ "ok": problems.is_empty(), "problems": problems }),
+    )?;
+    *last = Some(problems);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     const LEVERS: reconcile::Levers = reconcile::Levers {
         dry_run: false,
+        healthy: true,
         captain_sleep_secs: 0,
         admirals: 0,
         lookouts: 1,
@@ -1057,10 +1097,14 @@ mod tests {
         noted: std::cell::RefCell<Vec<(i64, String)>>,
         state: Option<ShipState>, // what `snapshot` reports (None: Open)
         threads: i64,             // the open review threads `snapshot` reports
+        paths: Vec<(i64, Vec<String>)>, // what `changed_paths` reports
     }
     impl Forge for FakeForge {
         fn preflight(&self) -> Result<String> {
             Ok("fake".into())
+        }
+        fn changed_paths(&self, iids: &[i64]) -> Result<Vec<(i64, Vec<String>)>> {
+            Ok(self.paths.iter().filter(|(i, _)| iids.contains(i)).cloned().collect())
         }
         fn stacks(&self) -> bool {
             true
@@ -1343,6 +1387,74 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn each_change_in_health_is_recorded_once_for_the_dashboards_light() {
+        let (dir, checkout, _) = crate::git::fixture::checkout("tick-health", &[]);
+        let db = Ledger::in_memory().unwrap();
+        let mut last = None;
+        let checks = |db: &Ledger| db.events_of(EventKind::HealthChecked).unwrap();
+        tick_health(&db, &checkout, &mut last).unwrap();
+        tick_health(&db, &checkout, &mut last).unwrap();
+        assert_eq!(checks(&db).len(), 1, "unguarded, once");
+        assert_eq!(checks(&db)[0].payload["ok"], false);
+
+        let link = std::path::Path::new(&checkout).join(".git/hooks/reference-transaction");
+        std::os::unix::fs::symlink(crate::health::kit_hooks().join(crate::health::REF_GUARD), link).unwrap();
+        tick_health(&db, &checkout, &mut last).unwrap();
+        assert_eq!(checks(&db).len(), 2);
+        assert_eq!(checks(&db)[1].payload["ok"], true, "guarded: the light comes back on");
+        assert_eq!(last, Some(vec![]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn crossings_set_an_mr_beside_our_open_tickets_and_what_their_mrs_share_with_it() {
+        let db = Ledger::in_memory().unwrap();
+        let c9 = ConvoyKey("PROJ-9".into());
+        let in_c9 = |key, status| TrackerTicket { convoy: Some(c9.clone()), ..tt(key, status) };
+        let tracker = FakeTracker::new(vec![
+            in_c9("PROJ-1", TicketStatus::InProgress), // in the convoy, with our MR
+            in_c9("PROJ-2", TicketStatus::Todo),       // in the convoy, no MR yet
+            in_c9("PROJ-3", TicketStatus::Done),       // delivered: not beside anything
+            tt("PROJ-4", TicketStatus::InQa),          // no convoy, but our MR carries it
+            tt("PROJ-5", TicketStatus::InProgress),    // neither: not ours to hold it against
+        ]);
+        sync::sync_board(&db, &tracker, "now").unwrap();
+        ConvoyRepo::open(&db, &c9, None, "t").unwrap();
+        our_ship(&db, "PROJ-1", 11);
+        our_ship(&db, "PROJ-4", 12);
+        let ally = Ship {
+            id: ShipId(0),
+            ticket: None,
+            iid: 77,
+            url: "u".into(),
+            target: "master".into(),
+            source: "ally/x".into(),
+            pilot: "ally".into(),
+            created_at: "t".into(),
+            ended_at: None,
+            swept: None,
+            reviewed: None,
+            rounds: 0,
+        };
+        ShipRepo::upsert(&db, &ally).unwrap();
+        let p = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let forge = FakeForge {
+            paths: vec![(77, p(&["crates/a/src/x.rs", "crates/b/src/z.rs"])), (11, p(&["crates/a/src/x.rs", "crates/b/src/y.rs"]))],
+            ..Default::default()
+        };
+
+        let c = crate::crossings::crossings(&db, &tracker, &forge, 77, false).unwrap();
+        assert_eq!(c.paths, p(&["crates/a/src/x.rs", "crates/b/src/z.rs"]));
+        let keys: Vec<&str> = c.tickets.iter().map(|t| t.key.0.as_str()).collect();
+        assert_eq!(keys, ["PROJ-1", "PROJ-2", "PROJ-4"]);
+        let one = &c.tickets[0];
+        assert_eq!((one.iid, one.shared_paths.clone(), one.shared_folders.clone()), (Some(11), p(&["crates/a/src/x.rs"]), p(&["crates/b/src"])));
+        assert!(c.tickets[1].iid.is_none() && c.tickets[1].shared_paths.is_empty(), "no MR: nothing shared, only its text");
+        assert!(c.tickets.iter().all(|t| t.text.is_some()), "each with its text");
+        assert!(crate::crossings::crossings(&db, &tracker, &forge, 77, true).unwrap().tickets.iter().all(|t| t.text.is_none()), "brief");
     }
 
     #[test]

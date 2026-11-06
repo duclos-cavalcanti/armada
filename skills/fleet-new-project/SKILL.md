@@ -2,16 +2,17 @@
 description: >-
   Set up a new fleet project: grill the operator on what fleet.toml needs (forge, tracker,
   checkout, merge policy), then create projects/<name>/ with its fleet.toml, its tickets/ folder
-  (filesystem tracker), and its checkout, and run preflight until it's green. Run from the
-  armada repo root. The repeatable way to add a project.
+  (filesystem tracker), its review/ folder, and its checkout, and run preflight until it's green.
+  Run from the armada repo root. The repeatable way to add a project.
 argument-hint: "[name]"
 ---
 
 # Skill: fleet-new-project
 
 You are adding a project to the fleet. A project is a folder, `projects/<name>/`: its
-`fleet.toml`, its checkout, its ticket worktrees, and its runtime state in `.fleet/` (fleetd
-creates that). Your job: ask what you need, write the folder, prove it with preflight.
+`fleet.toml`, its checkout, its ticket worktrees, its lookouts' review worktrees in `review/`,
+and its runtime state in `.fleet/` (fleetd creates that). Your job: ask what you need, write the
+folder, prove it with preflight.
 
 Run from the **armada repo root** (there's no project yet, so `fleetc` can't help). The
 tracked showcase `projects/armada-test/fleet.toml` is the worked example of every field.
@@ -51,6 +52,9 @@ Read the answers back as the fleet.toml you'll write, and get a yes before Step 
 ```bash
 NAME=<name>
 mkdir -p "projects/$NAME"
+# the lookouts' review worktrees: fleetd berths each at review/<iid>, a detached checkout of the
+# MR's head, and strikes it when the lookout stands down
+mkdir -p "projects/$NAME/review"
 # filesystem tracker only:
 mkdir -p "projects/$NAME/tickets"
 git clone "<clone-url>" "projects/$NAME/<checkout>"
@@ -89,9 +93,14 @@ project = "<PREFIX>"
 `projects/` is gitignored (only the showcase is tracked), so the new project stays local;
 whether to version it is the operator's call.
 
-## Step 3 — Preflight until green
+## Step 3 — Guard the checkout, then preflight until green
+
+The kit's ref guard keeps a lookout (or a test that borrowed the checkout's `.git`) from moving the
+branches every worktree shares. Link it into the new checkout first: preflight's `health` check
+refuses to start fleetd without it.
 
 ```bash
+FLEET_PROJECT=$NAME ./install.sh --hooks
 make preflight FLEET_PROJECT=$NAME
 ```
 

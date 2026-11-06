@@ -36,6 +36,10 @@ Cycle with `Tab` / `S-Tab`:
 - **Log** — fleetd's log (`.fleet/fleetd.log`), newest first, warnings yellow and errors red;
   the title says whether fleetd is up. The footer flags a down fleetd from every tab.
 
+The tab strip's title is the health light, `fleet: ●`: green while fleetd's last health check
+passed (the ref guard is linked, the checkout's git settings are clean). On a miss it goes out
+(`○`, red), the footer says why, and no lookout launches until a check passes.
+
 ## Keys
 
 | Key | Action |

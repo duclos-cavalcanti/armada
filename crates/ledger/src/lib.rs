@@ -54,6 +54,26 @@ impl Ledger {
             .optional()?)
     }
 
+    /// Every event of `kind`, oldest first.
+    pub fn events_of(&self, kind: EventKind) -> Result<Vec<Event>> {
+        let mut stmt = self.conn.prepare("SELECT * FROM events WHERE kind = ?1 ORDER BY seq")?;
+        let rows = stmt.query_map(params![kind.as_str()], row_to_event)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The most recent health check fleetd recorded (`payload.ok`, `payload.problems`): what the
+    /// dashboard's `fleet:` light shows. `None` before the first check.
+    pub fn latest_health(&self) -> Result<Option<Event>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT * FROM events WHERE kind = ?1 ORDER BY seq DESC LIMIT 1",
+                params![EventKind::HealthChecked.as_str()],
+                row_to_event,
+            )
+            .optional()?)
+    }
+
     /// The convoy's plan history, oldest first: each `ConvoyPlanned` (`payload.plan`: the plan as
     /// set; `null`: cleared). The read behind `fleetc convoy plan`.
     pub fn plan_history(&self, convoy: &ConvoyKey) -> Result<Vec<Event>> {

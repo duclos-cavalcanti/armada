@@ -14,6 +14,7 @@
 #   ./install.sh --home <dir>        override the harness home dir
 #   ./install.sh -u|--uninstall      uninstall (unstow) — the mirror of install
 #   ./install.sh --fleetc            build fleetc and put it on PATH (a claude install does this too)
+#   ./install.sh --hooks             link the kit's git hooks into each project's checkout ($FLEET_PROJECT, else all)
 #   ./install.sh --notes             fetch the Obsidian vault's Excalidraw plugin
 #   ./install.sh -h|--help           this help
 #
@@ -27,6 +28,9 @@
 #   .claude/*          → ~/.claude/   (loose config: CLAUDE.md, settings.json,
 #                        keybindings.json, scripts/; agent-memory/ + settings.local.json
 #                        are never stowed — project-/machine-scoped)
+#   --hooks ONLY:
+#   hooks/git-hook-<name> → <checkout>/.git/hooks/<name>, per project (every worktree of
+#                        the checkout shares its .git, so one link guards them all)
 #
 # HARNESS RESOLUTION — <harness-home> defaults to ~/.<harness> (claude → ~/.claude).
 # Override per-run with --home, or (claude) via $CLAUDE_HOME.
@@ -141,6 +145,36 @@ install_fleetc() {
     cargo install -q --path "$REPO/crates/fleetc" --force --target-dir "$REPO/target"
 }
 
+# ---- git hooks: the kit's guards, linked into each project's checkout ----
+# A project's checkout is fleet.toml's `[project] path`, relative to the project folder. A hook
+# already there that isn't ours is never replaced.
+link_hooks() {
+    local toml dir name path checkout hooks src link
+    for toml in "$REPO"/projects/*/fleet.toml; do
+        dir="$(dirname "$toml")"
+        name="$(basename "$dir")"
+        [[ -z "${FLEET_PROJECT:-}" || "$name" == "$FLEET_PROJECT" ]] || continue
+        path="$(awk -F'"' '/^\[/ { s = $0 } s == "[project]" && $1 ~ /^path[[:space:]]*=/ { print $2; exit }' "$toml")"
+        [[ "$path" == /* ]] && checkout="$path" || checkout="$dir/$path"
+        if ! hooks="$(git -C "$checkout" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/hooks"; then
+            echo "skip $name: no checkout at $checkout"
+            continue
+        fi
+        if [[ -n "$(git -C "$checkout" config --get core.hooksPath || true)" ]]; then
+            echo "warning: $name's checkout sets core.hooksPath, so git skips .git/hooks there" >&2
+        fi
+        for src in "$REPO"/hooks/git-hook-*; do
+            link="$hooks/${src##*/git-hook-}"
+            if [[ -e "$link" || -L "$link" ]] && [[ "$(readlink "$link" || true)" != "$src" ]]; then
+                echo "error: $link exists and isn't the kit's; not replacing it" >&2
+                return 1
+            fi
+            ln -sfn "$src" "$link"
+            echo "$name: $link → $src"
+        done
+    done
+}
+
 # ---- The Obsidian vault's Excalidraw plugin ----
 # Its code isn't tracked; its manifest.json is, and pins the version.
 notes() {
@@ -177,7 +211,7 @@ uninstall() {
     unstow_agents
 }
 
-usage() { sed -n '11,18p' "${BASH_SOURCE[0]}" | sed 's/^#[[:space:]]*//;s/^#//'; }
+usage() { sed -n '11,19p' "${BASH_SOURCE[0]}" | sed 's/^#[[:space:]]*//;s/^#//'; }
 
 main() {
     local mode=install
@@ -186,6 +220,7 @@ main() {
             install)            mode=install ;;
             -u|--uninstall)     mode=uninstall ;;
             --fleetc)           mode=install_fleetc ;;
+            --hooks)            mode=link_hooks ;;
             --notes)            mode=notes ;;
             -H|--harness)       HARNESS="${2:?--harness needs a value}"; shift ;;
             --home)             HOME_OVERRIDE="${2:?--home needs a value}"; shift ;;

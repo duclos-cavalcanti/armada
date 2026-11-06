@@ -63,8 +63,15 @@ fn render_help(f: &mut Frame) {
 fn render_tab_strip(f: &mut Frame, area: Rect, app: &App) {
     let titles: Vec<Line> = TabId::all().iter().map(|t| Line::from(t.label())).collect();
     let selected = TabId::all().iter().position(|t| *t == app.tab).unwrap_or(0);
+    // The health light: on while fleetd's last health check passed, out on a miss (the footer says
+    // why), dim before the first check.
+    let light = match health(&app.fleet.health) {
+        Some(Ok(())) => Span::styled("●", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Some(Err(_)) => Span::styled("○", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        None => Span::styled("·", Style::default().fg(Color::DarkGray)),
+    };
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title(" fleet "))
+        .block(Block::default().borders(Borders::ALL).title(Line::from(vec![Span::raw(" fleet: "), light, Span::raw(" ")])))
         .select(selected)
         .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
     f.render_widget(tabs, area);
@@ -213,8 +220,22 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         None => Span::raw(""),
     };
     let body = format!(" {flash}{zoom}{status}  ·  ? keys");
-    let line = Line::from(vec![Span::styled(body, dim), reply]);
+    let sick = match health(&app.fleet.health) {
+        Some(Err(why)) => Span::styled(format!(" health: {why} · lookouts held "), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        _ => Span::raw(""),
+    };
+    let line = Line::from(vec![sick, Span::styled(body, dim), reply]);
     f.render_widget(Paragraph::new(line), area);
+}
+
+/// fleetd's last health check: passed, or missed (why); `None` before the first one.
+fn health(check: &Option<Event>) -> Option<Result<(), String>> {
+    let p = &check.as_ref()?.payload;
+    if p.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Some(Ok(()));
+    }
+    let problems: Vec<&str> = p.get("problems").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|v| v.as_str()).collect();
+    Some(Err(problems.join("; ")))
 }
 
 // ── the line, by phase ───────────────────────────────────────────────────────────

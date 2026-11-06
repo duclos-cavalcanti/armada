@@ -293,6 +293,7 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
     // unless the operator anchored it. Then, unless the operator anchored the lookouts, LAUNCH on each
     // ship with no lookout on it whose head isn't reviewed (head_sha ≠ reviewed), oldest MR first: an
     // ally's open ship, or ours while its worker is in `review`. fleetd marks it reviewed at launch.
+    // A failed health check holds the launches (the guards a lookout relies on are off); stand-downs go on.
     let (mut seated, mut seated_ours, mut watched) = (0, 0, Vec::new());
     for cog in cogs {
         if cog.session.kind != CrewKind::Lookout || cog.session.ended_at.is_some() {
@@ -314,7 +315,7 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
             watched.extend(ship);
         }
     }
-    if !LookoutRepo::anchored(ledger)? {
+    if levers.healthy && !LookoutRepo::anchored(ledger)? {
         let (mut due, mut due_ours) = (Vec::new(), Vec::new());
         for ship in &armada {
             if ship.ended_at.is_some() || watched.contains(&&ship.id) {
@@ -632,6 +633,8 @@ fn instant(t: &str) -> Option<time::OffsetDateTime> {
 /// review skill (fleet.toml).
 pub struct Levers {
     pub dry_run: bool,
+    /// The last health check passed. A miss holds the lookouts: none launches until it passes again.
+    pub healthy: bool,
     pub captain_sleep_secs: u64,
     pub admirals: i64,
     pub lookouts: i64,
@@ -709,7 +712,7 @@ fn execute<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
         Action::StandDownCaptain { convoy } => stand_down_captain(ledger, host, convoy),
         Action::LaunchSailor { ticket } => launch_sailor(ledger, forge, host, ticket),
         Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, project, *iid, levers.review_skill.as_deref()),
-        Action::StandDownLookout { session } => stand_down_lookout(ledger, host, &SessionId(*session)),
+        Action::StandDownLookout { session } => stand_down_lookout(ledger, host, project, &SessionId(*session)),
         Action::LaunchAdmiral { ticket } => launch_admiral(ledger, host, project, ticket),
     }
 }
@@ -1271,13 +1274,15 @@ fn launch_sailor<H: SessionHost, F: Forge + ?Sized>(
     Ok(())
 }
 
-/// LaunchLookout — review ONE ship, picked by reconcile. Fresh-poll it, mark it `reviewed = head_sha`
-/// (the head this review covers), then launch a lookout with the MR's iid in `FLEET_SHIP` and the
-/// project's review skill, if it names one, in `FLEET_REVIEW_SKILL`. An ally's MR isn't ours to check
-/// out: its lookout runs in the project checkout and reviews by SHA. One of ours runs in its worker's
-/// worktree. Named for the MR's ticket when it carries one, else its iid. A tmux session of that name
-/// already up (another MR on the same ticket) waits its turn; a lookout already on the ship (the
-/// per-ship lock) is a benign skip.
+/// LaunchLookout — review ONE ship, picked by reconcile. Fresh-poll it, berth a review worktree at its
+/// head (`review/<iid>`, detached, beside the checkout, its target fetched), mark it
+/// `reviewed = head_sha` (the head this review covers), then launch a lookout there with the MR's iid
+/// in `FLEET_SHIP`, the project's review skill, if it names one, in `FLEET_REVIEW_SKILL`, and its
+/// command guard as `--settings`. Ours or an ally's alike: the lookout reads exactly the commit under
+/// review, in a tree no cog owns, with the review skill and doctrine of that head. Named for the MR's
+/// ticket when it carries one, else its iid. A tmux
+/// session of that name already up (another MR on the same ticket) waits its turn; a lookout already
+/// on the ship (the per-ship lock) is a benign skip, checked before the berth it would share.
 fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
     ledger: &Ledger,
     forge: &F,
@@ -1295,17 +1300,14 @@ fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
         Some(key) => format!("lookout-{}", key.0),
         None => format!("lookout-{iid}"),
     };
-    if host.alive(&tmux_session)? {
+    if host.alive(&tmux_session)? || lookout_on(ledger, &ship.id)? {
         return Ok(());
     }
 
     let snap = fresh_snapshot(ledger, forge, &ship)?;
+    let berth = crate::git::GitWorktrees::new(project).cut_review(iid, &forge.fetch_ref(iid), &ship.target, &snap.head_sha)?;
     ShipRepo::set_reviewed(ledger, &ship.id, Some(&snap.head_sha))?;
-    let worktree = match (&ship.ticket, is_ours(ledger, &ship)?) {
-        (Some(t), true) => OrderRepo::get(ledger, t)?.and_then(|o| o.worktree_path),
-        _ => None,
-    };
-    let cwd = worktree.as_deref().unwrap_or(project);
+    let cwd = berth.as_str();
 
     let hid = new_session_id();
     let session_id = match SessionRepo::start(
@@ -1331,7 +1333,9 @@ fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
     // fleet.toml's skill name is the operator's, but it rides a shell line: keep it to a plain name.
     let skill = review_skill.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric() || "-_:".contains(c)));
     let env = skill.map(|s| format!("FLEET_REVIEW_SKILL={s} ")).unwrap_or_default();
-    let cmd = format!("{env}FLEET_SHIP={iid} {}", launch_cmd("lookout", Launch::Fresh(&hid)));
+    // Its command guard rides in as `--settings`, on this launch only: no global config changes.
+    let guard = crate::health::lookout_settings().replace('\'', r"'\''");
+    let cmd = format!("{env}FLEET_SHIP={iid} {} --settings '{guard}'", launch_cmd("lookout", Launch::Fresh(&hid)));
     host.spawn(&tmux_session, Path::new(cwd), &cmd)?;
     ledger.append(
         &now_rfc3339(),
@@ -1343,9 +1347,10 @@ fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
     Ok(())
 }
 
-/// StandDownLookout — a lookout finished its review (or crashed, or its ship sank): end its session
-/// + kill its tmux (best-effort; already dead). Its ship is due again on its next push.
-fn stand_down_lookout<H: SessionHost>(ledger: &Ledger, host: &H, id: &SessionId) -> Result<()> {
+/// StandDownLookout — a lookout finished its review (or crashed, or its ship sank): end its session,
+/// kill its tmux (best-effort; already dead), and strike its review worktree. Its ship is due again
+/// on its next push.
+fn stand_down_lookout<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, id: &SessionId) -> Result<()> {
     let session = SessionRepo::get(ledger, id)?.ok_or_else(|| anyhow!("stand_down_lookout: no session {}", id.0))?;
     if session.ended_at.is_some() {
         return Ok(());
@@ -1358,6 +1363,10 @@ fn stand_down_lookout<H: SessionHost>(ledger: &Ledger, host: &H, id: &SessionId)
     }
     SessionRepo::end(ledger, id, &now_rfc3339())?;
     let _ = host.kill(&session.tmux_session);
+    // Best-effort, as at reap: a berth left behind is struck by the next cut or fleetd's boot sweep.
+    if let Err(e) = crate::git::GitWorktrees::new(project).strike_review(Path::new(&session.worktree_path)) {
+        tracing::warn!("stand down lookout {}: review worktree cleanup failed (non-fatal): {e:#}", id.0);
+    }
     ledger.append(
         &now_rfc3339(),
         EventKind::SessionEnded,
@@ -1469,6 +1478,7 @@ mod tests {
 
     const LIVE: Levers = Levers {
         dry_run: false,
+        healthy: true,
         captain_sleep_secs: 0,
         admirals: 0,
         lookouts: 1,
@@ -2867,32 +2877,50 @@ mod tests {
 
         mark_reviewed(&db, 77);
         let died = lookout_on_ship(&db, 77);
-        stand_down_lookout(&db, &host, &died.session.id).unwrap();
+        stand_down_lookout(&db, &host, "/project", &died.session.id).unwrap();
         assert_eq!(reviewed(&db), None, "no review stands: it's reviewed again");
 
         mark_reviewed(&db, 77);
         let done = lookout_on_ship(&db, 77);
         report(&db, &done, CogState::Lookout(LookoutState::Reviewed));
-        stand_down_lookout(&db, &host, &done.session.id).unwrap();
+        stand_down_lookout(&db, &host, "/project", &done.session.id).unwrap();
         assert_eq!(reviewed(&db).as_deref(), Some("s"), "its review stands");
     }
 
     #[test]
-    fn a_lookout_on_our_mr_runs_in_the_workers_worktree_with_the_review_skill() {
+    fn a_lookout_on_ours_or_an_allys_is_berthed_at_its_head_with_the_review_skill() {
+        let (dir, project, sha) = crate::git::fixture::checkout("skill", &[7, 77]);
         let db = db();
         worker_in_review(&db, "PROJ-1", 7, Liveness::Quiet);
-        let forge = FakeForge::new(); // no fresh poll: the last sync stands
+        allied_ship(&db, 77, ShipState::Open);
+        let forge = FakeForge::new();
         let host = FakeHost::new();
-        launch_lookout(&db, &forge, &host, "/project", 7, Some("mr-review")).unwrap();
+
+        *forge.snapshot.borrow_mut() = Some(forge_ship(7, &sha));
+        launch_lookout(&db, &forge, &host, &project, 7, Some("mr-review")).unwrap();
         let (name, cwd, cmd) = host.spawned.borrow()[0].clone();
-        assert_eq!((name.as_str(), cwd.as_str()), ("lookout-PROJ-1", "/wt/PROJ-1"));
+        assert_eq!(name, "lookout-PROJ-1");
+        assert_eq!(Path::new(&cwd), dir.join("review/7"), "ours too: berthed, not in its worker's worktree");
         assert!(cmd.starts_with("FLEET_REVIEW_SKILL=mr-review FLEET_SHIP=7 claude "), "{cmd}");
 
-        allied_ship(&db, 77, ShipState::Open);
-        launch_lookout(&db, &forge, &host, "/project", 77, Some("x; rm -rf /")).unwrap();
+        *forge.snapshot.borrow_mut() = Some(forge_ship(77, &sha));
+        launch_lookout(&db, &forge, &host, &project, 77, Some("x; rm -rf /")).unwrap();
         let (_, cwd, cmd) = host.spawned.borrow()[1].clone();
-        assert_eq!(cwd, "/project", "an ally's runs in the checkout");
+        assert_eq!(Path::new(&cwd), dir.join("review/77"), "an ally's: berthed, not in the checkout");
         assert!(cmd.starts_with("FLEET_SHIP=77 "), "a name that isn't plain never reaches the shell: {cmd}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_health_check_holds_new_lookouts_while_the_rest_stand_down() {
+        let db = db();
+        allied_ship(&db, 77, ShipState::Open);
+        let w = worker_in_review(&db, "PROJ-1", 7, Liveness::Quiet);
+        let mut dead = lookout_cog();
+        dead.liveness = Liveness::Dead;
+        let sick = Levers { healthy: false, ..LIVE };
+        assert_eq!(plan(&db, &[w.clone(), dead.clone()], true, &sick).unwrap(), vec![Action::StandDownLookout { session: 1 }]);
+        assert_eq!(launched(plan(&db, &[w, dead], true, &LIVE).unwrap()), [77, 7], "healthy again: they launch");
     }
 
     #[test]
@@ -2928,13 +2956,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn executes_launch_lookout_marks_reviewed_and_spawns_at_the_hub_with_the_iid() {
-        let db = db();
-        allied_ship(&db, 77, ShipState::Open);
-        let forge = FakeForge::new();
-        *forge.snapshot.borrow_mut() = Some(ForgeShip {
-            iid: 77,
+    /// What the forge says of ship `iid`, open at `head_sha`.
+    fn forge_ship(iid: i64, head_sha: &str) -> ForgeShip {
+        ForgeShip {
+            iid,
             url: "u".into(),
             target: "master".into(),
             source: String::new(),
@@ -2942,7 +2967,7 @@ mod tests {
             ticket: None,
             title: "T".into(),
             state: ShipState::Open,
-            head_sha: "fresh".into(),
+            head_sha: head_sha.into(),
             has_conflicts: false,
             open_threads: 0,
             total_threads: 0,
@@ -2952,28 +2977,48 @@ mod tests {
             blocked_by: vec![],
             pipeline: None,
             merge_status: None,
-        });
-        let tracker = FakeTracker::new();
-        let host = FakeHost::new();
-        assert_eq!(tick(&db, &tracker, &host, &forge, &[], "/project", &LIVE).unwrap(), 1);
+        }
+    }
 
-        // a lookout launched in the project checkout on the ship, with the allied iid injected.
+    #[test]
+    fn executes_launch_lookout_berths_at_the_fresh_head_marks_reviewed_and_strikes_at_stand_down() {
+        let (dir, project, sha) = crate::git::fixture::checkout("tick", &[77]);
+        let db = db();
+        allied_ship(&db, 77, ShipState::Open);
+        let forge = FakeForge::new();
+        *forge.snapshot.borrow_mut() = Some(forge_ship(77, &sha));
+        let host = FakeHost::new();
+        assert_eq!(tick(&db, &FakeTracker::new(), &host, &forge, &[], &project, &LIVE).unwrap(), 1);
+
+        // berthed: a detached worktree of the fresh-polled head, beside the checkout, its cache shared.
+        let berth = dir.join("review/77");
+        let git = |args: &[&str]| std::process::Command::new("git").arg("-C").arg(&berth).args(args).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&git(&["rev-parse", "HEAD"]).stdout).trim(), sha);
+        assert!(!git(&["symbolic-ref", "-q", "HEAD"]).status.success(), "detached: no branch of ours");
+        assert!(berth.join("target").is_symlink(), "the checkout's build cache, linked in");
+
+        // a lookout launched there on the ship, with the allied iid injected.
         let live = db.live().unwrap();
         let lookout = live.iter().find(|s| s.kind == CrewKind::Lookout).expect("a lookout");
         assert!(lookout.ticket.is_none(), "keyed by its ship, not a ticket");
         assert!(lookout.ship.is_some(), "it reviews its ship");
-        assert_eq!(lookout.worktree_path, "/project");
-        let spawned = host.spawned.borrow();
-        assert_eq!(spawned.len(), 1);
-        let (name, cwd, cmd) = &spawned[0];
-        assert_eq!((name.as_str(), cwd.as_str()), ("lookout-77", "/project"), "no ticket: named by iid");
+        assert_eq!(Path::new(&lookout.worktree_path), berth);
+        let (name, cwd, cmd) = host.spawned.borrow()[0].clone();
+        assert_eq!((name.as_str(), Path::new(&cwd)), ("lookout-77", berth.as_path()), "no ticket: named by iid");
         assert!(
-            cmd.starts_with("FLEET_SHIP=77 claude --session-id ") && cmd.ends_with(" --agent lookout"),
+            cmd.starts_with("FLEET_SHIP=77 claude --session-id ") && cmd.contains(" --agent lookout --settings '{\"hooks\":"),
             "cmd was: {cmd}"
         );
-        // reviewed recorded at the fresh-polled head.
+        assert!(cmd.contains("claude-hook-lookout-guard"), "launched with its command guard: {cmd}");
         let s = db.armada().unwrap().into_iter().find(|s| s.iid == 77).unwrap();
-        assert_eq!(s.reviewed.as_deref(), Some("fresh"), "reviewed = the head we dispatched against");
+        assert_eq!(s.reviewed.as_deref(), Some(sha.as_str()), "reviewed = the head it's berthed at");
+
+        // stood down: the berth is struck, from disk and from git's worktree list.
+        stand_down_lookout(&db, &host, &project, &lookout.id).unwrap();
+        assert!(!berth.exists(), "struck");
+        let list = std::process::Command::new("git").args(["-C", &project, "worktree", "list"]).output().unwrap();
+        assert!(!String::from_utf8_lossy(&list.stdout).contains("review"), "pruned");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

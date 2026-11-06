@@ -50,8 +50,8 @@ pub struct Config {
     pub tracker: TrackerConfig,
     /// The OTLP/HTTP receiver bind addr (the telemetry DB lives in the project's `.fleet/`).
     pub otel_addr: String,
-    /// `[project]` — the product's main checkout, which owns the ticket worktrees. Captains and
-    /// an ally's lookout carry no worktree, so they launch here.
+    /// `[project]` — the product's main checkout, which owns the ticket worktrees and the lookouts'
+    /// review worktrees (`review/`, beside it). Captains carry no worktree, so they launch here.
     pub project: ProjectConfig,
 }
 

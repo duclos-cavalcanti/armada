@@ -61,6 +61,18 @@ impl GhForge {
         Ok(serde_json::from_str(&stdout)?)
     }
 
+    /// The PR's changed files (`/pulls/N/files`, every page): each its `filename` and `patch`.
+    fn files(&self, n: i64) -> Result<Vec<Value>> {
+        let path = format!("repos/{}/pulls/{n}/files?per_page=100", self.repo);
+        let out = Command::new("gh").args(["api", "--paginate", &path]).output()?;
+        ensure!(out.status.success(), "gh api {path} failed: {}", crate::preflight::one_line(&out.stderr));
+        let mut all = Vec::new();
+        for page in serde_json::Deserializer::from_slice(&out.stdout).into_iter::<Value>() {
+            all.extend(page?.as_array().into_iter().flatten().cloned());
+        }
+        Ok(all)
+    }
+
     /// `gh api graphql` with string (`-f`) and typed (`-F`, e.g. Int) variables.
     fn graphql(&self, query: &str, strings: &[(&str, &str)], typed: &[(&str, &str)]) -> Result<Value> {
         let mut cmd = Command::new("gh");
@@ -237,6 +249,19 @@ impl Forge for GhForge {
             self.gh(&["pr", "review", &n, "--approve"])?;
         }
         Ok(())
+    }
+
+    fn changed_paths(&self, ns: &[i64]) -> Result<Vec<(i64, Vec<String>)>> {
+        ns.iter()
+            .map(|&n| {
+                let paths = self.files(n)?.iter().filter_map(|f| Some(f.get("filename")?.as_str()?.to_string())).collect();
+                Ok((n, paths))
+            })
+            .collect()
+    }
+
+    fn file_diff(&self, n: i64, path: &str) -> Result<String> {
+        crate::gitlab::diff_of(&self.files(n)?, path, "patch").ok_or_else(|| anyhow!("#{n} doesn't change {path}"))
     }
 
     fn retry_ci(&self, n: i64) -> Result<()> {

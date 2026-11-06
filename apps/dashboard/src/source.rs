@@ -141,6 +141,8 @@ pub struct Fleet {
     pub held: Vec<Ticket>,
     /// The latest reconcile `TickRan` event — fleetd's last plan (applied/failed/planned).
     pub tick: Option<Event>,
+    /// The latest health check (`payload.ok`, `payload.problems`): the `fleet:` light.
+    pub health: Option<Event>,
     /// The tmux sessions up right now — whether `enter` on a cog has a pane to switch to.
     pub tmux_up: HashSet<String>,
     /// fleetd answers on its socket.
@@ -305,6 +307,7 @@ impl Fleet {
             // A ledger older than the proposals table has none — fleetd adds it on its next start.
             proposals: db.pending().unwrap_or_default(),
             tick: db.latest_tick()?,
+            health: db.latest_health().unwrap_or_default(),
             tmux_up: tmux_sessions(),
             ..Default::default()
         })

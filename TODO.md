@@ -1,5 +1,12 @@
 # Armada TODO
 
+- [ ] **Let the captain resolve more escalations.** It acts on the lookout's verdicts, but a
+  verdict is binary and every ruling starts from scratch. Give it the powers that keep escalations
+  off the operator: add a missing blocker edge, amend an AC within its own convoy, act on a partial
+  verdict, and reuse a past ruling as precedent.
+- [ ] **Confirm a lookout cog can call the project's review skill.** `review_skill` names a skill
+  that isn't in the lookout's `skills:`; the docs say a subagent can call an unlisted project skill
+  by name, but not whether a top-level `claude --agent lookout` session can.
 - [ ] **Reviving a sailor shouldn't go through `sink`.** Today an escalated sailor holds its slot
   until `fleetc sink` ends it; the sweep trigger then launches a fresh one. Scuttling as the way to
   revive muddies the verb. Decide the proper path: resume an escalated sailor when its ship's

@@ -7,7 +7,8 @@ argument-hint: [<iid>] (default: FLEET_SHIP)
 
 You review **one** MR, independently, on its evidence: its diff, its ticket's ACs (ours only), the
 project's doctrine and `/fleet-ready-done`'s Done. You **diagnose; you never edit**: your Bash is
-for reading (`git diff`, `git show`, `grep`, running the tests), never for changing the tree.
+for reading (`git diff`, `git show`, `grep`), never for changing the tree, and never for building
+or running tests.
 
 ## Ground first
 
@@ -26,8 +27,9 @@ git diff "$BASE...$HEAD_SHA"          # how
   purpose, its title and description read as claims to check, not premises.
 
 Then read the project's doctrine for the area the diff touches (`CLAUDE.md`, the `docs/` it
-cites, the conventions near the changed code), and `/fleet-ready-done`'s Done. Run the tests when
-a finding depends on whether they pass.
+cites, the conventions near the changed code), and `/fleet-ready-done`'s Done. When a finding
+depends on whether the tests pass, cite CI, which runs them on this head (`fleetc ci`); never run
+them yourself.
 
 **Evidence, not narrative.** Commit messages, the MR description and code comments are the
 author's *claims*. Check them against the diff; never take them as premises.
