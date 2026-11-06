@@ -20,7 +20,7 @@ use domain::{
     CogState, ConvoyKey, ConvoyTicketView, ConvoyView, CrewKind, EntityKind, EventKind, HandState, Inspection,
     TicketLabel, Verdict,
     LivenessThresholds, MrDraft, Order, Packet, Proposal, ProposalId, Proposed, Report, Session, Ship, ShipState, TicketDraft,
-    TicketKey, TicketStatus,
+    TicketKey, TicketStatus, WorkerState,
 };
 use ledger::Ledger;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -139,6 +139,9 @@ pub fn run(
                 captain_sleep_secs: settings::captain_sleep_secs(&cfg, &ledger),
                 admirals: settings::admirals(&cfg, &ledger),
                 lookouts: settings::lookouts(&cfg, &ledger),
+                self_lookouts: settings::self_lookouts(&cfg, &ledger),
+                review_rounds: settings::review_rounds(&cfg, &ledger),
+                review_skill: cfg.review_skill.clone(),
             };
             let cogs = snapshot.lock().unwrap().clone();
             match reconcile::tick(&ledger, tracker.as_ref(), &host, forge.as_ref(), &cogs, &cfg.project.path, &levers) {
@@ -189,7 +192,7 @@ fn dispatch(ledger: &Ledger, order: Order) -> Result<()> {
 fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Forge, cfg: &Config, cmd: Command) {
     match cmd {
         Command::RecordStatus { target, state, last_action, reply } => {
-            let res = record_status(ledger, &target, state, last_action)
+            let res = record_status(ledger, forge, &target, state, last_action)
                 .map_err(|e| e.to_string());
             let _ = reply.send(res); // receiver may have hung up; nothing to do
         }
@@ -268,7 +271,7 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let _ = reply.send(ship_view(ledger, forge, iid).map_err(|e| format!("{e:#}")));
         }
         Command::PostReview { cmd, reply } => {
-            let _ = reply.send(forge.post_review(cmd.iid, &cmd.body, cmd.approve).map_err(|e| format!("{e:#}")));
+            let _ = reply.send(post_review(ledger, forge, &cmd).map_err(|e| format!("{e:#}")));
         }
         Command::Reply { cmd, reply } => {
             let res = forge.reply(cmd.iid, &cmd.thread, &cmd.body, cmd.resolve).map_err(|e| format!("{e:#}"));
@@ -518,10 +521,27 @@ fn launch(ledger: &Ledger, forge: &dyn Forge, l: Launch) -> Result<String> {
 }
 
 /// One ship by iid — ours or an ally's — with its snapshot and the ref to fetch its head by.
+/// Post a lookout's review — a summary comment, or one finding as a resolvable thread — approving
+/// only an ally's MR: our own merge on the team's approvals, never on the fleet's own say.
+fn post_review(ledger: &Ledger, forge: &dyn Forge, cmd: &wire::ReviewPostCmd) -> Result<()> {
+    if cmd.thread {
+        return forge.post_thread(cmd.iid, &cmd.body);
+    }
+    if cmd.approve {
+        let ours = match ShipRepo::get_by_iid(ledger, cmd.iid)? {
+            Some(ship) => reconcile::is_ours(ledger, &ship)?,
+            None => false,
+        };
+        anyhow::ensure!(!ours, "!{} is ours — a lookout never approves our own MR (post without --approve)", cmd.iid);
+    }
+    forge.post_review(cmd.iid, &cmd.body, cmd.approve)
+}
+
 fn ship_view(ledger: &Ledger, forge: &dyn Forge, iid: i64) -> Result<domain::ShipView> {
     let ship = ShipRepo::get_by_iid(ledger, iid)?.ok_or_else(|| anyhow!("!{iid}: not in the armada (synced yet?)"))?;
     let snapshot = ShipRepo::snapshot(ledger, &ship.id)?;
-    Ok(domain::ShipView { ship, snapshot, fetch_ref: forge.fetch_ref(iid) })
+    let ours = reconcile::is_ours(ledger, &ship)?;
+    Ok(domain::ShipView { ship, snapshot, fetch_ref: forge.fetch_ref(iid), ours })
 }
 
 /// A ticket's full text from the tracker, plus the fleet's hold on it from the ledger.
@@ -937,7 +957,13 @@ fn signal<H: SessionHost>(ledger: &Ledger, host: &H, verb: Verb, s: &Session) ->
 
 /// Resolve the live session for `(ticket, cog)` and record its report. No live session
 /// = an anomaly (a cog reporting after it was reaped), surfaced as an error to the client.
-fn record_status(ledger: &Ledger, target: &ControlTarget, state: CogState, last_action: Option<String>) -> Result<()> {
+fn record_status(
+    ledger: &Ledger,
+    forge: &dyn Forge,
+    target: &ControlTarget,
+    state: CogState,
+    last_action: Option<String>,
+) -> Result<()> {
     let session = live_sessions_for(ledger, target)?
         .into_iter()
         .next()
@@ -954,6 +980,21 @@ fn record_status(ledger: &Ledger, target: &ControlTarget, state: CogState, last_
         }
         if done && open_ship(ledger, ticket)?.is_some() {
             bail!("{} has an open MR — yield it to a sailor (/fleet-yield), not done", ticket.0);
+        }
+    }
+    // A worker's MR goes up for review, and concludes only reviewed: a lookout reviewed its current
+    // head, no lookout is still on it, and no thread is open. Fresh-polled, so a push just made
+    // counts: `review` records the head the lookout will review.
+    if let (CogState::Worker(s @ (WorkerState::Review | WorkerState::Concluded)), ControlTarget::Cog { ticket, .. }) = (state, target) {
+        let ship = open_ship(ledger, ticket)?
+            .ok_or_else(|| anyhow!("{} has no open MR — open its draft first (/fleet-launch)", ticket.0))?;
+        let snap = reconcile::fresh_snapshot(ledger, forge, &ship)?;
+        if s == WorkerState::Concluded {
+            let iid = ship.iid;
+            let reviewed = ship.reviewed.as_deref() == Some(snap.head_sha.as_str()) && !reconcile::lookout_on(ledger, &ship.id)?;
+            anyhow::ensure!(reviewed, "!{iid} isn't reviewed at its head — report review, and conclude once the lookout's review is clean");
+            let open = snap.open_threads;
+            anyhow::ensure!(open == 0, "!{iid} has {open} open review threads — answer them (/fleet-parley), then report review");
         }
     }
     ledger.record(&Report {
@@ -993,7 +1034,15 @@ pub fn tick_sync(ledger: &Ledger, forge: &dyn Forge, tracker: &dyn Tracker) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
-    const LEVERS: reconcile::Levers = reconcile::Levers { dry_run: false, captain_sleep_secs: 0, admirals: 0, lookouts: 1 };
+    const LEVERS: reconcile::Levers = reconcile::Levers {
+        dry_run: false,
+        captain_sleep_secs: 0,
+        admirals: 0,
+        lookouts: 1,
+        self_lookouts: -1,
+        review_rounds: 5,
+        review_skill: None,
+    };
     use domain::ports::EventLog;
     use domain::*;
 
@@ -1007,6 +1056,7 @@ mod tests {
         closed: std::cell::RefCell<Vec<i64>>,
         noted: std::cell::RefCell<Vec<(i64, String)>>,
         state: Option<ShipState>, // what `snapshot` reports (None: Open)
+        threads: i64,             // the open review threads `snapshot` reports
     }
     impl Forge for FakeForge {
         fn preflight(&self) -> Result<String> {
@@ -1035,7 +1085,7 @@ mod tests {
                 state,
                 head_sha: "sha".into(),
                 has_conflicts: false,
-                open_threads: 0,
+                open_threads: self.threads,
                 total_threads: 0,
                 approvals: Approvals { current: 0, required: 0 },
                 armed: true,
@@ -1253,12 +1303,106 @@ mod tests {
         SessionRepo::start(&db, &worker).unwrap().expect("session start");
         let me = ControlTarget::Cog { cog: CrewKind::Worker, ticket: TicketKey("PROJ-1".into()) };
         let concluded = CogState::Worker(WorkerState::Concluded);
-        let e = record_status(&db, &me, concluded, None).unwrap_err().to_string();
+        let e = record_status(&db, &FakeForge::default(), &me, concluded, None).unwrap_err().to_string();
         assert!(e.contains("blocked by PROJ-2"), "{e}");
-        record_status(&db, &me, CogState::Worker(WorkerState::Waiting), None).unwrap();
+        record_status(&db, &FakeForge::default(), &me, CogState::Worker(WorkerState::Waiting), None).unwrap();
         tracker.transition(&TicketKey("PROJ-2".into()), TicketStatus::Done).unwrap();
         sync::sync_board(&db, &tracker, "now").unwrap();
-        record_status(&db, &me, concluded, None).unwrap();
+        let ship = our_ship(&db, "PROJ-1", 7);
+        db.set_reviewed(&ship, Some("sha")).unwrap();
+        record_status(&db, &FakeForge::default(), &me, concluded, None).unwrap();
+    }
+
+    /// Our ship on `key` at `iid`, its ticket dispatched (an order), so the fleet owns it.
+    fn our_ship(db: &Ledger, key: &str, iid: i64) -> ShipId {
+        db.dispatch(&Order {
+            ticket: TicketKey(key.into()),
+            auto_impl: true,
+            fork_from: "origin/main".into(),
+            ac_summary: "do it".into(),
+            park_at: None,
+            worktree_path: Some("/wt".into()),
+            created_at: "t".into(),
+        })
+        .unwrap();
+        ShipRepo::upsert(
+            db,
+            &Ship {
+                id: ShipId(0),
+                ticket: Some(TicketKey(key.into())),
+                iid,
+                url: "u".into(),
+                target: "master".into(),
+                source: String::new(),
+                pilot: "me".into(),
+                created_at: "t".into(),
+                ended_at: None,
+                swept: None,
+                reviewed: None,
+                rounds: 0,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_worker_concludes_only_once_a_lookout_reviewed_its_head_clean() {
+        let db = Ledger::in_memory().unwrap();
+        sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]), "now").unwrap();
+        let key = TicketKey("PROJ-1".into());
+        let worker = Session {
+            id: SessionId(0),
+            kind: CrewKind::Worker,
+            ticket: Some(key.clone()),
+            convoy: None,
+            worktree_path: "/wt".into(),
+            tmux_session: "worker-PROJ-1".into(),
+            harness_session_id: None,
+            created_at: "t".into(),
+            ended_at: None,
+            anchored_at: None,
+            ship: None,
+        };
+        SessionRepo::start(&db, &worker).unwrap().expect("session start");
+        let me = ControlTarget::Cog { cog: CrewKind::Worker, ticket: key.clone() };
+        let (review, concluded) = (CogState::Worker(WorkerState::Review), CogState::Worker(WorkerState::Concluded));
+        let forge = FakeForge::default();
+
+        let e = record_status(&db, &forge, &me, review, None).unwrap_err().to_string();
+        assert!(e.contains("no open MR"), "review needs the draft: {e}");
+        let ship = our_ship(&db, "PROJ-1", 7);
+        record_status(&db, &forge, &me, review, None).unwrap();
+        let e = record_status(&db, &forge, &me, concluded, None).unwrap_err().to_string();
+        assert!(e.contains("isn't reviewed"), "{e}");
+
+        // A lookout is on it: reviewed at launch, but not yet finished.
+        db.set_reviewed(&ship, Some("sha")).unwrap();
+        let lookout = Session {
+            kind: CrewKind::Lookout,
+            ticket: None,
+            tmux_session: "lookout-PROJ-1".into(),
+            ship: Some(ship.clone()),
+            ..worker.clone()
+        };
+        let lookout = SessionRepo::start(&db, &lookout).unwrap().expect("session start");
+        assert!(record_status(&db, &forge, &me, concluded, None).is_err(), "the review is under way");
+        SessionRepo::end(&db, &lookout, "t").unwrap();
+
+        let threads = FakeForge { threads: 2, ..Default::default() };
+        let e = record_status(&db, &threads, &me, concluded, None).unwrap_err().to_string();
+        assert!(e.contains("2 open review threads"), "{e}");
+        record_status(&db, &forge, &me, concluded, None).unwrap();
+    }
+
+    #[test]
+    fn a_lookout_never_approves_our_own_mr() {
+        let db = Ledger::in_memory().unwrap();
+        sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]), "now").unwrap();
+        our_ship(&db, "PROJ-1", 7);
+        let post = |iid, approve| wire::ReviewPostCmd { iid, body: "clean".into(), approve, thread: false };
+        let e = post_review(&db, &FakeForge::default(), &post(7, true)).unwrap_err().to_string();
+        assert!(e.contains("never approves our own"), "{e}");
+        post_review(&db, &FakeForge::default(), &post(7, false)).unwrap();
     }
 
     #[test]
@@ -1332,11 +1476,11 @@ mod tests {
         ShipRepo::upsert(&db, &ship).unwrap();
         let me = ControlTarget::Cog { cog: CrewKind::Hand, ticket: key.clone() };
         let done = CogState::Hand(HandState::Done);
-        let e = record_status(&db, &me, done, None).unwrap_err().to_string();
+        let e = record_status(&db, &FakeForge::default(), &me, done, None).unwrap_err().to_string();
         assert!(e.contains("open MR"), "{e}");
         let id = db.armada().unwrap()[0].id.clone();
         ShipRepo::retire(&db, &id, "t").unwrap();
-        record_status(&db, &me, done, None).unwrap();
+        record_status(&db, &FakeForge::default(), &me, done, None).unwrap();
     }
 
     #[test]
@@ -1347,11 +1491,11 @@ mod tests {
         let lookout = start_ticketless(&db, CrewKind::Lookout, None, "lookout");
         let cap = |c: &str| ControlTarget::Captain { convoy: ConvoyKey(c.into()) };
         let done = CogState::Captain(CaptainState::Done);
-        assert!(record_status(&db, &cap("PROJ-200"), done, None).is_err(), "no captain on PROJ-200");
-        record_status(&db, &cap("PROJ-100"), done, None).unwrap();
+        assert!(record_status(&db, &FakeForge::default(), &cap("PROJ-200"), done, None).is_err(), "no captain on PROJ-200");
+        record_status(&db, &FakeForge::default(), &cap("PROJ-100"), done, None).unwrap();
         assert_eq!(ReportRepo::latest(&db, &captain).unwrap().map(|r| r.state), Some(done));
         let reviewed = CogState::Lookout(LookoutState::Reviewed);
-        record_status(&db, &ControlTarget::Lookout { iid: None }, reviewed, None).unwrap();
+        record_status(&db, &FakeForge::default(), &ControlTarget::Lookout { iid: None }, reviewed, None).unwrap();
         assert_eq!(ReportRepo::latest(&db, &lookout).unwrap().map(|r| r.state), Some(reviewed));
     }
 
@@ -1381,7 +1525,7 @@ mod tests {
         };
         let (a, b) = (on(77), on(78));
         let reviewed = CogState::Lookout(LookoutState::Reviewed);
-        record_status(&db, &ControlTarget::Lookout { iid: Some(78) }, reviewed, None).unwrap();
+        record_status(&db, &FakeForge::default(), &ControlTarget::Lookout { iid: Some(78) }, reviewed, None).unwrap();
         assert_eq!(ReportRepo::latest(&db, &b).unwrap().map(|r| r.state), Some(reviewed));
         assert!(ReportRepo::latest(&db, &a).unwrap().is_none(), "!77's lookout didn't report");
     }

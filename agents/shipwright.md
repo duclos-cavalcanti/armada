@@ -65,7 +65,7 @@ its own poll / sync / reconcile cadences, idempotent at restart. The line: the o
 opens convoys over a groomed backlog (the **admiral** drafts and grooms tickets) → a
 **captain** commands one convoy and dispatches its frontier → a **worker** (or
 operator-driven **hand**) implements one ticket to an open MR → a **sailor** lands it to
-merged; a **lookout** reviews each allied MR. The operator drives via **`fleetc`**
+merged; a **lookout** reviews each MR, ours and allies'. The operator drives via **`fleetc`**
 (the client CLI); reconcile owns every Jira transition. You build the machinery that runs
 this — and, on the operator's order, you are their hand on a running fleet (below).
 

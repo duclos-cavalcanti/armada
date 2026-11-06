@@ -67,7 +67,7 @@ impl TabId {
 
 /// Every pane on every tab. Fleet reads the line top-down: the open convoys → what waits on the
 /// operator (proposals, anchored convoy tickets) → dispatched orders → builders at work (impl phase)
-/// → ships being landed (merge phase) → allies' MRs under a lookout's review.
+/// → ships being landed (merge phase) → MRs under a lookout's review, ours and allies'.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Pane {
     Dispatched,

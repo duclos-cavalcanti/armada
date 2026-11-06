@@ -20,14 +20,17 @@ Cycle with `Tab` / `S-Tab`:
     `w` weigh). `enter` reads a proposal, `t` opens an anchored ticket;
   - **Dispatch** — every order the fleet is working, with its phase (waiting / implementation /
     merge) and what it waits on (anchored ⚓ / blocked ⛔);
-  - **Implementation** — builders at work (workers + hands): state, liveness, MR + pipeline, last action;
+  - **Implementation** — builders at work (workers + hands): state, liveness, MR + pipeline, last
+    action. A worker in **review** has put its MR up for a lookout and waits for its review;
   - **Merge** — our ships being landed: the sailor's state (dimmed once it's stood down),
     pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status;
   - an escalation reads by who holds it: **flagged** (no captain has looked), **triage** (a
     captain is inspecting it, or sent its way out), **escalated** (confirmed: yours). `v` reads
     the verdict;
+  - **Reviews** — every lookout on watch: the MR, what it's on (our ticket in review, or `ally`),
+    its author, the lookout's state; `enter` switches to the lookout, `m` opens the MR;
 - **Ships** — every open MR fleetd tracks, ours + allies; the title counts the lookouts on watch,
-  and an ally's last column shows its review (`◎` a lookout is on it, `✓` reviewed at its head).
+  and the last column shows its review (`◎` a lookout is on it, `✓` reviewed at its head).
 - **Board** — the sprint tickets, with the Convoys and Proposals panes again (the same panes as
   on Fleet).
 - **Log** — fleetd's log (`.fleet/fleetd.log`), newest first, warnings yellow and errors red;

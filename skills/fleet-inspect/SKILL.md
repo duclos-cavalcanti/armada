@@ -1,12 +1,12 @@
 ---
-description: Inspect a cog's escalation before it reaches the operator. Dispatches the surveyor to weigh the escalated worker / hand / sailor's reason against its transcript, its worktree, its ticket and its convoy's plan, and to return a verdict in this skill's template — REFUTE (an option keeps the ticket's intent, fits the convoy's plan and clears the blocker: it's sent to the cog to unblock itself) or CONFIRM (no option passes all three: the operator rules). For the admiral and captains.
+description: Inspect a cog's escalation before it reaches the operator. Dispatches the lookout to weigh the escalated worker / hand / sailor's reason against its transcript, its worktree, its ticket and its convoy's plan, and to return a verdict in this skill's template — REFUTE (an option keeps the ticket's intent, fits the convoy's plan and clears the blocker: it's sent to the cog to unblock itself) or CONFIRM (no option passes all three: the operator rules). For the admiral and captains.
 argument-hint: <KEY-N> (a ticket whose cog is escalated)
 ---
 
 # Skill: fleet-inspect
 
-A cog escalated. Before the operator spends attention on it, have the **surveyor** judge it in a
-fresh context: is the escalation real, or does a way out keep the ticket's intent, fit the
+A cog escalated. Before the operator spends attention on it, have the **lookout** judge it in a
+fresh context, as a subagent: is the escalation real, or does a way out keep the ticket's intent, fit the
 convoy's plan and clear the blocker? Either way the
 operator gets one structured summary — [`verdict.md`](verdict.md), in this skill's folder.
 
@@ -20,12 +20,12 @@ fleetc ledger "SELECT s.kind, r.state, r.last_action FROM sessions s JOIN report
 Inspect only a live worker or sailor whose state is `escalated` (a captain finds them flagged
 `inspect` in `fleetc context`). None → say so and stop.
 
-## Step 1 — Dispatch the surveyor
+## Step 1 — Dispatch the lookout
 
-Dispatch the `surveyor` subagent (the `Agent` tool) with only this:
+Dispatch the `lookout` subagent (the `Agent` tool) with only this:
 
-> Inspect the escalation of the `<kind>` on `<KEY>`. Answer in the template at
-> `<this skill's folder>/verdict.md`.
+> Inspect the escalation of the `<kind>` on `<KEY>`, by `<this skill's folder>/judge.md`. Answer
+> in the template at `<this skill's folder>/verdict.md`.
 
 Nothing else — not your read of it. It gathers the evidence itself, so its verdict is independent.
 

@@ -93,10 +93,11 @@ pub enum CrewKind { Worker, Sailor, Hand, Captain, Lookout, Admiral }
 // string form; reconcile reads it back and reacts.
 
 /// A worker's lifecycle while it builds the ship. `waiting`: done, but a blocker hasn't merged —
-/// it can't conclude until fleetd wakes it.
+/// it can't conclude until fleetd wakes it. `review`: its MR is pushed for a lookout to review —
+/// it waits until fleetd wakes it with the review.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum WorkerState { Started, Implementing, Waiting, Concluded, Escalated, Anchored }
+pub enum WorkerState { Started, Implementing, Review, Waiting, Concluded, Escalated, Anchored }
 
 /// What a sailor reports: its sweep is done (`sleeping`), or it holds for the operator (`escalated`,
 /// `anchored`). Working, it reports nothing — fleetd sees the MR itself.
@@ -110,8 +111,8 @@ pub enum SailorState { Sleeping, Escalated, Anchored }
 #[serde(rename_all = "snake_case")]
 pub enum HandState { Awaiting, Implementing, Concluded, Done, Anchored }
 
-/// The lookout's pass over one allied MR: `reviewed` (done, stand it down) or `escalated` (wait
-/// for the operator in its pane).
+/// The lookout's pass over one MR, ours or an ally's: `reviewed` (done, stand it down) or
+/// `escalated` (wait for the operator in its pane).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LookoutState { Reviewed, Escalated }
@@ -387,6 +388,9 @@ pub struct ShipView {
     pub ship: Ship,
     pub snapshot: Option<ShipSnapshot>,
     pub fetch_ref: String,
+    /// The fleet dispatched its ticket (an order): one of our MRs, not an ally's.
+    #[serde(default)]
+    pub ours: bool,
 }
 
 /// A ship as the **forge** reports it (a `Forge` port DTO) — facts + mirror fields
@@ -714,6 +718,7 @@ impl WorkerState {
         match self {
             WorkerState::Started => "started",
             WorkerState::Implementing => "implementing",
+            WorkerState::Review => "review",
             WorkerState::Waiting => "waiting",
             WorkerState::Concluded => "concluded",
             WorkerState::Escalated => "escalated",
@@ -724,6 +729,7 @@ impl WorkerState {
         match s {
             "started" => Some(Self::Started),
             "implementing" => Some(Self::Implementing),
+            "review" => Some(Self::Review),
             "waiting" => Some(Self::Waiting),
             "concluded" => Some(Self::Concluded),
             "escalated" => Some(Self::Escalated),
@@ -863,13 +869,13 @@ impl CogState {
                 | CogState::Lookout(LookoutState::Escalated)
         )
     }
-    /// A DELIBERATE non-terminal hold (a wait on blockers, an anchor).
+    /// A DELIBERATE non-terminal hold (a wait on blockers or on a review, an anchor).
     /// reconcile must not heal or stand down a cog reporting this even when its liveness is Dead —
     /// it stopped on purpose. An escalation isn't one: a dead escalated cog is healed in place.
     pub fn is_paused(&self) -> bool {
         matches!(
             self,
-            CogState::Worker(WorkerState::Waiting | WorkerState::Anchored)
+            CogState::Worker(WorkerState::Review | WorkerState::Waiting | WorkerState::Anchored)
                 | CogState::Sailor(SailorState::Anchored)
                 | CogState::Hand(HandState::Anchored)
         )

@@ -125,6 +125,9 @@ pub struct ReviewPostCmd {
     pub body: String,
     #[serde(default)]
     pub approve: bool,
+    /// Open the body as one resolvable review thread, not a comment.
+    #[serde(default)]
+    pub thread: bool,
 }
 
 /// Reply on one review thread, resolving it when `resolve` (`POST /reply`, `fleetc reply`).

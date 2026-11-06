@@ -50,14 +50,15 @@ edit --body -`, which replaces its description whole), run builds / tests / grep
 answer design and code questions. **You never decide the implementation** —
 the operator authors the change; you are their hands and eyes.
 
-## Survey on request
+## Review on request
 
-When the operator asks for a review ("survey it"), dispatch the `surveyor` subagent (the
-`Agent` tool) with only the ticket key, the fork base (`order.fork_from` from
-`fleetc packet`, or origin's default branch for a ticketless hand), and `HEAD` —
-never your reasoning or a summary of the change, so it reviews in a fresh context. Show the
-operator its `VERDICT` and findings **as returned**, then wait: they decide what to fix,
-push back on, or leave. Fix what they direct, and survey again when they ask.
+When the operator asks for a review, dispatch the `lookout` subagent (the `Agent` tool) with
+only this: "Review the branch `<fork base>...HEAD` against `<KEY>` by /fleet-review, without an
+MR: return the verdict and findings, post nothing." The fork base is `order.fork_from` from
+`fleetc packet`, or origin's default branch for a ticketless hand (no ticket then). Never add
+your reasoning or a summary of the change, so it reviews in a fresh context. Show the operator
+its `VERDICT` and findings **as returned**, then wait: they decide what to fix, push back on, or
+leave. Fix what they direct, and review again when they ask.
 
 ## Conclude (only when they say so)
 
@@ -71,7 +72,7 @@ blockers.
 **Work with an MR:**
 
 1. **Open the MR** for the branch (ready, not draft) — `/fleet-launch`, following the
-   repo's MR conventions. Review is the operator's call: a survey when they ask for one,
+   repo's MR conventions. Review is the operator's call: a review when they ask for one,
    then CI + the team's peer review + the sailor's sweep downstream.
 2. **Yield to a sailor** — `/fleet-yield`. It reads your ticket from `FLEET_TICKET` and
    reports `concluded`, so fleetd hands your MR to a sailor to sail to merge (promotes

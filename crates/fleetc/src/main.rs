@@ -49,7 +49,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc review   [--iid <N>]       (an MR's fresh review surface: open threads + floating notes)\n  \
      fleetc reply    [--iid <N>] --thread <id> --body <text|-> [--resolve]   (answer a review thread)\n  \
      fleetc ship     [--iid <N>]       (one MR, ours or an ally's: ship + snapshot + fetch ref, as JSON)\n  \
-     fleetc review-post [--iid <N>] --body <text|-> [--approve]   (post one review comment; approve if clean)\n  \
+     fleetc review-post [--iid <N>] --body <text|-> [--approve | --thread]   (post one review comment, approving if clean; or open one review thread)\n  \
      fleetc rebase   [--iid <N>]       (server-side rebase an MR)\n  \
      fleetc ci       [--iid <N>]       (the MR's CI: status + each failed job's log excerpt, as JSON)\n  \
      fleetc retry-ci [--iid <N>]       (re-run the MR's failed CI jobs)\n  \
@@ -1030,10 +1030,10 @@ fn ship(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// `fleetc review-post --iid <N> --body <text|-> [--approve]` — post one review comment on an MR
-/// (`--body -` reads stdin), then approve it when asked.
+/// `fleetc review-post --iid <N> --body <text|-> [--approve | --thread]` — post one review comment on
+/// an MR (`--body -` reads stdin), then approve it when asked; or open it as one resolvable thread.
 fn review_post(args: &[String]) -> Result<()> {
-    let (mut iid, mut body, mut approve) = (None, None, false);
+    let (mut iid, mut body, mut approve, mut thread) = (None, None, false, false);
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
@@ -1041,11 +1041,13 @@ fn review_post(args: &[String]) -> Result<()> {
             "--iid" => iid = Some(take()?.parse::<i64>().map_err(|_| anyhow!("--iid must be a number"))?),
             "--body" => body = Some(take()?),
             "--approve" => approve = true,
+            "--thread" => thread = true,
             other => bail!("unknown flag: {other}"),
         }
     }
+    anyhow::ensure!(!(approve && thread), "--approve and --thread don't mix: a thread is a finding");
     let body = body_text(body.ok_or_else(|| anyhow!("--body required"))?)?;
-    post_and_print("/review-post", &wire::ReviewPostCmd { iid: iid_or_own(iid, "review-post")?, body, approve })
+    post_and_print("/review-post", &wire::ReviewPostCmd { iid: iid_or_own(iid, "review-post")?, body, approve, thread })
 }
 
 /// `fleetc ci --iid <N>` — the MR's CI as JSON: `{status, failed: [{name, url, log_excerpt}]}`, failed

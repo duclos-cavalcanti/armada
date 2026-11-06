@@ -66,6 +66,12 @@ pub fn admirals(cfg: &Config, l: &Ledger) -> i64 {
 pub fn lookouts(cfg: &Config, l: &Ledger) -> i64 {
     resolve_i64(l, None, "lookouts", cfg.lookouts)
 }
+pub fn self_lookouts(cfg: &Config, l: &Ledger) -> i64 {
+    resolve_i64(l, None, "self_lookouts", cfg.self_lookouts)
+}
+pub fn review_rounds(cfg: &Config, l: &Ledger) -> u64 {
+    resolve_u64(l, None, "review_rounds", cfg.review_rounds)
+}
 pub fn dry_run(cfg: &Config, l: &Ledger) -> bool {
     resolve_bool(l, Some("FLEET_DRY_RUN"), "dry_run", cfg.dry_run)
 }
@@ -119,6 +125,8 @@ const LEVERS: &[Lever] = &[
     Lever { key: "captain_sleep_secs", env: Some("FLEET_CAPTAIN_SLEEP_SECS"), ty: Ty::U64 },
     Lever { key: "admirals", env: None, ty: Ty::I64 },
     Lever { key: "lookouts", env: None, ty: Ty::I64 },
+    Lever { key: "self_lookouts", env: None, ty: Ty::I64 },
+    Lever { key: "review_rounds", env: None, ty: Ty::U64 },
     Lever { key: "dry_run", env: Some("FLEET_DRY_RUN"), ty: Ty::Bool },
     Lever { key: "active_secs", env: Some("FLEET_ACTIVE_SECS"), ty: Ty::I64 },
     Lever { key: "quiet_secs", env: Some("FLEET_QUIET_SECS"), ty: Ty::I64 },
@@ -178,6 +186,8 @@ fn value_of(cfg: &Config, l: &Ledger, key: &str) -> String {
         "captain_sleep_secs" => captain_sleep_secs(cfg, l).to_string(),
         "admirals" => admirals(cfg, l).to_string(),
         "lookouts" => lookouts(cfg, l).to_string(),
+        "self_lookouts" => self_lookouts(cfg, l).to_string(),
+        "review_rounds" => review_rounds(cfg, l).to_string(),
         "dry_run" => dry_run(cfg, l).to_string(),
         "active_secs" => thresholds(cfg, l).active_secs.to_string(),
         "quiet_secs" => thresholds(cfg, l).quiet_secs.to_string(),

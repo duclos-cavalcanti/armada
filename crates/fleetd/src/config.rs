@@ -29,6 +29,14 @@ pub struct Config {
     pub admirals: i64,
     /// How many lookouts may review allied MRs at once, one MR each: -1 = no cap, 0 = none.
     pub lookouts: i64,
+    /// How many lookouts may review our own MRs at once (a worker's `review`), apart from the
+    /// allies' cap: -1 = no cap (the default), 0 = none.
+    pub self_lookouts: i64,
+    /// Review rounds a worker gets on its MR: past them with threads still open, it escalates.
+    pub review_rounds: u64,
+    /// The project's own review skill (its name, e.g. `mr-review`, run as `/<name> <iid>` from the
+    /// project's `.claude/skills/`), which every lookout runs. Unset = the kit's `/fleet-review`.
+    pub review_skill: Option<String>,
     /// Reconcile mode: false (default, post-cutover) = apply the plan through the ports — fleetd
     /// drives the line; true = compute + log only, execute nothing (the parity look, opt in via
     /// `FLEET_DRY_RUN=true`). Flip via config/env, no recompile.
@@ -43,7 +51,7 @@ pub struct Config {
     /// The OTLP/HTTP receiver bind addr (the telemetry DB lives in the project's `.fleet/`).
     pub otel_addr: String,
     /// `[project]` — the product's main checkout, which owns the ticket worktrees. Captains and
-    /// the lookout carry no worktree, so they launch here.
+    /// an ally's lookout carry no worktree, so they launch here.
     pub project: ProjectConfig,
 }
 
@@ -118,6 +126,9 @@ impl Default for Config {
             captain_sleep_secs: 900,
             admirals: 3,
             lookouts: 3,
+            self_lookouts: -1,
+            review_rounds: 5,
+            review_skill: None,
             dry_run: false,
             active_secs: domain::LIVENESS_ACTIVE_SECS,
             quiet_secs: domain::LIVENESS_QUIET_SECS,

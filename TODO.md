@@ -19,6 +19,6 @@
   binds the admiral and shipwright too; the per-agent way is a `PreToolUse` hook in each cog's
   frontmatter (it fires under `claude --agent`) that exits 2 on those verbs.
 - [ ] **`fleetc transcript --text [N]`.** Print a cog's last N turns as plain text (the user and
-  assistant messages, tool calls named), instead of the path. Each surveyor in /fleet-inspect
+  assistant messages, tool calls named), instead of the path. Each lookout in /fleet-inspect
   reinvents the extraction from the raw JSONL (`tail -c`, `grep -o '"text"'`, `jq`, Python),
   and a byte tail cuts the cause off. One source of truth for reading a cog's reasoning.

@@ -45,6 +45,8 @@ pub struct ShipRow {
     pub ship: Ship,
     pub snapshot: Option<ShipSnapshot>,
     pub sailor: String,
+    /// The fleet dispatched its ticket (an order): one of our MRs, not an ally's.
+    pub ours: bool,
 }
 
 /// What a ship's sailor is doing: `unmanned` (no sailor has boarded), its last report, `sailing`
@@ -227,6 +229,7 @@ impl Fleet {
                 ship: ship.clone(),
                 snapshot: snapshot.clone(),
                 sailor: sailor_label(sailor.as_ref()),
+                ours: ship.ticket.as_ref().is_some_and(|t| ordered.contains(t)),
             });
             let Some(ticket) = &ship.ticket else { continue }; // an ally: Ships tab only
             if building.contains(ticket) || due.contains(ticket) {

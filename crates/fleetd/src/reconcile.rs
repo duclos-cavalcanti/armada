@@ -33,7 +33,7 @@ use domain::ports::{
 };
 use domain::{
     Classification, CogState, ConvoyKey, CrewKind, EntityKind, EventKind, HandState, Inspection,
-    Liveness, Order, PipelineStatus, Report, Session, SessionId, Ship, ShipId, ShipSnapshot, ShipState, Ticket,
+    Liveness, LookoutState, Order, PipelineStatus, Report, Session, SessionId, Ship, ShipId, ShipSnapshot, ShipState, Ticket,
     TicketKey, TicketStatus, Verdict, WorkerState,
 };
 use ledger::Ledger;
@@ -49,11 +49,12 @@ pub enum Action {
     Reap { ticket: String },                   // merged/terminal → end session + Jira Done
     Heal { ticket: String, kind: String },     // dead WARM session (worker/hand) → respawn in place
     Wake { ticket: String },                   // a waiting worker's blockers all merged → resume it
+    ReviewWake { ticket: String },             // a worker in review: a lookout reviewed its head → resume it with the review
     StandDown { ticket: String, kind: String }, // dead COLD session (sailor) → end it; re-spawn on change. An admiral too
     LaunchCaptain { convoy: String },          // active convoy with a pass of work + no live captain → launch
     StandDownCaptain { convoy: String },       // captain finished its pass / convoy gone → end its session
     LaunchSailor { ticket: String },           // open ship changed since last sweep → launch a sailor
-    LaunchLookout { iid: i64 },                // an allied ship changed since its last review → launch a lookout on it
+    LaunchLookout { iid: i64 },                // an ally's ship changed, or a worker asked review of ours → launch a lookout on it
     StandDownLookout { session: i64 },         // a lookout finished its review (or its ship sank) → end its session
     LaunchAdmiral { ticket: String },          // a confirmed escalation with no admiral since its verdict → convene one
 }
@@ -62,7 +63,7 @@ pub enum Action {
 /// liveness). Pure (reads only). `cogs` carry liveness for the heal/terminal checks; `stacks` is
 /// the forge's capability (`Forge::stacks`) — without it, no STACKED spawn and no BLOCK.
 pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Result<Vec<Action>> {
-    let &Levers { captain_sleep_secs, admirals, lookouts, .. } = levers;
+    let &Levers { captain_sleep_secs, admirals, lookouts, self_lookouts, .. } = levers;
     let mut actions = Vec::new();
 
     // DISPATCH — iterate the order queue (intent). Spawn a CLEAN (all blockers terminal) ticket OR
@@ -208,6 +209,20 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
             }
             continue;
         }
+        // A worker in REVIEW pushed its MR for a lookout and stopped. Once a lookout has reviewed its
+        // head and stood down, it is woken with the review — healed first if it died meanwhile.
+        if state == Some(CogState::Worker(WorkerState::Review)) && cog.session.anchored_at.is_none() {
+            if let Some(ship) = armada.iter().find(|s| s.ticket.as_ref() == Some(tkey) && s.ended_at.is_none()) {
+                let head = ShipRepo::snapshot(ledger, &ship.id)?.map(|snap| snap.head_sha);
+                if head.is_some() && ship.reviewed == head && !lookout_on(ledger, &ship.id)? {
+                    actions.push(match cog.liveness {
+                        Liveness::Dead => Action::Heal { ticket: tkey.0.clone(), kind: "worker".into() },
+                        _ => Action::ReviewWake { ticket: tkey.0.clone() },
+                    });
+                }
+            }
+            continue;
+        }
         // Dead by liveness, with no deliberate-stop report → the host process is gone. A WARM
         // cog (worker/hand) is a crash → heal (respawn in place, resume from its status drop). A
         // COLD cog (sailor) has finished its one-shot watch — a clean exit and a crash look
@@ -272,12 +287,13 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
         }
     }
 
-    // LOOKOUTS — a lookout reviews ONE allied ship (an MR we don't own: no fleet order), up to
-    // `lookouts` at once (-1 = no cap, 0 = none). STAND DOWN one that reported `reviewed`, died, or
-    // whose ship merged or closed — unless the operator anchored it. Then, unless the operator
-    // anchored the lookouts, LAUNCH on each allied open ship whose code changed since its last review
-    // (head_sha ≠ reviewed) with no lookout on it, oldest MR first. fleetd marks it reviewed at launch.
-    let (mut seated, mut watched) = (0, Vec::new());
+    // LOOKOUTS — a lookout reviews ONE ship: an ally's (an MR we don't own: no fleet order), up to
+    // `lookouts` at once, or one of ours a worker put up for review, up to `self_lookouts` (-1 = no
+    // cap, 0 = none). STAND DOWN one that reported `reviewed`, died, or whose ship merged or closed —
+    // unless the operator anchored it. Then, unless the operator anchored the lookouts, LAUNCH on each
+    // ship with no lookout on it whose head isn't reviewed (head_sha ≠ reviewed), oldest MR first: an
+    // ally's open ship, or ours while its worker is in `review`. fleetd marks it reviewed at launch.
+    let (mut seated, mut seated_ours, mut watched) = (0, 0, Vec::new());
     for cog in cogs {
         if cog.session.kind != CrewKind::Lookout || cog.session.ended_at.is_some() {
             continue;
@@ -291,30 +307,36 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
         if cog.session.anchored_at.is_none() && (done || cog.liveness == Liveness::Dead || sunk) {
             actions.push(Action::StandDownLookout { session: cog.session.id.0 });
         } else {
-            seated += 1;
+            match ship.and_then(|id| armada.iter().find(|s| &s.id == id)) {
+                Some(s) if is_ours(ledger, s)? => seated_ours += 1,
+                _ => seated += 1,
+            }
             watched.extend(ship);
         }
     }
     if !LookoutRepo::anchored(ledger)? {
-        let mut due = Vec::new();
+        let (mut due, mut due_ours) = (Vec::new(), Vec::new());
         for ship in &armada {
-            // Ours = the fleet dispatched its ticket (an order). A peer's MR carries a ticket key too,
-            // so the key alone says nothing about who owns it.
-            let ours = match &ship.ticket {
-                Some(t) => OrderRepo::get(ledger, t)?.is_some(),
-                None => false,
-            };
-            if ours || ship.ended_at.is_some() || watched.contains(&&ship.id) {
-                continue; // ours, closed, or under review
+            if ship.ended_at.is_some() || watched.contains(&&ship.id) {
+                continue; // closed, or under review
             }
-            let unreviewed = ShipRepo::snapshot(ledger, &ship.id)?
-                .is_some_and(|snap| snap.state == ShipState::Open && ship.reviewed.as_deref() != Some(snap.head_sha.as_str()));
-            if unreviewed {
-                due.push((instant(&ship.created_at), ship.iid));
+            let Some(snap) = ShipRepo::snapshot(ledger, &ship.id)? else { continue };
+            if ship.reviewed.as_deref() == Some(snap.head_sha.as_str()) {
+                continue; // its head is reviewed
+            }
+            let key = (instant(&ship.created_at), ship.iid);
+            if !is_ours(ledger, ship)? {
+                if snap.state == ShipState::Open {
+                    due.push(key);
+                }
+            } else if ship.ticket.as_ref().map(|t| in_review(ledger, t)).transpose()?.unwrap_or(false) {
+                due_ours.push(key); // a draft: the worker's own MR, put up for review
             }
         }
         due.sort();
+        due_ours.sort();
         actions.extend(due.into_iter().take(room(lookouts, seated)).map(|(_, iid)| Action::LaunchLookout { iid }));
+        actions.extend(due_ours.into_iter().take(room(self_lookouts, seated_ours)).map(|(_, iid)| Action::LaunchLookout { iid }));
     }
 
     // ADMIRALTY — an admiral convenes on a ticket's CONFIRMED escalation, for the operator to rule
@@ -496,7 +518,7 @@ pub(crate) fn classify(ledger: &Ledger, ticket: &Ticket, armada: &[Ship], stacks
 }
 
 /// The branch a STACKED ticket forks off (`origin/<parent's source>`), or `None` when it can't
-/// stack: it needs exactly one open blocker, already with its sailor (In QA: built, surveyed,
+/// stack: it needs exactly one open blocker, already with its sailor (In QA: built, reviewed,
 /// handed off) on an open MR, and itself one level deep (its own blockers all terminal — not a
 /// deeper stack). A forge that can't stack (no MR dependencies) never stacks: the child waits.
 pub(crate) fn stack_base(ledger: &Ledger, ticket: &Ticket, armada: &[Ship], stacks: bool) -> Result<Option<String>> {
@@ -546,6 +568,31 @@ fn room(cap: i64, seated: usize) -> usize {
     usize::try_from(cap).map_or(usize::MAX, |cap| cap.saturating_sub(seated))
 }
 
+/// One of our ships: the fleet dispatched its ticket (an order). A peer's MR carries a ticket key
+/// too, so the key alone says nothing about who owns it.
+pub(crate) fn is_ours(ledger: &Ledger, ship: &Ship) -> Result<bool> {
+    Ok(match &ship.ticket {
+        Some(t) => OrderRepo::get(ledger, t)?.is_some(),
+        None => false,
+    })
+}
+
+/// A lookout is live on the ship: its review is under way (or held for the operator).
+pub(crate) fn lookout_on(ledger: &Ledger, ship: &ShipId) -> Result<bool> {
+    Ok(SessionRepo::live(ledger)?.iter().any(|s| s.kind == CrewKind::Lookout && s.ship.as_ref() == Some(ship)))
+}
+
+/// The ticket's live, un-anchored worker last reported `review`: its MR is up for a lookout.
+fn in_review(ledger: &Ledger, ticket: &TicketKey) -> Result<bool> {
+    for s in SessionRepo::for_ticket(ledger, ticket)? {
+        if s.kind == CrewKind::Worker && s.ended_at.is_none() && s.anchored_at.is_none() {
+            let state = ReportRepo::latest(ledger, &s.id)?.map(|r| r.state);
+            return Ok(state == Some(CogState::Worker(WorkerState::Review)));
+        }
+    }
+    Ok(false)
+}
+
 /// `a` is later than `b` (both RFC 3339; compared as text only when one won't parse).
 fn after(a: &str, b: &str) -> bool {
     match (instant(a), instant(b)) {
@@ -581,12 +628,16 @@ fn instant(t: &str) -> Option<time::OffsetDateTime> {
     time::OffsetDateTime::parse(t, &time::format_description::well_known::Rfc3339).ok()
 }
 
-/// The live levers one reconcile pass reads (`settings`, re-read every tick).
+/// The live levers one reconcile pass reads (`settings`, re-read every tick), plus the project's
+/// review skill (fleet.toml).
 pub struct Levers {
     pub dry_run: bool,
     pub captain_sleep_secs: u64,
     pub admirals: i64,
     pub lookouts: i64,
+    pub self_lookouts: i64,
+    pub review_rounds: u64,
+    pub review_skill: Option<String>,
 }
 
 /// Apply the reconcile plan through the ports. `dry_run=true` logs the plan and executes
@@ -617,7 +668,7 @@ pub fn tick<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
     let mut applied: Vec<Action> = Vec::new();
     let mut failed: Vec<serde_json::Value> = Vec::new();
     for action in &actions {
-        match execute(action, ledger, tracker, host, forge, project) {
+        match execute(action, ledger, tracker, host, forge, project, levers) {
             Ok(()) => applied.push(action.clone()),
             Err(e) => failed.push(serde_json::json!({ "action": action, "error": format!("{e:#}") })),
         }
@@ -644,6 +695,7 @@ fn execute<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
     host: &H,
     forge: &F,
     project: &str,
+    levers: &Levers,
 ) -> Result<()> {
     match action {
         Action::Spawn { ticket, kind } => spawn(ledger, tracker, host, ticket, kind),
@@ -651,11 +703,12 @@ fn execute<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
         Action::Reap { ticket } => reap(ledger, tracker, host, project, ticket),
         Action::Heal { ticket, kind } => heal(ledger, host, ticket, kind),
         Action::Wake { ticket } => wake(ledger, host, ticket),
+        Action::ReviewWake { ticket } => review_wake(ledger, forge, host, ticket, levers.review_rounds),
         Action::StandDown { ticket, kind } => stand_down(ledger, host, ticket, kind),
         Action::LaunchCaptain { convoy } => launch_captain(ledger, host, project, convoy),
         Action::StandDownCaptain { convoy } => stand_down_captain(ledger, host, convoy),
         Action::LaunchSailor { ticket } => launch_sailor(ledger, forge, host, ticket),
-        Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, project, *iid),
+        Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, project, *iid, levers.review_skill.as_deref()),
         Action::StandDownLookout { session } => stand_down_lookout(ledger, host, &SessionId(*session)),
         Action::LaunchAdmiral { ticket } => launch_admiral(ledger, host, project, ticket),
     }
@@ -957,7 +1010,50 @@ fn wake<H: SessionHost>(ledger: &Ledger, host: &H, ticket: &str) -> Result<()> {
     })
 }
 
-const WAKE_MSG: &str = "⚓ your blockers merged — /fleet-rechart onto your target, re-run the tests, survey again, then conclude.";
+const WAKE_MSG: &str = "⚓ your blockers merged — /fleet-rechart onto your target, re-run the tests, push, then report review.";
+
+/// ReviewWake — a lookout reviewed a worker's MR at its head and stood down: resume the worker with
+/// the review. Fresh-polls the ship first: a head that moved since (a push after `review`) isn't the
+/// one reviewed, so no wake — the next pass launches a lookout on it. The round is the count of
+/// lookouts launched on the ship; past `rounds` with threads still open, the worker escalates.
+fn review_wake<H: SessionHost, F: Forge + ?Sized>(
+    ledger: &Ledger,
+    forge: &F,
+    host: &H,
+    ticket: &str,
+    rounds: u64,
+) -> Result<()> {
+    let tkey = TicketKey(ticket.to_string());
+    let session = SessionRepo::for_ticket(ledger, &tkey)?
+        .into_iter()
+        .find(|s| s.kind == CrewKind::Worker && s.ended_at.is_none())
+        .ok_or_else(|| anyhow!("review wake {ticket}: no live worker"))?;
+    let ship = ledger
+        .armada()?
+        .into_iter()
+        .find(|s| s.ticket.as_ref() == Some(&tkey) && s.ended_at.is_none())
+        .ok_or_else(|| anyhow!("review wake {ticket}: no open ship"))?;
+    let snap = fresh_snapshot(ledger, forge, &ship)?;
+    if ship.reviewed.as_deref() != Some(snap.head_sha.as_str()) {
+        return Ok(()); // the head moved: not the one reviewed
+    }
+    let round = ledger.lookouts_launched(&ship.id)?;
+    let (iid, open) = (ship.iid, snap.open_threads);
+    let msg = if open == 0 {
+        format!("⚓ review round {round} on !{iid} is clean — conclude.")
+    } else if round >= rounds {
+        format!("⚓ review round {round} on !{iid} still has {open} open threads, the last of {rounds} rounds — escalate with them.")
+    } else {
+        format!("⚓ review round {round} posted on !{iid}: {open} open threads — answer them with /fleet-parley, push, then report review.")
+    };
+    host.send(&session.tmux_session, &msg)?;
+    ledger.record(&Report {
+        session: session.id,
+        state: CogState::Worker(WorkerState::Implementing),
+        last_action: Some(format!("woken: review round {round} ({open} open threads)")),
+        reported_at: now_rfc3339(),
+    })
+}
 
 /// StandDown — the cold-loop counterpart to heal: a cold cog (sailor) whose host process is gone
 /// has finished its one-shot watch (a clean exit and a crash look identical — both Dead), so end
@@ -1175,18 +1271,20 @@ fn launch_sailor<H: SessionHost, F: Forge + ?Sized>(
     Ok(())
 }
 
-/// LaunchLookout — review ONE allied ship (an MR we don't own), picked by reconcile. Fresh-poll it,
-/// mark it `reviewed = head_sha` (the head this review covers), then launch a lookout in the project
-/// checkout with the MR's iid in `FLEET_SHIP` (no worktree — an allied MR isn't ours; `/mr-review`
-/// fetches by SHA). Named for the MR's ticket when it carries one, else its iid. A tmux session of
-/// that name already up (another MR on the same ticket) waits its turn; a lookout already on the ship
-/// (the per-ship lock) is a benign skip.
+/// LaunchLookout — review ONE ship, picked by reconcile. Fresh-poll it, mark it `reviewed = head_sha`
+/// (the head this review covers), then launch a lookout with the MR's iid in `FLEET_SHIP` and the
+/// project's review skill, if it names one, in `FLEET_REVIEW_SKILL`. An ally's MR isn't ours to check
+/// out: its lookout runs in the project checkout and reviews by SHA. One of ours runs in its worker's
+/// worktree. Named for the MR's ticket when it carries one, else its iid. A tmux session of that name
+/// already up (another MR on the same ticket) waits its turn; a lookout already on the ship (the
+/// per-ship lock) is a benign skip.
 fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
     ledger: &Ledger,
     forge: &F,
     host: &H,
     project: &str,
     iid: i64,
+    review_skill: Option<&str>,
 ) -> Result<()> {
     let ship = ledger
         .armada()?
@@ -1202,7 +1300,12 @@ fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
     }
 
     let snap = fresh_snapshot(ledger, forge, &ship)?;
-    ShipRepo::set_reviewed(ledger, &ship.id, &snap.head_sha)?;
+    ShipRepo::set_reviewed(ledger, &ship.id, Some(&snap.head_sha))?;
+    let worktree = match (&ship.ticket, is_ours(ledger, &ship)?) {
+        (Some(t), true) => OrderRepo::get(ledger, t)?.and_then(|o| o.worktree_path),
+        _ => None,
+    };
+    let cwd = worktree.as_deref().unwrap_or(project);
 
     let hid = new_session_id();
     let session_id = match SessionRepo::start(
@@ -1212,7 +1315,7 @@ fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
             kind: CrewKind::Lookout,
             ticket: None, // an ally's ticket may be off our board: the ship is the key
             convoy: None,
-            worktree_path: project.to_string(),
+            worktree_path: cwd.to_string(),
             tmux_session: tmux_session.clone(),
             harness_session_id: Some(hid.clone()),
             created_at: now_rfc3339(),
@@ -1225,8 +1328,11 @@ fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
         None => return Ok(()),
     };
 
-    let cmd = format!("FLEET_SHIP={iid} {}", launch_cmd("lookout", Launch::Fresh(&hid)));
-    host.spawn(&tmux_session, Path::new(project), &cmd)?;
+    // fleet.toml's skill name is the operator's, but it rides a shell line: keep it to a plain name.
+    let skill = review_skill.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric() || "-_:".contains(c)));
+    let env = skill.map(|s| format!("FLEET_REVIEW_SKILL={s} ")).unwrap_or_default();
+    let cmd = format!("{env}FLEET_SHIP={iid} {}", launch_cmd("lookout", Launch::Fresh(&hid)));
+    host.spawn(&tmux_session, Path::new(cwd), &cmd)?;
     ledger.append(
         &now_rfc3339(),
         EventKind::SessionStarted,
@@ -1244,6 +1350,12 @@ fn stand_down_lookout<H: SessionHost>(ledger: &Ledger, host: &H, id: &SessionId)
     if session.ended_at.is_some() {
         return Ok(());
     }
+    // Its ship was marked reviewed at launch: a lookout that never reported `reviewed` (it died
+    // mid-review) leaves no review standing, so clear the mark and the next pass reviews it again.
+    let reviewed = ReportRepo::latest(ledger, id)?.is_some_and(|r| r.state == CogState::Lookout(LookoutState::Reviewed));
+    if let (false, Some(ship)) = (reviewed, &session.ship) {
+        ShipRepo::set_reviewed(ledger, ship, None)?;
+    }
     SessionRepo::end(ledger, id, &now_rfc3339())?;
     let _ = host.kill(&session.tmux_session);
     ledger.append(
@@ -1251,7 +1363,7 @@ fn stand_down_lookout<H: SessionHost>(ledger: &Ledger, host: &H, id: &SessionId)
         EventKind::SessionEnded,
         EntityKind::Session,
         &id.0.to_string(),
-        &serde_json::json!({ "kind": "lookout", "reason": "stand_down" }),
+        &serde_json::json!({ "kind": "lookout", "reason": "stand_down", "reviewed": reviewed }),
     )?;
     Ok(())
 }
@@ -1355,7 +1467,15 @@ fn new_session_id() -> String {
 mod tests {
     use super::*;
 
-    const LIVE: Levers = Levers { dry_run: false, captain_sleep_secs: 0, admirals: 0, lookouts: 1 };
+    const LIVE: Levers = Levers {
+        dry_run: false,
+        captain_sleep_secs: 0,
+        admirals: 0,
+        lookouts: 1,
+        self_lookouts: -1,
+        review_rounds: 5,
+        review_skill: None,
+    };
     const DRY: Levers = Levers { dry_run: true, ..LIVE };
     use domain::ports::EventLog;
     use domain::*;
@@ -1493,7 +1613,7 @@ mod tests {
     fn mark_reviewed(db: &Ledger, iid: i64) {
         let s = db.armada().unwrap().into_iter().find(|s| s.iid == iid).unwrap();
         let head = ShipRepo::snapshot(db, &s.id).unwrap().unwrap().head_sha;
-        db.set_reviewed(&s.id, &head).unwrap();
+        db.set_reviewed(&s.id, Some(&head)).unwrap();
     }
 
     /// An ALLIED ship (an MR we don't own — no order; here no ticket either) + its snapshot, for the lookout tests.
@@ -2095,10 +2215,11 @@ mod tests {
     struct FakeHost {
         spawned: RefCell<Vec<(String, String, String)>>, // (name, cwd, cmd)
         killed: RefCell<Vec<String>>,
+        sent: RefCell<Vec<(String, String)>>, // (name, text)
     }
     impl FakeHost {
         fn new() -> Self {
-            Self { spawned: RefCell::new(vec![]), killed: RefCell::new(vec![]) }
+            Self { spawned: RefCell::new(vec![]), killed: RefCell::new(vec![]), sent: RefCell::new(vec![]) }
         }
     }
     impl SessionHost for FakeHost {
@@ -2119,7 +2240,8 @@ mod tests {
             self.killed.borrow_mut().push(name.into());
             Ok(())
         }
-        fn send(&self, _name: &str, _text: &str) -> Result<()> {
+        fn send(&self, name: &str, text: &str) -> Result<()> {
+            self.sent.borrow_mut().push((name.into(), text.into()));
             Ok(())
         }
         fn list(&self) -> Result<Vec<String>> {
@@ -2624,6 +2746,153 @@ mod tests {
         assert!(launched(&[], 0).is_empty(), "0: none");
         let on_77 = Cog { session: Session { ship: Some(watched), ..lookout_cog().session }, ..lookout_cog() };
         assert_eq!(launched(&[on_77], 2), [79], "a live lookout takes a seat, and keeps its ship");
+    }
+
+    // ── self-review: a lookout on our own MR ───────────────────────────────────────
+
+    /// A worker on `key` in `review`, its ticket dispatched and its draft MR (`iid`) open.
+    fn worker_in_review(db: &Ledger, key: &str, iid: i64, liveness: Liveness) -> Cog {
+        ticket(db, key, TicketStatus::InProgress, false, vec![]);
+        order_wt(db, key, true, Some(&format!("/wt/{key}")));
+        ship(db, iid, key, ShipState::Draft);
+        let cog = live_cog(db, CrewKind::Worker, key, liveness);
+        report(db, &cog, CogState::Worker(WorkerState::Review));
+        cog
+    }
+
+    fn lookout_on_ship(db: &Ledger, iid: i64) -> Cog {
+        let id = db.armada().unwrap().into_iter().find(|s| s.iid == iid).unwrap().id;
+        let session = Session { id: SessionId(0), ship: Some(id), ..lookout_cog().session };
+        let id = SessionRepo::start(db, &session).unwrap().expect("session start");
+        Cog { session: SessionRepo::get(db, &id).unwrap().unwrap(), liveness: Liveness::Active }
+    }
+
+    fn launched(actions: Vec<Action>) -> Vec<i64> {
+        actions.into_iter().filter_map(|a| if let Action::LaunchLookout { iid } = a { Some(iid) } else { None }).collect()
+    }
+
+    #[test]
+    fn a_worker_in_review_gets_a_lookout_on_its_draft_under_its_own_cap() {
+        let db = db();
+        let w1 = worker_in_review(&db, "PROJ-1", 7, Liveness::Quiet);
+        let w2 = worker_in_review(&db, "PROJ-2", 8, Liveness::Quiet);
+        allied_ship(&db, 77, ShipState::Open);
+        let cogs = [w1.clone(), w2.clone()];
+        let plan_with = |l: Levers| launched(plan(&db, &cogs, true, &l).unwrap());
+        assert_eq!(plan_with(Levers { lookouts: 0, ..LIVE }), [7, 8], "self_lookouts -1: no cap, apart from the allies'");
+        assert_eq!(plan_with(Levers { self_lookouts: 1, ..LIVE }), [77, 7], "each cap counts its own");
+        assert_eq!(plan_with(Levers { self_lookouts: 0, lookouts: 0, ..LIVE }), [] as [i64; 0]);
+
+        mark_reviewed(&db, 7);
+        assert_eq!(plan_with(Levers { lookouts: 0, ..LIVE }), [8], "its head is reviewed");
+        report(&db, &w2, CogState::Worker(WorkerState::Implementing));
+        assert!(plan_with(Levers { lookouts: 0, ..LIVE }).is_empty(), "not in review: no lookout on ours");
+    }
+
+    #[test]
+    fn a_worker_in_review_is_woken_once_its_lookout_finished_or_healed_if_dead() {
+        let db = db();
+        let w = worker_in_review(&db, "PROJ-1", 7, Liveness::Quiet);
+        let wake = Action::ReviewWake { ticket: "PROJ-1".into() };
+        let wakes = |cogs: &[Cog]| plan(&db, cogs, true, &Levers { lookouts: 0, ..LIVE }).unwrap().contains(&wake);
+        assert!(!wakes(std::slice::from_ref(&w)), "not reviewed yet");
+
+        mark_reviewed(&db, 7);
+        let l = lookout_on_ship(&db, 7);
+        assert!(!wakes(&[w.clone(), l.clone()]), "its lookout is still on it");
+        SessionRepo::end(&db, &l.session.id, "t").unwrap();
+        assert!(wakes(std::slice::from_ref(&w)), "reviewed, the lookout gone: wake it");
+
+        let dead = Cog { liveness: Liveness::Dead, ..w };
+        assert_eq!(
+            plan(&db, &[dead], true, &Levers { lookouts: 0, ..LIVE }).unwrap(),
+            [Action::Heal { ticket: "PROJ-1".into(), kind: "worker".into() }],
+            "dead: healed first, woken next tick"
+        );
+    }
+
+    #[test]
+    fn a_review_wake_carries_the_round_and_the_threads() {
+        let db = db();
+        let w = worker_in_review(&db, "PROJ-1", 7, Liveness::Quiet);
+        mark_reviewed(&db, 7);
+        let l = lookout_on_ship(&db, 7);
+        SessionRepo::end(&db, &l.session.id, "t").unwrap();
+        let forge = FakeForge::new();
+        let fresh = |head: &str, open_threads| ForgeShip {
+            iid: 7,
+            url: "u".into(),
+            target: "master".into(),
+            source: String::new(),
+            pilot: "p".into(),
+            ticket: None,
+            title: "T".into(),
+            state: ShipState::Draft,
+            head_sha: head.into(),
+            has_conflicts: false,
+            open_threads,
+            total_threads: open_threads,
+            approvals: Approvals { current: 0, required: 0 },
+            armed: false,
+            on_merge_train: false,
+            blocked_by: vec![],
+            pipeline: None,
+            merge_status: None,
+        };
+        let host = FakeHost::new();
+        let woke = |rounds| {
+            host.sent.borrow_mut().clear();
+            review_wake(&db, &forge, &host, "PROJ-1", rounds).unwrap();
+            host.sent.borrow().first().map(|(_, text)| text.clone())
+        };
+
+        *forge.snapshot.borrow_mut() = Some(fresh("moved", 0));
+        assert_eq!(woke(5), None, "the head moved since: not the one reviewed");
+        *forge.snapshot.borrow_mut() = Some(fresh("s", 2));
+        let text = woke(5).unwrap();
+        assert!(text.contains("round 1") && text.contains("2 open threads") && text.contains("/fleet-parley"), "{text}");
+        let latest = ReportRepo::latest(&db, &w.session.id).unwrap().unwrap().state;
+        assert_eq!(latest, CogState::Worker(WorkerState::Implementing), "woken: no second wake");
+        assert!(woke(1).unwrap().contains("escalate"), "the last round, threads still open");
+        *forge.snapshot.borrow_mut() = Some(fresh("s", 0));
+        assert!(woke(5).unwrap().contains("clean — conclude"));
+    }
+
+    #[test]
+    fn a_lookout_that_dies_before_reporting_leaves_its_ship_unreviewed() {
+        let db = db();
+        allied_ship(&db, 77, ShipState::Open);
+        let host = FakeHost::new();
+        let reviewed = |db: &Ledger| db.armada().unwrap().into_iter().find(|s| s.iid == 77).unwrap().reviewed;
+
+        mark_reviewed(&db, 77);
+        let died = lookout_on_ship(&db, 77);
+        stand_down_lookout(&db, &host, &died.session.id).unwrap();
+        assert_eq!(reviewed(&db), None, "no review stands: it's reviewed again");
+
+        mark_reviewed(&db, 77);
+        let done = lookout_on_ship(&db, 77);
+        report(&db, &done, CogState::Lookout(LookoutState::Reviewed));
+        stand_down_lookout(&db, &host, &done.session.id).unwrap();
+        assert_eq!(reviewed(&db).as_deref(), Some("s"), "its review stands");
+    }
+
+    #[test]
+    fn a_lookout_on_our_mr_runs_in_the_workers_worktree_with_the_review_skill() {
+        let db = db();
+        worker_in_review(&db, "PROJ-1", 7, Liveness::Quiet);
+        let forge = FakeForge::new(); // no fresh poll: the last sync stands
+        let host = FakeHost::new();
+        launch_lookout(&db, &forge, &host, "/project", 7, Some("mr-review")).unwrap();
+        let (name, cwd, cmd) = host.spawned.borrow()[0].clone();
+        assert_eq!((name.as_str(), cwd.as_str()), ("lookout-PROJ-1", "/wt/PROJ-1"));
+        assert!(cmd.starts_with("FLEET_REVIEW_SKILL=mr-review FLEET_SHIP=7 claude "), "{cmd}");
+
+        allied_ship(&db, 77, ShipState::Open);
+        launch_lookout(&db, &forge, &host, "/project", 77, Some("x; rm -rf /")).unwrap();
+        let (_, cwd, cmd) = host.spawned.borrow()[1].clone();
+        assert_eq!(cwd, "/project", "an ally's runs in the checkout");
+        assert!(cmd.starts_with("FLEET_SHIP=77 "), "a name that isn't plain never reaches the shell: {cmd}");
     }
 
     #[test]

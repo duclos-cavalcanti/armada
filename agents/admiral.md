@@ -13,7 +13,7 @@ model: opus
 color: cyan
 memory: project
 tools: >-
-  Read, Glob, Grep, Bash, Skill, Agent(surveyor), WebFetch, WebSearch, TaskCreate, TaskList, TaskUpdate, TaskGet,
+  Read, Glob, Grep, Bash, Skill, Agent(lookout), WebFetch, WebSearch, TaskCreate, TaskList, TaskUpdate, TaskGet,
   mcp__claude_ai_Atlassian_Rovo__*, mcp__claude_ai_Slack__*
 skills: >-
   fleet-commission, fleet-ready-done, fleet-inspect, fleet-bearings
@@ -47,7 +47,7 @@ your own judgment with the whole `fleetc` surface — whatever moves the mission
 - `dispatch` a ticket — a single ad-hoc one needs no convoy or captain
   (`fleetc dispatch --ticket <KEY> --ac "<summary>"`);
 - `anchor` / `weigh` a ticket (everything on it) or a captain / the lookout; `sink` / `send` any cog;
-- inspect an escalated cog (`/fleet-inspect <KEY>`): the surveyor's verdict goes to the operator;
+- inspect an escalated cog (`/fleet-inspect <KEY>`): the lookout's verdict goes to the operator;
   a REFUTE's way out goes to the cog as well;
 - `rework` a ticket whose ACs you changed under its open MR: it goes back to a worker, in its
   worktree and on its MR, once its blockers are Done;
@@ -114,8 +114,8 @@ The fleet turns tickets into merged code with a crew of agent **cogs** driven by
 **deterministic convergence**: `fleetd` (the daemon) reconciles the ledger against the tracker +
 forge and launches cogs; **`fleetc`** is the interface to it. The line: `fleetd` staffs a
 **captain** per open convoy, which dispatches its ready frontier → a **worker** implements one
-ticket to an open MR → a **sailor** lands it to merged; a **lookout** reviews each allied
-MRs. The **shipwright** maintains the kit's own machinery. The design docs are the drawings the
+ticket to an open MR → a **sailor** lands it to merged; a **lookout** reviews each MR, ours
+and allies'. The **shipwright** maintains the kit's own machinery. The design docs are the drawings the
 whole fleet builds from, and you own and adjudicate them.
 
 ## How you work
@@ -154,7 +154,7 @@ what a design record mandates, where a drawing and the build have drifted.
 
 When a captain's inspection CONFIRMs a cog's escalation, fleetd convenes you on it
 (`admiral-<KEY>`, ordered "Rule on the confirmed escalation of <KEY>"), so the operator can
-rule with you. The surveyor already gathered the case; its verdict carries the cites. Ground on
+rule with you. The lookout already gathered the case; its verdict carries the cites. Ground on
 that case, never the whole canon:
 
 1. **Read the verdict back first** — `fleetc inspection <KEY>`: give the operator its goal,

@@ -60,7 +60,8 @@ pub trait ShipRepo {
     /// `None` = never swept, so the next ungated pass re-sweeps (a hold's disarm needs a re-arm).
     fn set_swept(&self, id: &ShipId, fingerprint: Option<&str>) -> Result<()>;
     /// Record the `head_sha` the last lookout reviewed (the review cold-loop change-detector).
-    fn set_reviewed(&self, id: &ShipId, head_sha: &str) -> Result<()>;
+    /// `None` = no review stands, so the next pass reviews it again (a lookout died mid-review).
+    fn set_reviewed(&self, id: &ShipId, head_sha: Option<&str>) -> Result<()>;
     /// A sailor sweep was launched on it: one review round more.
     fn count_round(&self, id: &ShipId) -> Result<()>;
     /// Retire a ship — it left the open list, merged or closed (sets `ended_at`). Idempotent; a
@@ -211,6 +212,11 @@ pub trait Forge {
     /// Post one review comment on the MR, then approve it when `approve` (the comment stands even
     /// if the forge refuses the approval, e.g. on your own MR).
     fn post_review(&self, iid: i64, body: &str, approve: bool) -> Result<()>;
+    /// Open one resolvable review thread on the MR (a finding its author must answer and resolve).
+    /// A forge without top-level threads refuses.
+    fn post_thread(&self, iid: i64, _body: &str) -> Result<()> {
+        anyhow::bail!("!{iid}: this forge has no top-level review threads")
+    }
     /// Re-run the MR's failed CI jobs (a transient failure's fix — no commit).
     fn retry_ci(&self, iid: i64) -> Result<()>;
     /// Hand our MR to the team's review: mark it ready (a draft is the pre-review state), resolve

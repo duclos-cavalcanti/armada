@@ -158,7 +158,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
         ),
         Pane::Reviews => (
             format!(" Reviews · {} on watch ", f.lookouts().count()),
-            Some(header(&[("MR", 7), ("Pilot", 14), ("Lookout", 10), ("Live", 7), ("Age", 6), ("Title", 0)])),
+            Some(header(&[("MR", 7), ("On", 11), ("Pilot", 14), ("Lookout", 10), ("Live", 7), ("Age", 6), ("Title", 0)])),
             f.lookouts().map(|c| review_row(c, f.is_up(c), f.ship_on(c))).collect(),
         ),
         Pane::Ships => (ships_title(app), None, ship_rows(app)),
@@ -312,13 +312,19 @@ fn landing_row(r: &LandingRow, up: bool) -> Line<'static> {
     ])
 }
 
-/// A lookout on watch over an ally's MR: the MR, its author, the lookout's last report (`·` none
-/// yet), and the MR's title.
+/// A lookout on watch over an MR: the MR, what it's on (our ticket, or `ally`), its author, the
+/// lookout's last report (`·` none yet), and the MR's title.
 fn review_row(c: &CogRow, up: bool, ship: Option<&ShipRow>) -> Line<'static> {
     let state = c.state.clone().unwrap_or_else(|| "·".into());
     let title = ship.and_then(|r| r.snapshot.as_ref()).map(|s| s.title.clone()).unwrap_or_else(|| "—".into());
+    let on = match ship {
+        Some(r) if r.ours => r.ship.ticket.as_ref().map_or_else(|| "ours".into(), |t| t.0.clone()),
+        Some(_) => "ally".into(),
+        None => "—".into(),
+    };
     cells(vec![
         (ship.map_or_else(|| "—".into(), |r| format!("!{}", r.ship.iid)), 7, Style::default()),
+        (on, 11, Style::default()),
         (ship.map_or_else(|| "—".into(), |r| r.ship.pilot.clone()), 14, Style::default()),
         (state.clone(), 10, state_style(&state)),
         live_cell(c.liveness.as_deref(), up),
@@ -570,6 +576,7 @@ fn state_style(state: &str) -> Style {
         "escalated" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         "flagged" => yellow().add_modifier(Modifier::BOLD),
         "triage" => Style::default().fg(Color::Cyan),
+        "review" => Style::default().fg(Color::Blue),
         "anchored" => Style::default().fg(Color::Magenta),
         "concluded" | "done" | "merged" => green(),
         "sleeping" | "unmanned" | "·" => dim(),

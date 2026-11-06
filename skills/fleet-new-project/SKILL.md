@@ -38,7 +38,10 @@ as you go.
    `main`), and the clone URL (`git@github.com:<owner/repo>.git`, or the GitLab SSH URL).
 5. **Merge policy** — `auto_merge`: should the sailor arm auto-merge (true), or land each MR
    to clean and wait for the operator to merge (false)?
-6. **Anything else** — keep the default cadences and `dry_run = false` unless they say
+6. **Review** — does the project have its own review skill, in the checkout's
+   `.claude/skills/` (e.g. `mr-review`)? If so, `review_skill = "<name>"`: every lookout runs it
+   on every MR, ours and allies'. If not, leave it out: the kit's `/fleet-review` runs.
+7. **Anything else** — keep the default cadences and `dry_run = false` unless they say
    otherwise.
 
 Read the answers back as the fleet.toml you'll write, and get a yes before Step 2.
@@ -64,6 +67,9 @@ reconcile_secs     = 60
 captain_sleep_secs = 900
 admirals           = 3
 lookouts           = 3
+self_lookouts      = -1                # lookouts on our own MRs, apart from the allies': -1 = no cap
+review_rounds      = 5
+# review_skill     = "<name>"          # the project's own review skill; unset = /fleet-review
 dry_run            = false
 
 [project]

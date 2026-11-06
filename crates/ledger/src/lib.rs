@@ -67,6 +67,16 @@ impl Ledger {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// How many lookouts have been launched on the ship: the review round it's on.
+    pub fn lookouts_launched(&self, ship: &ShipId) -> Result<u64> {
+        let n: i64 = self.conn.query_row(
+            "SELECT count(*) FROM sessions WHERE kind = 'lookout' AND ship = ?1",
+            params![ship.0],
+            |r| r.get(0),
+        )?;
+        Ok(n as u64)
+    }
+
     /// When the convoy's latest captain was launched (`None`: never). A captain runs cold, one pass
     /// per launch, so this is how recently its convoy was looked at.
     pub fn last_captain_launch(&self, convoy: &ConvoyKey) -> Result<Option<String>> {
@@ -1253,7 +1263,7 @@ impl ShipRepo for Ledger {
             .optional()?)
     }
 
-    fn set_reviewed(&self, id: &ShipId, head_sha: &str) -> Result<()> {
+    fn set_reviewed(&self, id: &ShipId, head_sha: Option<&str>) -> Result<()> {
         self.conn
             .execute("UPDATE ships SET reviewed = ?2 WHERE id = ?1", params![id.0, head_sha])?;
         Ok(())

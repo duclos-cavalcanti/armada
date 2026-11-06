@@ -96,7 +96,8 @@ reason (`fleetc anchor <KEY> --reason "<what's missing>"`).
    stated in the MR. Believed-done isn't done.
 2. **Tests ship in the same MR** as the change they cover.
 3. **Review reaches nits only** — every finding above a nit is fixed or answered. For a
-   worker, that's the `surveyor`'s verdict: an independent review in a fresh context.
+   worker, that's the lookout's review of the MR's head: an independent reviewer, never the
+   author.
 4. **CI green** on the MR's head.
 5. **Scope held** — the MR does what the ticket says. Anything found along the way that
    isn't in it becomes its own ticket (a cog proposes it with `/fleet-propose`), not a note.
