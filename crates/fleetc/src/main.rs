@@ -41,6 +41,8 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc send     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>|--iid <N>] <message>   (message into the cog's pane)\n  \
      fleetc rework   <KEY-N> [--hand]   (its ACs changed: back to a worker — or a hand — in its worktree, on its MR)\n  \
      fleetc inspection <KEY-N> [--verdict confirm|refute --body <text|->]   (the latest verdict on its cog's escalation; with --verdict, record one — /fleet-inspect)\n  \
+     fleetc escalations [--key <KEY-N>] [--case <N>]   (the cases of KEY's convoy, newest first: escalation → verdict → ruling; a cog reads only its own convoy's, before it escalates)\n  \
+     fleetc ruling   --case <N> | --key <KEY-N>  --question <text> --answer <text|->   (the operator's ruling on a confirmed case, recorded then sent to its cog; --key: one with no escalation behind it)\n  \
      fleetc decommission <KEY-N> --reason <why> [--yes]   (withdraw it for good: close its MR, cancel it with the reason, reap its cogs + worktree)\n  \
      fleetc packet   [<KEY-N>]        (the cog's work-packet: order + ship + ticket)\n  \
      fleetc context  [--convoy <KEY>] [--format table]   (a captain's convoy slice)\n  \
@@ -104,6 +106,8 @@ fn run() -> Result<()> {
         Some("send") => send(&args[1..]),
         Some("decommission") => decommission(&args[1..]),
         Some("inspection") => inspection(&args[1..]),
+        Some("escalations") => escalations(&args[1..]),
+        Some("ruling") => ruling(&args[1..]),
         Some("rework") => rework(&args[1..]),
         Some("packet") => packet(&args[1..]),
         Some("context") => context(&args[1..]),
@@ -462,6 +466,144 @@ fn print_inspection(ticket: &str) -> Result<()> {
     let i = latest.ok_or_else(|| anyhow!("{ticket} has no inspection yet"))?;
     println!("{} · {}\n\n{}", i.verdict.as_str().to_uppercase(), i.inspected_at, i.body.trim_end());
     Ok(())
+}
+
+/// `fleetc escalations [--key <KEY-N>] [--case <N>]` — the cases of KEY's convoy, newest first: each
+/// escalation, its verdict and its ruling, the precedent a cog reads before it escalates. A cog reads
+/// only its own convoy's (an omitted key is its own ticket, a captain's its convoy); `--case` shows one
+/// in full. Read off the ledger.
+fn escalations(args: &[String]) -> Result<()> {
+    use domain::ports::{CaseRepo, TicketRepo};
+    use domain::{CaseId, ConvoyKey, TicketKey};
+    let (mut key, mut case) = (None, None);
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
+        match flag.as_str() {
+            "--key" => key = Some(TicketKey(ticket_key(&take()?, "escalations")?)),
+            "--case" => case = Some(CaseId(take()?.trim_start_matches('#').parse().map_err(|_| anyhow!("--case takes a case number"))?)),
+            _ => bail!("usage: fleetc escalations [--key <KEY-N>] [--case <N>]"),
+        }
+    }
+    let db = project_dir().ledger();
+    let ledger = ledger::Ledger::open_readonly(&db).map_err(|_| anyhow!("no ledger yet ({db})"))?;
+    let convoy_of = |k: &TicketKey| -> Result<Option<ConvoyKey>> { Ok(TicketRepo::get(&ledger, k)?.and_then(|t| t.convoy)) };
+    // A cog's scope: its ticket's convoy (the ticket alone, outside any), or a captain's convoy.
+    let own_ticket = own("FLEET_TICKET").map(TicketKey);
+    let scope = match (&own_ticket, own("FLEET_CONVOY")) {
+        (Some(t), _) => Some((convoy_of(t)?, Some(t.clone()))),
+        (None, Some(c)) => Some((Some(ConvoyKey(c)), None)),
+        (None, None) if own("FLEET_SHIP").is_some() => bail!("a lookout reads escalations only as an inspector, in its captain's session"),
+        (None, None) => None,
+    };
+    let in_scope = |convoy: &Option<ConvoyKey>, ticket: &TicketKey| match &scope {
+        None => true,
+        Some((Some(c), _)) => convoy.as_ref() == Some(c),
+        Some((None, t)) => convoy.is_none() && t.as_ref() == Some(ticket),
+    };
+    let outside = |what: String| match &scope {
+        Some((Some(c), _)) => anyhow!("{what} is outside your convoy {}: a cog reads only its own convoy's escalations", c.0),
+        _ => anyhow!("{what} isn't yours: outside a convoy, a cog reads only its own ticket's escalations"),
+    };
+    if let Some(id) = case {
+        let c = ledger.case(&id)?.ok_or_else(|| anyhow!("no case #{}", id.0))?;
+        if !in_scope(&c.convoy, &c.ticket) {
+            return Err(outside(format!("case #{}", id.0)));
+        }
+        print!("{}", render_case(&c, ledger.verdict(&id)?.as_ref(), true));
+        return Ok(());
+    }
+    let (convoy, ticket) = match (key, &scope) {
+        (Some(k), _) => (convoy_of(&k)?, k),
+        (None, Some((convoy, Some(t)))) => (convoy.clone(), t.clone()),
+        (None, Some((Some(c), None))) => (Some(c.clone()), TicketKey(String::new())),
+        _ => bail!("usage: fleetc escalations --key <KEY-N> | --case <N>"),
+    };
+    if !in_scope(&convoy, &ticket) {
+        return Err(outside(ticket.0));
+    }
+    let cases = ledger.cases(convoy.as_ref(), &ticket)?;
+    if cases.is_empty() {
+        match &convoy {
+            Some(c) => println!("no escalations in convoy {} yet", c.0),
+            None => println!("no escalations on {} yet", ticket.0),
+        }
+    }
+    for c in &cases {
+        print!("{}", render_case(c, ledger.verdict(&c.id)?.as_ref(), false));
+    }
+    Ok(())
+}
+
+/// One case as text: a facts line, then what was asked, the verdict and the ruling — each on a line,
+/// or, `full`, each in full (the verdict's whole template).
+fn render_case(c: &domain::Case, verdict: Option<&domain::Inspection>, full: bool) -> String {
+    let flat = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut facts = vec![format!("case #{}", c.id.0), c.ticket.0.clone()];
+    facts.extend(c.cog.map(|k| k.as_str().to_string()));
+    facts.push(c.outcome(verdict.map(|v| v.verdict)).to_string());
+    facts.push(format!("raised {}", c.raised_at));
+    if c.reports > 1 {
+        facts.push(format!("{} reports", c.reports));
+    }
+    if full {
+        facts.extend(c.settled_at.as_ref().map(|at| format!("settled {at}")));
+    }
+    let mut out = format!("{}\n", facts.join(" · "));
+    if full {
+        if c.session.is_some() {
+            out.push_str(&format!("\nasked:\n{}\n", c.question.trim_end()));
+        }
+        if let Some(v) = verdict {
+            out.push_str(&format!("\nverdict ({}, {}):\n{}\n", v.verdict.as_str().to_uppercase(), v.inspected_at, v.body.trim_end()));
+        }
+        if let Some(r) = &c.ruling {
+            out.push_str(&format!("\nruling ({}):\nQ: {}\nA: {}\n", r.ruled_at, r.question.trim_end(), r.answer.trim_end()));
+        }
+        return out;
+    }
+    if c.session.is_some() {
+        out.push_str(&format!("  asked:   {}\n", flat(&c.question)));
+    }
+    if let Some(v) = verdict {
+        out.push_str(&format!("  verdict: {}\n", flat(v.headline())));
+        if let (domain::Verdict::Refute, Some(way)) = (v.verdict, v.recommendation()) {
+            out.push_str(&format!("  way out: {}\n", flat(way)));
+        }
+    }
+    if let Some(r) = &c.ruling {
+        out.push_str(&format!("  ruling:  {} → {}\n", flat(&r.question), flat(&r.answer)));
+    }
+    out
+}
+
+/// `fleetc ruling --case <N> | --key <KEY-N> --question <text> --answer <text|->` — the operator's
+/// ruling on a confirmed case: fleetd records it, then sends it to the cog still escalated on it, so
+/// no ruling reaches a cog unrecorded. `--question` is the case's question in general terms, so a
+/// later case can cite it. `--key` instead of `--case` records a ruling with no escalation behind it.
+/// The operator's call (the admiral carries it out); never a cog's.
+fn ruling(args: &[String]) -> Result<()> {
+    if in_cog() {
+        bail!("a cog doesn't rule — it escalates, and the operator rules");
+    }
+    let usage = "usage: fleetc ruling --case <N> | --key <KEY-N> --question <text> --answer <text|->";
+    let (mut case, mut ticket, mut question, mut answer) = (None, None, None, None);
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
+        match flag.as_str() {
+            "--case" => case = Some(take()?.trim_start_matches('#').parse::<i64>().map_err(|_| anyhow!("--case takes a case number"))?),
+            "--key" => ticket = Some(ticket_key(&take()?, "ruling")?),
+            "--question" => question = Some(take()?),
+            "--answer" => answer = Some(body_text(take()?)?),
+            _ => bail!("{usage}"),
+        }
+    }
+    let (Some(question), Some(answer)) = (question, answer) else { bail!("{usage}") };
+    if case.is_some() == ticket.is_some() {
+        bail!("{usage}");
+    }
+    post_and_print("/ruling", &wire::RulingCmd { case, ticket, question, answer })
 }
 
 /// `fleetc decommission <KEY-N> --reason <why> [--yes]` — withdraw a ticket from the fleet for good:
@@ -1649,7 +1791,7 @@ mod tests {
         let export = root.join("snapshot.db");
         ledger::snapshot(&p.ledger(), &export.to_string_lossy()).unwrap();
         let v1 = "ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; \
-                  ALTER TABLE ships DROP COLUMN rounds; PRAGMA user_version = 1;";
+                  ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; PRAGMA user_version = 1;";
         assert!(std::process::Command::new("sqlite3").arg(&export).arg(v1).status().unwrap().success());
 
         import_into(&p, &export).unwrap();
@@ -1664,6 +1806,41 @@ mod tests {
         let out = std::process::Command::new("sqlite3").arg(path).arg(format!("PRAGMA user_version = {v};")).output().unwrap();
         assert!(out.status.success());
         v
+    }
+
+    #[test]
+    fn renders_a_case_on_a_line_each_or_in_full() {
+        use domain::{Case, CaseId, Inspection, Ruling, SessionId, TicketKey, Verdict};
+        let case = Case {
+            id: CaseId(12),
+            ticket: TicketKey("PROJ-1".into()),
+            convoy: None,
+            session: Some(SessionId(3)),
+            cog: Some(CrewKind::Worker),
+            question: "Which auth\n  does it take?".into(),
+            raised_at: "t1".into(),
+            reports: 3,
+            ruling: None,
+            settled_at: None,
+        };
+        let verdict = |v| Inspection {
+            session: SessionId(3),
+            case: Some(CaseId(12)),
+            reported_at: "t1".into(),
+            verdict: v,
+            body: "**Verdict:** REFUTE — the canon answers it\n- **Recommendation:** op1 — take Rev 4 (ADD §5)".into(),
+            inspected_at: "t2".into(),
+        };
+        let refuted = render_case(&case, Some(&verdict(Verdict::Refute)), false);
+        assert_eq!(
+            refuted,
+            "case #12 · PROJ-1 · worker · refuted · raised t1 · 3 reports\n  asked:   Which auth does it take?\n  verdict: REFUTE — the canon answers it\n  way out: op1 — take Rev 4 (ADD §5)\n"
+        );
+        let ruled = Case { ruling: Some(Ruling { question: "Which auth?".into(), answer: "Rev 4's.".into(), ruled_at: "t3".into() }), ..case };
+        let line = render_case(&ruled, Some(&verdict(Verdict::Confirm)), false);
+        assert!(line.contains(" · ruled · ") && line.ends_with("  ruling:  Which auth? → Rev 4's.\n") && !line.contains("way out"), "{line}");
+        let full = render_case(&ruled, Some(&verdict(Verdict::Confirm)), true);
+        assert!(full.contains("\nverdict (CONFIRM, t2):\n**Verdict:**") && full.ends_with("\nruling (t3):\nQ: Which auth?\nA: Rev 4's.\n"), "{full}");
     }
 
     #[test]

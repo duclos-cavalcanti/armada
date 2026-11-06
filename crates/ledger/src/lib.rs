@@ -7,7 +7,7 @@
 
 use anyhow::Result;
 use domain::ports::{
-    ConvoyRepo, EventLog, InspectionRepo, LookoutRepo, OrderRepo, ProposalRepo, ReportRepo, SessionRepo,
+    CaseRepo, ConvoyRepo, EventLog, InspectionRepo, LookoutRepo, OrderRepo, ProposalRepo, ReportRepo, SessionRepo,
     ShipRepo, TicketRepo,
 };
 use domain::*;
@@ -230,6 +230,47 @@ const MIGRATIONS: &[&str] = &[
     // v8: a convoy's plan keeps its history (ConvoyPlanned events); each standing plan seeds it.
     "INSERT INTO events(created_at, kind, entity_kind, entity_ref, payload_json)
         SELECT updated_at, 'convoy_planned', 'convoy', convoy, json_object('plan', body) FROM convoy_plans ORDER BY updated_at;",
+    // v9: escalation cases. The escalations judged so far become cases (one per session and
+    // question, its verdicts attached), and so do the ones standing now: precedent from the start.
+    // A past case settles when its session ended, else at its last verdict.
+    "CREATE TABLE IF NOT EXISTS cases (
+        id              INTEGER PRIMARY KEY,
+        ticket          TEXT NOT NULL REFERENCES tickets(key),
+        convoy          TEXT,
+        session_id      INTEGER REFERENCES sessions(id),
+        question        TEXT NOT NULL,
+        raised_at       TEXT NOT NULL,
+        reports         INTEGER NOT NULL DEFAULT 1,
+        ruling_question TEXT,
+        ruling          TEXT CHECK (ruling IS NULL OR length(trim(ruling)) > 0),
+        ruled_at        TEXT,
+        settled_at      TEXT,
+        CHECK ((ruling IS NULL) = (ruled_at IS NULL) AND (ruling IS NULL) = (ruling_question IS NULL)),
+        CHECK (session_id IS NOT NULL OR ruling IS NOT NULL)
+    );
+    ALTER TABLE inspections ADD COLUMN case_id INTEGER REFERENCES cases(id);
+    CREATE TEMP TABLE judged AS
+        SELECT i.id, i.session_id, i.reported_at, TRIM(COALESCE((SELECT json_extract(e.payload_json, '$.last_action')
+            FROM events e WHERE e.kind = 'status_reported' AND e.entity_ref = CAST(i.session_id AS TEXT)
+            AND e.created_at = i.reported_at LIMIT 1), '')) AS question
+        FROM inspections i;
+    INSERT INTO cases(ticket, convoy, session_id, question, raised_at, reports)
+        SELECT s.ticket, t.convoy, s.id, j.question, MIN(j.reported_at), COUNT(DISTINCT j.reported_at)
+        FROM judged j JOIN sessions s ON s.id = j.session_id LEFT JOIN tickets t ON t.key = s.ticket
+        WHERE s.ticket IS NOT NULL GROUP BY s.id, j.question ORDER BY MIN(j.reported_at);
+    INSERT INTO cases(ticket, convoy, session_id, question, raised_at)
+        SELECT s.ticket, t.convoy, s.id, TRIM(COALESCE(r.last_action, '')), r.reported_at
+        FROM reports r JOIN sessions s ON s.id = r.session_id LEFT JOIN tickets t ON t.key = s.ticket
+        WHERE r.state = 'escalated' AND s.ended_at IS NULL AND s.kind IN ('worker','sailor') AND s.ticket IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM cases c WHERE c.session_id = s.id AND c.question = TRIM(COALESCE(r.last_action, '')));
+    UPDATE inspections SET case_id = (SELECT c.id FROM judged j JOIN cases c ON c.session_id = j.session_id AND c.question = j.question
+        WHERE j.id = inspections.id);
+    UPDATE cases SET settled_at = COALESCE((SELECT ended_at FROM sessions WHERE id = cases.session_id),
+            (SELECT MAX(inspected_at) FROM inspections WHERE case_id = cases.id), raised_at)
+        WHERE NOT EXISTS (SELECT 1 FROM reports r JOIN sessions s ON s.id = r.session_id
+            WHERE r.session_id = cases.session_id AND s.ended_at IS NULL AND r.state = 'escalated'
+              AND TRIM(COALESCE(r.last_action, '')) = cases.question);
+    DROP TABLE temp.judged;",
 ];
 
 /// The ledger's schema version (SQLite `user_version`): one past its last migration.
@@ -549,8 +590,11 @@ impl SessionRepo for Ledger {
     }
 
     fn end(&self, id: &SessionId, at: &str) -> Result<()> {
-        self.conn
-            .execute("UPDATE sessions SET ended_at = ?2 WHERE id = ?1", params![id.0, at])?;
+        // Its open case settles with it: no cog stands on it any more.
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("UPDATE sessions SET ended_at = ?2 WHERE id = ?1", params![id.0, at])?;
+        tx.execute("UPDATE cases SET settled_at = ?2 WHERE session_id = ?1 AND settled_at IS NULL", params![id.0, at])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -632,6 +676,7 @@ impl ReportRepo for Ledger {
                 serde_json::to_string(&payload)?,
             ],
         )?;
+        track_case(&tx, r)?;
         tx.commit()?;
         Ok(())
     }
@@ -648,6 +693,38 @@ impl ReportRepo for Ledger {
             )
             .optional()?)
     }
+}
+
+/// Keep the session's case in step with its report, in the report's txn: a worker's or sailor's
+/// escalation opens a case, a re-report of the same question joins it, and any other report settles it.
+fn track_case(tx: &Connection, r: &Report) -> Result<()> {
+    if !matches!(r.state, CogState::Worker(_) | CogState::Sailor(_)) {
+        return Ok(());
+    }
+    let question = r.last_action.as_deref().unwrap_or("").trim();
+    let open: Option<(i64, String)> = tx
+        .query_row(
+            "SELECT id, question FROM cases WHERE session_id = ?1 AND settled_at IS NULL",
+            params![r.session.0],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if let Some((id, asked)) = open {
+        if r.state.is_escalated() && asked == question {
+            tx.execute("UPDATE cases SET reports = reports + 1 WHERE id = ?1", params![id])?;
+            return Ok(());
+        }
+        tx.execute("UPDATE cases SET settled_at = ?2 WHERE id = ?1", params![id, r.reported_at])?;
+    }
+    if r.state.is_escalated() {
+        tx.execute(
+            "INSERT INTO cases(ticket, convoy, session_id, question, raised_at)
+             SELECT s.ticket, t.convoy, s.id, ?2, ?3 FROM sessions s LEFT JOIN tickets t ON t.key = s.ticket
+             WHERE s.id = ?1 AND s.ticket IS NOT NULL",
+            params![r.session.0, question, r.reported_at],
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -683,7 +760,7 @@ mod tests {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; \
-             ALTER TABLE ships DROP COLUMN rounds; PRAGMA user_version = 1;",
+             ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; PRAGMA user_version = 1;",
         )
         .unwrap();
         drop(conn);
@@ -709,7 +786,7 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO convoys(key, created_at) VALUES ('PROJ-100', 't1');
              INSERT INTO convoy_plans(convoy, body, updated_at) VALUES ('PROJ-100', 'ship the seed', 't2');
-             PRAGMA user_version = 7;",
+             ALTER TABLE inspections DROP COLUMN case_id; PRAGMA user_version = 7;",
         )
         .unwrap();
         drop(conn);
@@ -736,7 +813,7 @@ mod tests {
         // Back to v4: the same rebuild, without the admiral kind.
         let v4 = MIGRATIONS[3].replace(",'admiral'", ""); // v5's rebuild
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; PRAGMA user_version = 4;"))
+        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; PRAGMA user_version = 4;"))
             .unwrap();
         drop(conn);
 
@@ -765,7 +842,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn bare_ticket(key: &str) -> Ticket {
+    pub(super) fn bare_ticket(key: &str) -> Ticket {
         Ticket {
             key: TicketKey(key.into()),
             convoy: None,
@@ -779,7 +856,7 @@ mod tests {
         }
     }
 
-    fn worker_on(key: &str) -> Session {
+    pub(super) fn worker_on(key: &str) -> Session {
         Session {
             id: SessionId(0), // ignored; the DB assigns
             kind: CrewKind::Worker,
@@ -1615,8 +1692,8 @@ impl InspectionRepo for Ledger {
     fn inspect(&self, i: &Inspection) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO inspections(session_id, reported_at, verdict, body, inspected_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![i.session.0, i.reported_at, i.verdict.as_str(), i.body, i.inspected_at],
+            "INSERT INTO inspections(session_id, case_id, reported_at, verdict, body, inspected_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![i.session.0, i.case.as_ref().map(|c| c.0), i.reported_at, i.verdict.as_str(), i.body, i.inspected_at],
         )?;
         tx.execute(
             "INSERT INTO events(created_at, kind, entity_kind, entity_ref, payload_json) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -1625,7 +1702,7 @@ impl InspectionRepo for Ledger {
                 EventKind::EscalationInspected.as_str(),
                 EntityKind::Escalation.as_str(),
                 i.session.0.to_string(),
-                serde_json::json!({ "verdict": i.verdict.as_str(), "reported_at": i.reported_at }).to_string(),
+                serde_json::json!({ "verdict": i.verdict.as_str(), "reported_at": i.reported_at, "case": i.case.as_ref().map(|c| c.0) }).to_string(),
             ],
         )?;
         tx.commit()?;
@@ -1635,22 +1712,116 @@ impl InspectionRepo for Ledger {
     fn inspection(&self, session: &SessionId) -> Result<Option<Inspection>> {
         Ok(self
             .conn
-            .query_row(
-                "SELECT * FROM inspections WHERE session_id = ?1 ORDER BY id DESC LIMIT 1",
-                params![session.0],
-                |r| {
-                    let verdict: String = r.get("verdict")?;
-                    Ok(Inspection {
-                        session: SessionId(r.get("session_id")?),
-                        reported_at: r.get("reported_at")?,
-                        verdict: require(Verdict::parse(&verdict), 3, "verdict")?,
-                        body: r.get("body")?,
-                        inspected_at: r.get("inspected_at")?,
-                    })
-                },
-            )
+            .query_row("SELECT * FROM inspections WHERE session_id = ?1 ORDER BY id DESC LIMIT 1", params![session.0], row_to_inspection)
             .optional()?)
     }
+}
+
+fn row_to_inspection(r: &rusqlite::Row) -> rusqlite::Result<Inspection> {
+    let verdict: String = r.get("verdict")?;
+    Ok(Inspection {
+        session: SessionId(r.get("session_id")?),
+        case: r.get::<_, Option<i64>>("case_id")?.map(CaseId),
+        reported_at: r.get("reported_at")?,
+        verdict: require(Verdict::parse(&verdict), 3, "verdict")?,
+        body: r.get("body")?,
+        inspected_at: r.get("inspected_at")?,
+    })
+}
+
+// ── cases ───────────────────────────────────────────────────────────────────────
+
+const CASE_SELECT: &str = "SELECT c.*, s.kind FROM cases c LEFT JOIN sessions s ON s.id = c.session_id";
+
+fn row_to_case(r: &rusqlite::Row) -> rusqlite::Result<Case> {
+    let ruling = match r.get::<_, Option<String>>("ruling")? {
+        Some(answer) => Some(Ruling { question: r.get("ruling_question")?, answer, ruled_at: r.get("ruled_at")? }),
+        None => None,
+    };
+    Ok(Case {
+        id: CaseId(r.get("id")?),
+        ticket: TicketKey(r.get("ticket")?),
+        convoy: r.get::<_, Option<String>>("convoy")?.map(ConvoyKey),
+        session: r.get::<_, Option<i64>>("session_id")?.map(SessionId),
+        cog: r.get::<_, Option<String>>("kind")?.and_then(|k| CrewKind::parse(&k)),
+        question: r.get("question")?,
+        raised_at: r.get("raised_at")?,
+        reports: r.get("reports")?,
+        ruling,
+        settled_at: r.get("settled_at")?,
+    })
+}
+
+impl CaseRepo for Ledger {
+    fn open_case(&self, session: &SessionId) -> Result<Option<Case>> {
+        let sql = format!("{CASE_SELECT} WHERE c.session_id = ?1 AND c.settled_at IS NULL");
+        Ok(self.conn.query_row(&sql, params![session.0], row_to_case).optional()?)
+    }
+
+    fn case(&self, id: &CaseId) -> Result<Option<Case>> {
+        Ok(self.conn.query_row(&format!("{CASE_SELECT} WHERE c.id = ?1"), params![id.0], row_to_case).optional()?)
+    }
+
+    fn cases(&self, convoy: Option<&ConvoyKey>, ticket: &TicketKey) -> Result<Vec<Case>> {
+        let (sql, key) = match convoy {
+            Some(c) => (format!("{CASE_SELECT} WHERE c.convoy = ?1 ORDER BY c.id DESC"), &c.0),
+            None => (format!("{CASE_SELECT} WHERE c.convoy IS NULL AND c.ticket = ?1 ORDER BY c.id DESC"), &ticket.0),
+        };
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![key], row_to_case)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    fn verdict(&self, id: &CaseId) -> Result<Option<Inspection>> {
+        Ok(self
+            .conn
+            .query_row("SELECT * FROM inspections WHERE case_id = ?1 ORDER BY id DESC LIMIT 1", params![id.0], row_to_inspection)
+            .optional()?)
+    }
+
+    fn rule(&self, id: &CaseId, ruling: &Ruling) -> Result<()> {
+        let case = self.case(id)?.ok_or_else(|| anyhow::anyhow!("no case #{}", id.0))?;
+        anyhow::ensure!(case.ruling.is_none(), "case #{} is already ruled", id.0);
+        let confirmed = self.verdict(id)?.is_some_and(|v| v.verdict == Verdict::Confirm);
+        anyhow::ensure!(confirmed, "case #{} isn't confirmed: a captain inspects it first (/fleet-inspect)", id.0);
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE cases SET ruling_question = ?2, ruling = ?3, ruled_at = ?4 WHERE id = ?1",
+            params![id.0, ruling.question, ruling.answer, ruling.ruled_at],
+        )?;
+        ruled(&tx, id, ruling)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn rule_alone(&self, ticket: &TicketKey, ruling: &Ruling) -> Result<CaseId> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO cases(ticket, convoy, question, raised_at, ruling_question, ruling, ruled_at, settled_at)
+             SELECT key, convoy, ?2, ?3, ?2, ?4, ?3, ?3 FROM tickets WHERE key = ?1",
+            params![ticket.0, ruling.question, ruling.ruled_at, ruling.answer],
+        )?;
+        anyhow::ensure!(tx.changes() == 1, "{} isn't on the board", ticket.0);
+        let id = CaseId(tx.last_insert_rowid());
+        ruled(&tx, &id, ruling)?;
+        tx.commit()?;
+        Ok(id)
+    }
+}
+
+/// The `EscalationRuled` event of a ruling, in its txn.
+fn ruled(tx: &Connection, id: &CaseId, ruling: &Ruling) -> Result<()> {
+    tx.execute(
+        "INSERT INTO events(created_at, kind, entity_kind, entity_ref, payload_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            ruling.ruled_at,
+            EventKind::EscalationRuled.as_str(),
+            EntityKind::Escalation.as_str(),
+            id.0.to_string(),
+            serde_json::json!({ "question": ruling.question }).to_string(),
+        ],
+    )?;
+    Ok(())
 }
 
 // ── proposals ───────────────────────────────────────────────────────────────────
@@ -1772,6 +1943,7 @@ impl EventLog for Ledger {
 #[cfg(test)]
 mod repo_tests {
     use super::*;
+    use super::tests::{bare_ticket, worker_on};
 
     fn db_with(key: &str) -> Ledger {
         let db = Ledger::in_memory().unwrap();
@@ -1896,6 +2068,7 @@ mod repo_tests {
         assert_eq!(db.inspection(&id).unwrap(), None, "never inspected");
         let at = |reported: &str, verdict| Inspection {
             session: id.clone(),
+            case: None,
             reported_at: reported.into(),
             verdict,
             body: "**Verdict:** …".into(),
@@ -1906,6 +2079,125 @@ mod repo_tests {
         let got = db.inspection(&id).unwrap().unwrap();
         assert_eq!((got.reported_at.as_str(), got.verdict), ("t2", Verdict::Confirm));
         assert!(db.inspect(&Inspection { body: " ".into(), ..at("t3", Verdict::Confirm) }).is_err(), "a verdict says why");
+    }
+
+    fn escalate(db: &Ledger, session: &SessionId, question: &str, at: &str) {
+        let state = CogState::Worker(WorkerState::Escalated);
+        db.record(&Report { session: session.clone(), state, last_action: Some(question.into()), reported_at: at.into() }).unwrap();
+    }
+
+    fn verdict_on(db: &Ledger, case: &Case, verdict: Verdict) {
+        let session = case.session.clone().unwrap();
+        db.inspect(&Inspection { session, case: Some(case.id.clone()), reported_at: "t".into(), verdict, body: "**Verdict:** x".into(), inspected_at: "t".into() })
+            .unwrap();
+    }
+
+    #[test]
+    fn an_escalation_opens_a_case_a_rereport_joins_it_and_moving_on_settles_it() {
+        let db = db_with("PROJ-1");
+        let id = db.start(&worker_on("PROJ-1")).unwrap().unwrap();
+        escalate(&db, &id, "  needs a ruling on X ", "t1");
+        let case = db.open_case(&id).unwrap().expect("raised");
+        assert_eq!((case.question.as_str(), case.reports, case.cog), ("needs a ruling on X", 1, Some(CrewKind::Worker)));
+        verdict_on(&db, &case, Verdict::Confirm);
+
+        escalate(&db, &id, "needs a ruling on X", "t2"); // a heal's re-report
+        let joined = db.open_case(&id).unwrap().unwrap();
+        assert_eq!((joined.id.clone(), joined.reports), (case.id.clone(), 2), "the same case, not a new one");
+        assert!(db.verdict(&joined.id).unwrap().is_some_and(|v| v.judges(&joined)), "still judged");
+
+        escalate(&db, &id, "a different question", "t3");
+        let next = db.open_case(&id).unwrap().unwrap();
+        assert_ne!(next.id, case.id, "a new question is a new case");
+        assert_eq!(db.case(&case.id).unwrap().unwrap().settled_at.as_deref(), Some("t3"));
+        assert_eq!(db.verdict(&next.id).unwrap(), None, "unjudged until it's inspected");
+
+        let state = CogState::Worker(WorkerState::Implementing);
+        db.record(&Report { session: id.clone(), state, last_action: None, reported_at: "t4".into() }).unwrap();
+        assert_eq!(db.open_case(&id).unwrap(), None, "moved on: settled");
+        let all = db.cases(None, &TicketKey("PROJ-1".into())).unwrap();
+        assert_eq!(all.iter().map(|c| c.id.clone()).collect::<Vec<_>>(), vec![next.id, case.id], "newest first");
+    }
+
+    #[test]
+    fn ending_the_session_settles_its_open_case() {
+        let db = db_with("PROJ-1");
+        let id = db.start(&worker_on("PROJ-1")).unwrap().unwrap();
+        escalate(&db, &id, "stuck", "t1");
+        db.end(&id, "t2").unwrap();
+        assert_eq!(db.open_case(&id).unwrap(), None);
+        assert_eq!(db.cases(None, &TicketKey("PROJ-1".into())).unwrap()[0].settled_at.as_deref(), Some("t2"));
+    }
+
+    #[test]
+    fn a_case_is_ruled_once_confirmed_and_a_ruling_alone_is_its_own_case() {
+        let db = db_with("PROJ-1");
+        let id = db.start(&worker_on("PROJ-1")).unwrap().unwrap();
+        escalate(&db, &id, "which auth?", "t1");
+        let case = db.open_case(&id).unwrap().unwrap();
+        let ruling = Ruling { question: "Which auth does an admin route take?".into(), answer: "Rev 4's".into(), ruled_at: "t5".into() };
+        assert!(db.rule(&case.id, &ruling).is_err(), "not inspected yet");
+        verdict_on(&db, &case, Verdict::Refute);
+        assert!(db.rule(&case.id, &ruling).is_err(), "refuted: the cog's own way out, no ruling");
+        verdict_on(&db, &case, Verdict::Confirm);
+        db.rule(&case.id, &ruling).unwrap();
+        assert!(db.rule(&case.id, &ruling).is_err(), "ruled once");
+        let ruled = db.case(&case.id).unwrap().unwrap();
+        assert_eq!((ruled.ruling.as_ref(), ruled.settled_at.as_ref()), (Some(&ruling), None), "it settles when its cog moves on");
+        assert_eq!(ruled.outcome(Some(Verdict::Confirm)), "ruled");
+
+        let alone = db.rule_alone(&TicketKey("PROJ-1".into()), &ruling).unwrap();
+        let alone = db.case(&alone).unwrap().unwrap();
+        assert_eq!((alone.session, alone.settled_at.as_deref(), alone.question.as_str()), (None, Some("t5"), ruling.question.as_str()));
+        assert!(db.rule_alone(&TicketKey("PROJ-404".into()), &ruling).is_err(), "not on the board");
+        assert_eq!(db.events_of(EventKind::EscalationRuled).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_v8_ledger_turns_its_judged_and_standing_escalations_into_cases() {
+        let dir = std::env::temp_dir().join(format!("ledger-migrate-v9-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ledger.db").to_string_lossy().into_owned();
+        let db = Ledger::open(&path).unwrap();
+        TicketRepo::upsert(&db, &bare_ticket("PROJ-1")).unwrap();
+        TicketRepo::upsert(&db, &bare_ticket("PROJ-2")).unwrap();
+        let (one, two) = (db.start(&worker_on("PROJ-1")).unwrap().unwrap(), db.start(&worker_on("PROJ-2")).unwrap().unwrap());
+        drop(db);
+        // v8: reports and inspections, no cases. PROJ-1 was judged twice on one question (a heal's
+        // re-report), then once on another it still stands on; PROJ-2 stands unjudged.
+        let conn = Connection::open(&path).unwrap();
+        let report = |s: &SessionId, q: &str, at: &str| {
+            format!(
+                "INSERT INTO events(created_at, kind, entity_kind, entity_ref, payload_json)
+                 VALUES ('{at}', 'status_reported', 'session', '{}', json_object('state', 'escalated', 'last_action', '{q}'));",
+                s.0
+            )
+        };
+        let judged = |s: &SessionId, at: &str, v: &str| {
+            format!("INSERT INTO inspections(session_id, reported_at, verdict, body, inspected_at) VALUES ({}, '{at}', '{v}', 'b', '{at}9');", s.0)
+        };
+        conn.execute_batch(&format!(
+            "DELETE FROM cases; DROP INDEX one_open_case; ALTER TABLE inspections DROP COLUMN case_id; DROP TABLE cases;
+             {} {} {} {} {} {} {}
+             INSERT INTO reports(session_id, state, last_action, reported_at) VALUES ({}, 'escalated', 'Y?', 't3'), ({}, 'escalated', 'Z?', 't4');
+             PRAGMA user_version = 8;",
+            report(&one, "X?", "t1"), report(&one, "X?", "t2"), report(&one, "Y?", "t3"),
+            judged(&one, "t1", "confirm"), judged(&one, "t2", "confirm"), judged(&one, "t3", "refute"), report(&two, "Z?", "t4"),
+            one.0, two.0,
+        ))
+        .unwrap();
+        drop(conn);
+
+        let db = Ledger::open(&path).unwrap();
+        let ones = db.cases(None, &TicketKey("PROJ-1".into())).unwrap();
+        let shape: Vec<_> = ones.iter().map(|c| (c.question.as_str(), c.reports, c.settled_at.is_some())).collect();
+        assert_eq!(shape, vec![("Y?", 1, false), ("X?", 2, true)], "one case per question; the standing one open");
+        assert_eq!(db.verdict(&ones[1].id).unwrap().map(|v| v.verdict), Some(Verdict::Confirm), "its verdicts attached");
+        assert!(db.verdict(&ones[0].id).unwrap().is_some_and(|v| v.judges(&ones[0])), "the standing case stays judged");
+        let standing = db.open_case(&two).unwrap().expect("PROJ-2's escalation is a case");
+        assert_eq!((standing.question.as_str(), db.verdict(&standing.id).unwrap()), ("Z?", None));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -91,10 +91,16 @@ Do the work the snapshot calls for, this sweep only:
   still never report `finishing` / `merged` — fleetd observes your MR's state and the
   merge directly; `sleeping` says only "this sweep is done."
 - **Stuck** (a rebase conflict you can't resolve, reviewer pushback needing
-  design direction, CI infra that retry won't fix) → report it and **stay alive**
-  so the operator can chat you in your pane:
+  design direction, CI infra that retry won't fix) → **first read your convoy's cases**,
+  `fleetc escalations`: each past escalation, its verdict and its ruling, newest first
+  (`--case <N>` reads one in full). A ruling, or a REFUTE's way out, that answers your question
+  is yours: apply it, cite it (`case #N`) in your reply or commit, and finish the sweep. One that
+  nearly fits doesn't stop you escalating, but name it and say why it doesn't fit. Your own case
+  still open (you were restarted mid-escalation) → don't report again; wait. Otherwise report it
+  and **stay alive** so the operator can chat you in your pane:
   `fleetc status --cog sailor --state escalated --last-action "<why>"`,
-  then stop and wait. When the operator unblocks you, resume the sweep. A ruling that
+  then stop and wait. When the operator unblocks you, or sends the ruling (`⚖ Ruling on your
+  escalation (case #N)`), resume the sweep. A ruling that
   amends the ticket you carry out with `fleetc ticket edit --body -` (it replaces the
   description whole, so start from `fleetc ticket`). (Here you do NOT report `sleeping` —
   that would reap you; escalated holds you alive.)

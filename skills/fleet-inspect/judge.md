@@ -20,8 +20,8 @@ option that amends an AC, a plan decision or an invariant fails a check by defin
 Gather it yourself; your dispatcher's read of it is not evidence:
 
 ```bash
-fleetc ledger "SELECT r.last_action FROM sessions s JOIN reports r ON r.session_id = s.id
-               WHERE s.ticket = '<KEY>' AND s.kind = '<kind>' AND s.ended_at IS NULL"  # the escalation
+fleetc escalations --key <KEY>           # the escalation (its open case) and the convoy's past cases
+fleetc escalations --case <N>            # one case in full: what was asked, the verdict, the ruling
 fleetc ticket <KEY>                      # the goal and its ACs
 fleetc packet <KEY>                      # order (its worktree, fork base), MR, open blockers
 fleetc context --convoy <CONVOY>         # the convoy's plan and its tickets
@@ -29,6 +29,11 @@ fleetc ledger "SELECT ticket FROM ticket_blocks WHERE blocked_by = '<KEY>'"   # 
 fleetc transcript --cog <kind> --ticket <KEY>   # the transcript's path: read its tail, then back to the cause
 fleetc review --iid <N>                  # the MR's review threads, when the escalation is about one
 ```
+
+**Precedent first.** The convoy's past cases are its precedent. A ruling or a REFUTE's way out
+that answers this escalation is a REFUTE: cite it (`case #N`), and the cog's way out is to apply
+it. Never refute against a ruling: it outranks your reading. An open CONFIRM on the same question
+(another cog's) makes this a CONFIRM that names it, so the operator rules once for both.
 
 **Read the transcript back to the cause.** The escalation is the cog's conclusion; the
 transcript is how it got there. Read past the tail until you reach what it tried and why that

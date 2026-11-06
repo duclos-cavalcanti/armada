@@ -25,7 +25,8 @@ Cycle with `Tab` / `S-Tab`:
   - **Merge** — our ships being landed: the sailor's state (dimmed once it's stood down),
     pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status;
   - an escalation reads by who holds it: **flagged** (no captain has looked), **triage** (a
-    captain is inspecting it, or sent its way out), **escalated** (confirmed: yours). `v` reads
+    captain is inspecting it, or sent its way out), **escalated** (confirmed: yours), **ruled**
+    (your ruling went to the cog, `fleetc ruling`; it clears when the cog moves on). `v` reads
     the verdict;
   - **Reviews** — every lookout on watch: the MR, what it's on (our ticket in review, or `ally`),
     its author, the lookout's state; `enter` switches to the lookout, `m` opens the MR;

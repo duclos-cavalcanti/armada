@@ -14,7 +14,7 @@
 //! AGE — `now − reported_at` — which catches a stalled cog without re-probing tmux.
 
 use domain::ports::{
-    ConvoyRepo, InspectionRepo, OrderRepo, ProposalRepo, ReportRepo, SessionRepo, ShipRepo, TicketRepo,
+    CaseRepo, ConvoyRepo, OrderRepo, ProposalRepo, ReportRepo, SessionRepo, ShipRepo, TicketRepo,
 };
 use domain::{
     Convoy, ConvoyKey, CrewKind, Event, Order, Proposal, Report, Session, Ship, ShipSnapshot, Ticket, TicketKey,
@@ -361,13 +361,20 @@ pub fn open_blockers(t: &Ticket, board: &[Ticket]) -> Vec<String> {
 
 /// A cog's state as the operator reads it. A worker's or sailor's escalation reads by who holds it:
 /// `flagged` (no captain has looked yet), `triage` (a captain is on it, or has sent its way out),
-/// `escalated` (a captain confirmed it: the operator's). A verdict counts only for the escalation it
-/// judged. Any other cog's escalation (a captain's, a lookout's) no captain inspects: it's the operator's.
+/// `escalated` (a captain confirmed it: the operator's), `ruled` (the operator's ruling went to the
+/// cog). A verdict counts only for the case it judged. Any other cog's escalation (a captain's, a
+/// lookout's) no captain inspects: it's the operator's.
 fn shown_state(db: &Ledger, session: &Session, r: &Report, captained: &HashSet<ConvoyKey>) -> anyhow::Result<String> {
     if !r.state.is_escalated() || !matches!(session.kind, CrewKind::Worker | CrewKind::Sailor) {
         return Ok(r.state.as_str().to_string());
     }
-    let label = match db.inspection(&session.id)?.filter(|i| i.judges(r)).map(|i| i.verdict) {
+    let case = db.open_case(&session.id)?;
+    let verdict = match &case {
+        Some(c) => db.verdict(&c.id)?.map(|i| i.verdict),
+        None => None,
+    };
+    let label = match verdict {
+        _ if case.as_ref().is_some_and(|c| c.ruling.is_some()) => "ruled",
         Some(Verdict::Confirm) => "escalated",
         Some(Verdict::Refute) => "triage",
         None => {

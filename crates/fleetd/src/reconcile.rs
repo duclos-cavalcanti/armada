@@ -28,7 +28,7 @@ use crate::now_rfc3339;
 use crate::Cog;
 use anyhow::{anyhow, Result};
 use domain::ports::{
-    ConvoyRepo, EventLog, Forge, InspectionRepo, LookoutRepo, OrderRepo, ReportRepo, SessionHost,
+    CaseRepo, ConvoyRepo, EventLog, Forge, LookoutRepo, OrderRepo, ReportRepo, SessionHost,
     SessionRepo, ShipRepo, TicketRepo, Tracker,
 };
 use domain::{
@@ -550,12 +550,12 @@ pub(crate) fn escalation(ledger: &Ledger, ticket: &TicketKey) -> Result<Option<(
     Ok(None)
 }
 
-/// The CONFIRM standing on the ticket's escalation: its escalated cog's latest verdict, if it
-/// confirms the escalation as it stands. `None` = no escalation, or not confirmed.
+/// The CONFIRM standing on the ticket's escalation: the latest verdict on its escalated cog's open
+/// case, if it confirms it. `None` = no escalation, or not confirmed.
 fn confirmed(ledger: &Ledger, ticket: &TicketKey) -> Result<Option<Inspection>> {
-    let Some((session, report)) = escalation(ledger, ticket)? else { return Ok(None) };
-    let verdict = InspectionRepo::inspection(ledger, &session.id)?;
-    Ok(verdict.filter(|v| v.verdict == Verdict::Confirm && v.judges(&report)))
+    let Some((session, _)) = escalation(ledger, ticket)? else { return Ok(None) };
+    let Some(case) = ledger.open_case(&session.id)? else { return Ok(None) };
+    Ok(ledger.verdict(&case.id)?.filter(|v| v.verdict == Verdict::Confirm))
 }
 
 /// The ship is still open: not merged or closed.
@@ -609,14 +609,16 @@ fn rested(finished: Option<&str>, sleep_secs: u64) -> bool {
     time::OffsetDateTime::now_utc() - at >= time::Duration::seconds(sleep_secs as i64)
 }
 
-/// A worker or sailor in the convoy escalated after its last captain finished (`finished`): a pass
-/// is due to inspect it. Keyed on the finish, not on a missing verdict, so a pass that fails to
-/// inspect doesn't relaunch every tick — the escalation waits for the convoy's rest.
+/// A worker or sailor in the convoy raised a case after its last captain finished (`finished`): a
+/// pass is due to inspect it. Keyed on the finish, not on a missing verdict, so a pass that fails to
+/// inspect doesn't relaunch every tick — the escalation waits for the convoy's rest. Keyed on the
+/// case, not the report, so a re-report of the same question (a heal's) wakes no one.
 fn escalated_since(ledger: &Ledger, convoy: &ConvoyKey, finished: Option<&str>) -> Result<bool> {
     let since = finished.and_then(instant);
     for t in TicketRepo::board(ledger)?.into_iter().filter(|t| t.convoy.as_ref() == Some(convoy)) {
-        if let Some((_, r)) = escalation(ledger, &t.key)? {
-            if since.is_none_or(|s| instant(&r.reported_at).is_none_or(|at| at > s)) {
+        if let Some((s, r)) = escalation(ledger, &t.key)? {
+            let raised = ledger.open_case(&s.id)?.map_or(r.reported_at, |c| c.raised_at);
+            if since.is_none_or(|s| instant(&raised).is_none_or(|at| at > s)) {
                 return Ok(true);
             }
         }
@@ -1475,6 +1477,7 @@ fn new_session_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use domain::ports::InspectionRepo;
 
     const LIVE: Levers = Levers {
         dry_run: false,
@@ -3402,16 +3405,19 @@ mod tests {
         };
         session(&db, CrewKind::Worker, "PROJ-1", false);
         let worker = SessionRepo::live(&db).unwrap().into_iter().find(|s| s.kind == CrewKind::Worker).unwrap();
-        let escalate = |at: &str| {
-            let r = Report { session: worker.id.clone(), state: CogState::Worker(WorkerState::Escalated), last_action: None, reported_at: at.into() };
+        let escalate = |question: &str, at: &str| {
+            let state = CogState::Worker(WorkerState::Escalated);
+            let r = Report { session: worker.id.clone(), state, last_action: Some(question.into()), reported_at: at.into() };
             ReportRepo::record(&db, &r).unwrap();
         };
         let launch = vec![Action::LaunchCaptain { convoy: "PROJ-100".into() }];
-        escalate("2000-01-01T00:00:00Z");
+        escalate("X?", "2000-01-01T00:00:00Z");
         finish(&now_rfc3339());
         assert!(plan(&db, &[], true, &Levers { captain_sleep_secs: 900, ..LIVE }).unwrap().is_empty(), "escalated before the last pass: it rests");
-        escalate(&now_rfc3339());
-        assert_eq!(plan(&db, &[], true, &Levers { captain_sleep_secs: 900, ..LIVE }).unwrap(), launch, "escalated since: a pass is due");
+        escalate("X?", &now_rfc3339());
+        assert!(plan(&db, &[], true, &Levers { captain_sleep_secs: 900, ..LIVE }).unwrap().is_empty(), "a re-report of the same case (a heal's) wakes no one");
+        escalate("Y?", &now_rfc3339());
+        assert_eq!(plan(&db, &[], true, &Levers { captain_sleep_secs: 900, ..LIVE }).unwrap(), launch, "a new case since: a pass is due");
     }
 
     #[test]
@@ -3477,7 +3483,8 @@ mod tests {
         ReportRepo::record(db, &Report { session: w.session.id.clone(), state, last_action: None, reported_at: reported_at.clone() })
             .unwrap();
         let body = "the verdict".into();
-        InspectionRepo::inspect(db, &Inspection { session: w.session.id.clone(), reported_at, verdict, body, inspected_at: at.into() })
+        let case = db.open_case(&w.session.id).unwrap().map(|c| c.id);
+        InspectionRepo::inspect(db, &Inspection { session: w.session.id.clone(), case, reported_at, verdict, body, inspected_at: at.into() })
             .unwrap();
         w
     }
@@ -3562,7 +3569,8 @@ mod tests {
         };
         ReportRepo::record(&db, &r).unwrap();
         let body = "anew".into();
-        let verdict = Inspection { session: w.session.id.clone(), reported_at: r.reported_at, verdict: Verdict::Confirm, body, inspected_at: "2026-01-01T00:04:00Z".into() };
+        let case = db.open_case(&w.session.id).unwrap().map(|c| c.id);
+        let verdict = Inspection { session: w.session.id.clone(), case, reported_at: r.reported_at, verdict: Verdict::Confirm, body, inspected_at: "2026-01-01T00:04:00Z".into() };
         InspectionRepo::inspect(&db, &verdict).unwrap();
         assert_eq!(
             plan(&db, &[w, a], true, &Levers { admirals: 3, ..LIVE }).unwrap(),

@@ -90,6 +90,7 @@ fn handle(
         (Some("POST"), Some("/weigh-ticket")) => handle_anchor_ticket(&request, cmds, false),
         (Some("POST"), Some("/rework")) => handle_rework(&request, cmds),
         (Some("POST"), Some("/inspection")) => handle_inspection(&request, cmds),
+        (Some("POST"), Some("/ruling")) => handle_ruling(&request, cmds),
         (Some("GET"), Some(p)) if p.starts_with("/packet") => handle_packet(cmds, p),
         (Some("GET"), Some(p)) if p.starts_with("/review") => handle_review(cmds, p),
         (Some("POST"), Some(p)) if p.starts_with("/rebase") => handle_rebase(cmds, p),
@@ -865,6 +866,33 @@ fn handle_inspection(request: &str, cmds: &Sender<Command>) -> String {
     }
 }
 
+/// `POST /ruling` — the operator's ruling on a confirmed case (recorded, then sent to its cog), or one
+/// with no escalation behind it (`fleetc ruling`).
+fn handle_ruling(request: &str, cmds: &Sender<Command>) -> String {
+    let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+    let dto: wire::RulingCmd = match serde_json::from_str(body) {
+        Ok(d) => d,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
+    };
+    let ticket = match dto.ticket.as_deref().map(parse_ticket).transpose() {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    if dto.case.is_some() == ticket.is_some() {
+        return http_response("400 Bad Request", "text/plain", "a ruling names its case or, with no escalation behind it, its ticket");
+    }
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    let cmd = Command::Rule { case: dto.case.map(domain::CaseId), ticket, question: dto.question, answer: dto.answer, reply: reply_tx };
+    if cmds.send(cmd).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(text)) => http_response("200 OK", "text/plain", &text),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
 /// `POST /rework` — send a ticket back down the line to a builder (`fleetc rework`).
 fn handle_rework(request: &str, cmds: &Sender<Command>) -> String {
     let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
@@ -1061,6 +1089,7 @@ mod tests {
                     | Command::AddToConvoy { reply, .. }
                     | Command::Decommission { reply, .. }
                     | Command::RemoveFromConvoy { reply, .. }
+                    | Command::Rule { reply, .. }
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::LinkTicket { reply, .. }
                     | Command::EditTicket { reply, .. }
@@ -1128,6 +1157,7 @@ mod tests {
                     | Command::AddToConvoy { reply, .. }
                     | Command::Decommission { reply, .. }
                     | Command::RemoveFromConvoy { reply, .. }
+                    | Command::Rule { reply, .. }
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::LinkTicket { reply, .. }
                     | Command::EditTicket { reply, .. }

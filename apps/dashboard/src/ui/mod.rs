@@ -596,7 +596,7 @@ fn state_style(state: &str) -> Style {
     match state {
         "escalated" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         "flagged" => yellow().add_modifier(Modifier::BOLD),
-        "triage" => Style::default().fg(Color::Cyan),
+        "triage" | "ruled" => Style::default().fg(Color::Cyan),
         "review" => Style::default().fg(Color::Blue),
         "anchored" => Style::default().fg(Color::Magenta),
         "concluded" | "done" | "merged" => green(),

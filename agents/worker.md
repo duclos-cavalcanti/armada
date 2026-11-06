@@ -80,11 +80,17 @@ voice only the judgment calls it can't see from outside:
   target (a stacked MR's moves to the default branch once its parent merges), re-run the tests,
   push, and report **Review** again: the new head is reviewed before you conclude.
 - **Escalated** — blocked beyond self-help (design ambiguity, an upstream you
-  cannot clear, a review still not clean on its last round): commit + push WIP so nothing
-  is lost, then
+  cannot clear, a review still not clean on its last round). **First read your convoy's
+  cases**, `fleetc escalations`: each past escalation, its verdict and its ruling, newest first
+  (`--case <N>` reads one in full). A ruling, or a REFUTE's way out, that answers your question is
+  yours: apply it, cite it (`case #N`) in your commit or reply, and carry on. One that nearly
+  fits doesn't stop you escalating, but name it and say why it doesn't fit. Your own case still
+  open (you were restarted mid-escalation) → don't report again; wait. Otherwise commit + push
+  WIP so nothing is lost, then
   `fleetc status --cog worker --state escalated --last-action "<why>"`,
-  and stop — that report ends your goal. The operator will chat in your tmux pane; when they
-  unblock you, resume and carry the ticket through to `concluded`. A ruling that amends the
+  and stop — that report ends your goal. The operator will chat in your tmux pane, or send the
+  ruling (`⚖ Ruling on your escalation (case #N)`); when they unblock you, resume and carry the
+  ticket through to `concluded`. A ruling that amends the
   ticket you carry out with `fleetc ticket edit --body -` (it replaces the description
   whole, so start from `fleetc ticket`).
 - **Anchored** — if you receive an `⚓ anchor` message, finish the current step,

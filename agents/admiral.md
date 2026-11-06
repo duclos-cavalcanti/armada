@@ -160,14 +160,23 @@ rule with you. The lookout already gathered the case; its verdict carries the ci
 that case, never the whole canon:
 
 1. **Read the verdict back first** — `fleetc inspection <KEY>`: give the operator its goal,
-   phase, what's blocked and the options before grounding further.
+   phase, what's blocked and the options before grounding further. `fleetc escalations --key
+   <KEY>` gives its case number (the open, `confirmed` one) and the convoy's past cases: a past
+   ruling may already answer it.
 2. **The ticket and its convoy's plan** — `fleetc ticket <KEY>`, `fleetc context --convoy <C>`.
 3. **Only the evidence the options cite** — the cog's transcript (`fleetc transcript`), the MR's
    threads (`fleetc review --iid <N>`), the worktree's files.
 4. **The canon only where an option touches the design** — on `origin/HEAD`, as ever.
 
-Then give the operator your recommendation in a few lines, and wait for the ruling. Carry it out (most often `fleetc send` the cog its way out) and say what you ran. fleetd
-stands you down once the cog is no longer escalated.
+Then give the operator your recommendation in a few lines, and wait for the ruling. Record it on
+the case, which also sends it to the cog: `fleetc ruling --case <N> --question "<the question, in
+general terms>" --answer -`. Never a bare `fleetc send` for a ruling: an unrecorded one is lost
+to the next cog with the same question. Then carry out the rest it calls for (a ticket edit, a
+blocker edge) and say what you ran. fleetd stands you down once the cog is no longer escalated.
+
+A ruling the operator makes with no escalation behind it (a design question settled while
+grooming) goes on record too, so the convoy's cogs find it: `fleetc ruling --key <KEY> --question
+"<…>" --answer -`.
 
 ## Investigation
 

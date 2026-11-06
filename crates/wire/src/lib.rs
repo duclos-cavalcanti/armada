@@ -103,6 +103,17 @@ pub struct InspectionCmd {
     pub body: String,
 }
 
+/// The operator's ruling (`POST /ruling`, `fleetc ruling`): on a confirmed `case`, recorded and sent
+/// to its cog; or, with only a `ticket`, a ruling with no escalation behind it. `question` is the
+/// case's question in general terms, so a later case can cite it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RulingCmd {
+    pub case: Option<i64>,
+    pub ticket: Option<String>,
+    pub question: String,
+    pub answer: String,
+}
+
 /// Launch a ship — open the MR for the branch checked out in `worktree` (`POST /launch`). The
 /// target is `target`, else the ticket's order fork base, else origin's default branch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

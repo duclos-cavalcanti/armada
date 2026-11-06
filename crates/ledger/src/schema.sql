@@ -156,12 +156,37 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at  TEXT NOT NULL
 );
 
--- Inspections — verdicts on a cog's escalation (/fleet-inspect). `reported_at` names the report
--- judged (an escalation is a report), so a fresh escalation has none until it's inspected again.
+-- Cases — an escalation start to finish: raised by a worker's or sailor's escalated report,
+-- inspected by the lookout's verdict (`inspections.case_id`), ruled by the operator. A re-report of
+-- the same question joins its open case (`reports` counts them), so it isn't judged twice; a report
+-- of anything else, or the session ending, settles it. A ruling with no escalation behind it has no
+-- session and is settled at once. `convoy` = the ticket's when raised: a cog reads its own convoy's
+-- cases before it escalates.
+CREATE TABLE IF NOT EXISTS cases (
+    id              INTEGER PRIMARY KEY,
+    ticket          TEXT NOT NULL REFERENCES tickets(key),
+    convoy          TEXT,
+    session_id      INTEGER REFERENCES sessions(id),
+    question        TEXT NOT NULL,
+    raised_at       TEXT NOT NULL,
+    reports         INTEGER NOT NULL DEFAULT 1,
+    ruling_question TEXT,
+    ruling          TEXT CHECK (ruling IS NULL OR length(trim(ruling)) > 0),
+    ruled_at        TEXT,
+    settled_at      TEXT,
+    CHECK ((ruling IS NULL) = (ruled_at IS NULL) AND (ruling IS NULL) = (ruling_question IS NULL)),
+    CHECK (session_id IS NOT NULL OR ruling IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS cases_by_convoy ON cases(convoy, ticket);
+CREATE UNIQUE INDEX IF NOT EXISTS one_open_case ON cases(session_id) WHERE settled_at IS NULL;
+
+-- Inspections — verdicts on a cog's escalation (/fleet-inspect), each on its case: a fresh case has
+-- none until it's inspected. `reported_at` = the report standing when it was judged.
 -- CONFIRM: it stands, the operator's; REFUTE: its way out was sent to the cog.
 CREATE TABLE IF NOT EXISTS inspections (
     id           INTEGER PRIMARY KEY,
     session_id   INTEGER NOT NULL REFERENCES sessions(id),
+    case_id      INTEGER REFERENCES cases(id),
     reported_at  TEXT NOT NULL,
     verdict      TEXT NOT NULL CHECK (verdict IN ('confirm','refute')),
     body         TEXT NOT NULL CHECK (length(trim(body)) > 0),

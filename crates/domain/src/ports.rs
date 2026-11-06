@@ -139,6 +139,22 @@ pub trait InspectionRepo {
     fn inspection(&self, session: &SessionId) -> Result<Option<Inspection>>;
 }
 
+pub trait CaseRepo {
+    /// The session's open case: the escalation its cog stands on now. Reports open, join and settle
+    /// cases (`ReportRepo::record`); ending the session settles its open one.
+    fn open_case(&self, session: &SessionId) -> Result<Option<Case>>;
+    fn case(&self, id: &CaseId) -> Result<Option<Case>>;
+    /// A convoy's cases, newest first; with no convoy, the cases on `ticket` raised outside any.
+    fn cases(&self, convoy: Option<&ConvoyKey>, ticket: &TicketKey) -> Result<Vec<Case>>;
+    /// The case's latest verdict; `None` = not inspected yet.
+    fn verdict(&self, id: &CaseId) -> Result<Option<Inspection>>;
+    /// Record the operator's ruling on a confirmed case, once, with an `EscalationRuled` event. It
+    /// settles when its cog moves on, as any case does.
+    fn rule(&self, id: &CaseId, ruling: &Ruling) -> Result<()>;
+    /// Record a ruling with no escalation behind it, on `ticket`: a new case, settled at once.
+    fn rule_alone(&self, ticket: &TicketKey, ruling: &Ruling) -> Result<CaseId>;
+}
+
 pub trait ProposalRepo {
     fn propose(&self, p: &Proposal) -> Result<ProposalId>;
     fn get(&self, id: &ProposalId) -> Result<Option<Proposal>>;

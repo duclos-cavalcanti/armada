@@ -13,12 +13,12 @@ use crate::tmux::TmuxHost;
 use crate::{context, now_rfc3339, reconcile, sync, Snapshot};
 use anyhow::{anyhow, bail, Context, Result};
 use domain::ports::{
-    ConvoyRepo, EventLog, Forge, LookoutRepo, OrderRepo, ProposalRepo, ReportRepo, SessionHost, SessionRepo,
+    CaseRepo, ConvoyRepo, EventLog, Forge, LookoutRepo, OrderRepo, ProposalRepo, ReportRepo, SessionHost, SessionRepo,
     InspectionRepo, ShipRepo, TicketRepo, Tracker,
 };
 use domain::{
     CogState, ConvoyKey, ConvoyTicketView, ConvoyView, CrewKind, EntityKind, EventKind, HandState, Inspection,
-    TicketLabel, Verdict,
+    CaseId, Ruling, TicketLabel, Verdict,
     LivenessThresholds, MrDraft, Order, Packet, Proposal, ProposalId, Proposed, Report, Session, Ship, ShipState, TicketDraft,
     TicketKey, TicketStatus, WorkerState,
 };
@@ -75,6 +75,7 @@ pub enum Command {
     AnchorTicket { ticket: TicketKey, anchor: bool, reason: Option<String>, reply: Reply }, // hold everything on it, or release it
     Rework { ticket: TicketKey, hand: bool, reply: Reply }, // send it back down the line to a builder
     Inspect { ticket: TicketKey, verdict: Verdict, body: String, reply: Reply }, // a verdict on its cog's escalation
+    Rule { case: Option<CaseId>, ticket: Option<TicketKey>, question: String, answer: String, reply: UrlReply }, // the operator's ruling → what it did
     GetPacket { ticket: TicketKey, reply: PacketReply }, // a read: the cog's composed work-packet
     GetConvoyView { convoy: ConvoyKey, reply: ConvoyReply }, // a read: the captain's convoy slice
     GetReview { iid: i64, reply: ReviewReply }, // a read: an MR's fresh review surface (forge)
@@ -259,6 +260,10 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         }
         Command::Inspect { ticket, verdict, body, reply } => {
             let res = inspect(ledger, &ticket, verdict, body).map_err(|e| format!("{e:#}"));
+            let _ = reply.send(res);
+        }
+        Command::Rule { case, ticket, question, answer, reply } => {
+            let res = rule(ledger, host, case, ticket, question, answer).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
         Command::GetPacket { ticket, reply } => {
@@ -635,13 +640,50 @@ fn hold_ship(ledger: &Ledger, forge: &dyn Forge, ship: &Ship) -> Result<()> {
     forge.set_draft(iid, true).with_context(|| format!("disarmed, but couldn't mark !{iid} draft"))
 }
 
-/// Record a verdict on the escalation of the ticket's live worker or sailor, against the report it
-/// judged — so the next escalation is uninspected until it's judged in turn.
+/// Record a verdict on the open case of the ticket's escalated worker or sailor. A re-report of the
+/// same question stays judged; a new question is a new case, uninspected until it's judged in turn.
 fn inspect(ledger: &Ledger, ticket: &TicketKey, verdict: Verdict, body: String) -> Result<()> {
     let (session, report) = reconcile::escalation(ledger, ticket)?
         .ok_or_else(|| anyhow!("{} has no escalated worker or sailor to inspect", ticket.0))?;
-    let i = Inspection { session: session.id, reported_at: report.reported_at, verdict, body, inspected_at: now_rfc3339() };
+    let case = ledger.open_case(&session.id)?.ok_or_else(|| anyhow!("{}: its escalation has no open case", ticket.0))?;
+    let i = Inspection { session: session.id, case: Some(case.id), reported_at: report.reported_at, verdict, body, inspected_at: now_rfc3339() };
     InspectionRepo::inspect(ledger, &i)
+}
+
+/// Rule on a confirmed case: record the ruling, then hand it to the cog still escalated on it, so no
+/// ruling reaches a cog unrecorded. With no case, a ruling with no escalation behind it, on `ticket`.
+fn rule<H: SessionHost>(
+    ledger: &Ledger,
+    host: &H,
+    case: Option<CaseId>,
+    ticket: Option<TicketKey>,
+    question: String,
+    answer: String,
+) -> Result<String> {
+    anyhow::ensure!(!question.trim().is_empty() && !answer.trim().is_empty(), "a ruling has a question and an answer");
+    let ruling = Ruling { question: question.trim().into(), answer: answer.trim().into(), ruled_at: now_rfc3339() };
+    let Some(id) = case else {
+        let ticket = ticket.ok_or_else(|| anyhow!("a ruling names its case, or the ticket it's on"))?;
+        let id = ledger.rule_alone(&ticket, &ruling)?;
+        return Ok(format!("case #{}: ruled on {}", id.0, ticket.0));
+    };
+    ledger.rule(&id, &ruling)?;
+    let case = ledger.case(&id)?.ok_or_else(|| anyhow!("case #{} vanished", id.0))?;
+    let live = match (&case.session, &case.settled_at) {
+        (Some(s), None) => SessionRepo::get(ledger, s)?.filter(|s| s.ended_at.is_none()),
+        _ => None,
+    };
+    let Some(cog) = live else {
+        return Ok(format!("case #{}: ruled; its cog has moved on, so it's recorded only", id.0));
+    };
+    // One line: the pane takes a newline as Enter. The ruling in full is on the case.
+    let answer = ruling.answer.split_whitespace().collect::<Vec<_>>().join(" ");
+    let msg = format!(
+        "⚖ Ruling on your escalation (case #{}): {answer} — carry it out, then report your state. In full: fleetc escalations --case {}",
+        id.0, id.0
+    );
+    host.send(&cog.tmux_session, &msg).with_context(|| format!("case #{}: ruled, but not delivered to {}", id.0, cog.tmux_session))?;
+    Ok(format!("case #{}: ruled and sent to {}", id.0, cog.tmux_session))
 }
 
 /// Rework a ticket whose ACs changed under its MR: send it back down the line. A worker re-enters
@@ -748,7 +790,10 @@ fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Resul
         let held = if t.held { Some(ledger.held_reason(&t.key)?.unwrap_or_default()) } else { None };
         let hand = TicketRepo::is_hand(ledger, &t.key)?;
         let inspect = match crate::reconcile::escalation(ledger, &t.key)? {
-            Some((s, r)) => !ledger.inspection(&s.id)?.is_some_and(|i| i.judges(&r)),
+            Some((s, _)) => match ledger.open_case(&s.id)? {
+                Some(case) => ledger.verdict(&case.id)?.is_none(),
+                None => true,
+            },
             None => false,
         };
         tickets.push(ConvoyTicketView {
@@ -1573,7 +1618,7 @@ mod tests {
             ship: None,
         };
         let id = SessionRepo::start(&db, &worker).unwrap().expect("session start");
-        let report = |state, at: &str| Report { session: id.clone(), state, last_action: None, reported_at: at.into() };
+        let report = |state, at: &str| Report { session: id.clone(), state, last_action: Some("X?".into()), reported_at: at.into() };
         ReportRepo::record(&db, &report(CogState::Worker(WorkerState::Implementing), "t1")).unwrap();
         assert!(inspect(&db, &key, Verdict::Confirm, "x".into()).is_err(), "nothing escalated to judge");
         ReportRepo::record(&db, &report(CogState::Worker(WorkerState::Escalated), "t2")).unwrap();
@@ -1586,7 +1631,10 @@ mod tests {
         assert_eq!((got.reported_at.as_str(), got.verdict), ("t2", Verdict::Confirm), "judged against that report");
         assert!(!flagged(&db), "judged");
         ReportRepo::record(&db, &report(CogState::Worker(WorkerState::Escalated), "t3")).unwrap();
-        assert!(flagged(&db), "a fresh escalation is unjudged again");
+        assert!(!flagged(&db), "a re-report of the same question (a heal's) joins its judged case");
+        let other = Report { last_action: Some("Y?".into()), ..report(CogState::Worker(WorkerState::Escalated), "t4") };
+        ReportRepo::record(&db, &other).unwrap();
+        assert!(flagged(&db), "a new question is a new case, unjudged");
     }
 
     #[test]
@@ -2152,6 +2200,29 @@ mod tests {
         .unwrap()
         .unwrap();
         (db, id)
+    }
+
+    #[test]
+    fn a_ruling_is_recorded_then_sent_to_its_escalated_cog() {
+        let (db, id) = db_with_live_worker();
+        let host = FakeHost::new();
+        let key = TicketKey("PROJ-1".into());
+        let state = CogState::Worker(WorkerState::Escalated);
+        ReportRepo::record(&db, &Report { session: id.clone(), state, last_action: Some("which auth?".into()), reported_at: "t1".into() }).unwrap();
+        let case = db.open_case(&id).unwrap().expect("raised");
+        assert!(rule(&db, &host, Some(case.id.clone()), None, "Which auth?".into(), "Rev 4's.".into()).is_err(), "not confirmed yet");
+        assert!(host.sent.borrow().is_empty(), "nothing reaches the cog unrecorded");
+
+        inspect(&db, &key, Verdict::Confirm, "**Verdict:** CONFIRM — the operator's".into()).unwrap();
+        let said = rule(&db, &host, Some(case.id.clone()), None, "Which auth does an admin route take?".into(), "Rev 4's.\nAll of them.".into()).unwrap();
+        assert!(said.contains("sent to worker-PROJ-1"), "{said}");
+        assert_eq!(*host.sent.borrow(), vec!["worker-PROJ-1".to_string()]);
+        assert_eq!(db.case(&case.id).unwrap().unwrap().ruling.unwrap().answer, "Rev 4's.\nAll of them.", "recorded in full");
+
+        let alone = rule(&db, &host, None, Some(key), "Q?".into(), "A.".into()).unwrap();
+        assert!(alone.contains("ruled on PROJ-1"), "{alone}");
+        assert_eq!(host.sent.borrow().len(), 1, "a ruling with no escalation has no cog to send to");
+        assert!(rule(&db, &host, None, None, "Q?".into(), " ".into()).is_err(), "a ruling has an answer");
     }
 
     fn worker_target() -> ControlTarget {

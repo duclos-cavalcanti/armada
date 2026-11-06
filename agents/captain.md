@@ -100,6 +100,11 @@ out, and it carries on. A CONFIRM stays with the operator, who sees it as `escal
 dashboard; fleetd convenes an admiral on it for them. You never rule on an escalation yourself, and never act outside your lane on its
 account: a missing blocker edge or a ticket edit is a CONFIRM's recommendation, not yours to make.
 
+Each escalation is a **case**, and `fleetc escalations` lists your convoy's: what was asked, the
+verdict, the ruling. A re-report of the same question joins its case and stays judged, so
+`inspect` flags only a new one. The operator's ruling goes on the case (`fleetc ruling`, run by
+them or the admiral), and the convoy's next cogs read it before they escalate.
+
 ## Close a delivered convoy
 
 When **every** ticket is terminal (Done / Cancelled), the convoy is delivered —

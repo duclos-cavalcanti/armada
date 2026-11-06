@@ -75,6 +75,7 @@ pub fn is_key_prefix(p: &str) -> bool {
 id_newtype!(SessionId, i64);
 id_newtype!(ShipId, i64);
 id_newtype!(ProposalId, i64);
+id_newtype!(CaseId, i64);
 id_newtype!(/// Monotonic event cursor (`GET /events?since=`).
             Seq, i64);
 
@@ -170,7 +171,7 @@ pub enum EventKind {
     TicketCreated, TicketSynced, TicketBlocked, TicketUnblocked,
     TicketHeld, TicketReleased, TicketDecommissioned,
     ShipOpened, ShipSynced, ShipMerged, ShipClosed,
-    EscalationInspected,
+    EscalationInspected, EscalationRuled,
     ConvoyOpened, ConvoyClosed, ConvoyPlanned,
     SessionAnchored, SessionWeighed,
     ConvoyAnchored, ConvoyWeighed,
@@ -654,11 +655,13 @@ pub enum Verdict {
     Refute,
 }
 
-/// One inspection of a cog's escalation: the report it judged (that report's `reported_at`), the
-/// verdict, and the verdict's text (/fleet-inspect's template). The latest per session counts.
+/// One inspection of a cog's escalation: the case it judged (and the report that stood then), the
+/// verdict, and the verdict's text (/fleet-inspect's template). The latest per case counts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Inspection {
     pub session: SessionId,
+    /// The case it judged. `None` only for a verdict older than cases that no case took in.
+    pub case: Option<CaseId>,
     pub reported_at: Timestamp,
     pub verdict: Verdict,
     pub body: String,
@@ -666,9 +669,71 @@ pub struct Inspection {
 }
 
 impl Inspection {
-    /// This verdict judges that report — the escalation as it stands, not an earlier one.
-    pub fn judges(&self, r: &Report) -> bool {
-        self.session == r.session && self.reported_at == r.reported_at
+    /// This verdict judges that case: the escalation as it stands, not an earlier one.
+    pub fn judges(&self, c: &Case) -> bool {
+        self.case.as_ref() == Some(&c.id)
+    }
+
+    /// The verdict's headline, the template's first line without its label.
+    pub fn headline(&self) -> &str {
+        self.line("**Verdict:**").unwrap_or(self.verdict.as_str())
+    }
+
+    /// The verdict's recommendation: a REFUTE's way out, a CONFIRM's "operator's ruling".
+    pub fn recommendation(&self) -> Option<&str> {
+        self.line("- **Recommendation:**")
+    }
+
+    fn line(&self, label: &str) -> Option<&str> {
+        self.body.lines().find_map(|l| l.trim_start().strip_prefix(label.trim_start())).map(str::trim)
+    }
+}
+
+/// An escalation, start to finish: a worker's or sailor's escalation (raised), the lookout's
+/// verdict on it (inspected), and the operator's ruling (ruled). A re-report of the same question
+/// joins its open case, so it isn't judged twice; the case settles when its cog stops escalating
+/// that question. A ruling made with no escalation behind it is a case with no cog, settled at
+/// once. The cases of a convoy are its precedent: a cog reads them before it escalates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Case {
+    pub id: CaseId,
+    pub ticket: TicketKey,
+    /// The ticket's convoy when the case was raised: whose cases it is among.
+    pub convoy: Option<ConvoyKey>,
+    /// The escalated cog's session and kind; `None` for a ruling with no escalation.
+    pub session: Option<SessionId>,
+    pub cog: Option<CrewKind>,
+    /// What the cog escalated (its report's `last_action`), or the ruling's question.
+    pub question: String,
+    pub raised_at: Timestamp,
+    /// The reports that raised it: a re-report of the same question counts here.
+    pub reports: i64,
+    pub ruling: Option<Ruling>,
+    pub settled_at: Option<Timestamp>,
+}
+
+/// The operator's answer to a case: the question in general terms, so a later case can cite it,
+/// and the answer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Ruling {
+    pub question: String,
+    pub answer: String,
+    pub ruled_at: Timestamp,
+}
+
+impl Case {
+    /// Where the case stands, given its latest verdict: `open` (not inspected yet), `refuted` (its
+    /// way out went to the cog), `confirmed` (awaiting a ruling), `ruled`, `unruled` (its cog moved
+    /// on with no ruling recorded), or `withdrawn` (its cog moved on before an inspection).
+    pub fn outcome(&self, verdict: Option<Verdict>) -> &'static str {
+        match (self.ruling.is_some(), verdict, self.settled_at.is_some()) {
+            (true, _, _) => "ruled",
+            (false, Some(Verdict::Refute), _) => "refuted",
+            (false, Some(Verdict::Confirm), false) => "confirmed",
+            (false, Some(Verdict::Confirm), true) => "unruled",
+            (false, None, false) => "open",
+            (false, None, true) => "withdrawn",
+        }
     }
 }
 
@@ -1080,6 +1145,7 @@ impl EventKind {
             EventKind::ShipMerged => "ship_merged",
             EventKind::ShipClosed => "ship_closed",
             EventKind::EscalationInspected => "escalation_inspected",
+            EventKind::EscalationRuled => "escalation_ruled",
             EventKind::ConvoyOpened => "convoy_opened",
             EventKind::ConvoyClosed => "convoy_closed",
             EventKind::ConvoyPlanned => "convoy_planned",
@@ -1111,6 +1177,7 @@ impl EventKind {
             "ship_merged" => Some(Self::ShipMerged),
             "ship_closed" => Some(Self::ShipClosed),
             "escalation_inspected" => Some(Self::EscalationInspected),
+            "escalation_ruled" => Some(Self::EscalationRuled),
             "convoy_opened" => Some(Self::ConvoyOpened),
             "convoy_closed" => Some(Self::ConvoyClosed),
             "convoy_planned" => Some(Self::ConvoyPlanned),
