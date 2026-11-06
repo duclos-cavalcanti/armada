@@ -201,11 +201,14 @@ pub struct DecommissionCmd {
     pub reason: String,
 }
 
-/// Record that `ticket` is blocked by `by` (`POST /ticket-block`, `fleetc ticket block`).
+/// Add (`on`) or remove a link between two tickets (`POST /ticket-link`, `fleetc ticket block |
+/// unblock | relate | unrelate`): `link` is `blocked-by` (`ticket` is blocked by `other`) or `relates`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TicketBlockCmd {
+pub struct TicketLinkCmd {
     pub ticket: String,
-    pub by: String,
+    pub other: String,
+    pub link: String,
+    pub on: bool,
 }
 
 /// A ticket's text: its new description (`POST /ticket-edit`, `fleetc ticket edit` — replaces it

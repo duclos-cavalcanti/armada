@@ -90,7 +90,7 @@ pub enum Command {
     Arm { ticket: TicketKey, reply: Reply }, // an action: arm the ticket's MR, unless held/blocked (forge)
     GetTicket { ticket: TicketKey, reply: TicketReply }, // a read: a ticket's full text (tracker)
     NewTicket { draft: domain::TicketDraft, reply: UrlReply }, // an action: create a ticket → its key (tracker)
-    BlockTicket { ticket: TicketKey, by: TicketKey, reply: Reply }, // an action: add an "is blocked by" edge (tracker)
+    LinkTicket { ticket: TicketKey, other: TicketKey, link: domain::TicketLink, on: bool, reply: Reply }, // an action: add or remove a link (tracker, + ledger)
     EditTicket { ticket: TicketKey, description: String, reply: Reply }, // an action: replace its description (tracker)
     CommentTicket { ticket: TicketKey, body: String, reply: Reply }, // an action: comment on it (tracker)
     Propose { from: Option<TicketKey>, proposed: Proposed, reply: UrlReply }, // hold a cog's proposal → its id
@@ -312,8 +312,8 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         Command::NewTicket { draft, reply } => {
             let _ = reply.send(tracker.create(&draft).map(|k| k.0).map_err(|e| format!("{e:#}")));
         }
-        Command::BlockTicket { ticket, by, reply } => {
-            let _ = reply.send(tracker.block(&ticket, &by).map_err(|e| format!("{e:#}")));
+        Command::LinkTicket { ticket, other, link, on, reply } => {
+            let _ = reply.send(link_ticket(ledger, tracker, &ticket, &other, link, on).map_err(|e| format!("{e:#}")));
         }
         Command::EditTicket { ticket, description, reply } => {
             let _ = reply.send(tracker.edit(&ticket, &description).map_err(|e| format!("{e:#}")));
@@ -567,6 +567,23 @@ fn read_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey) -> Resul
         detail.held = Some(ledger.held_reason(key)?.unwrap_or_default());
     }
     Ok(detail)
+}
+
+/// Add or remove a link between two tickets in the tracker. A blocking edge goes into the ledger
+/// too, so the line holds (or frees) the ticket now, not at the next sync.
+fn link_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey, other: &TicketKey, link: domain::TicketLink, on: bool) -> Result<()> {
+    tracker.link(key, other, link, on)?;
+    if link == domain::TicketLink::BlockedBy {
+        if let Some(t) = TicketRepo::get(ledger, key)? {
+            let mut blockers = t.blocked_by;
+            blockers.retain(|b| b != other);
+            if on {
+                blockers.push(other.clone());
+            }
+            ledger.set_blocked_by(key, &blockers)?;
+        }
+    }
+    Ok(())
 }
 
 /// The blockers of `ticket` not yet Done/Cancelled.
@@ -1237,7 +1254,7 @@ mod tests {
         fn read(&self, key: &TicketKey) -> Result<domain::TicketDetail> {
             let mut ticket = self.get(key)?;
             ticket.labels = self.labels.borrow().iter().filter(|(k, _)| k == key).map(|(_, l)| l.clone()).collect();
-            Ok(domain::TicketDetail { ticket, kind: "task".into(), description: String::new(), held: None, location: String::new() })
+            Ok(domain::TicketDetail { ticket, kind: "task".into(), description: String::new(), related: vec![], held: None, location: String::new() })
         }
         fn create(&self, d: &TicketDraft) -> Result<TicketKey> {
             let key = TicketKey(format!("PROJ-{}", 100 + self.tickets.borrow().len()));
@@ -1266,7 +1283,7 @@ mod tests {
             }
             Ok(())
         }
-        fn block(&self, _: &TicketKey, _: &TicketKey) -> Result<()> {
+        fn link(&self, _: &TicketKey, _: &TicketKey, _: domain::TicketLink, _: bool) -> Result<()> {
             Ok(())
         }
         fn comment(&self, _: &TicketKey, _: &str) -> Result<()> {
@@ -1300,6 +1317,26 @@ mod tests {
         assert!(db.pending().unwrap().is_empty());
         assert_eq!(ProposalRepo::get(&db, &id).unwrap().unwrap().accepted_as, Some(key));
         assert!(accept_proposal(&db, &tracker, &id, None).is_err(), "an accepted proposal can't be accepted again");
+    }
+
+    #[test]
+    fn a_blocking_link_reaches_the_ledger_at_once_a_relation_never_does() {
+        let db = Ledger::in_memory().unwrap();
+        let tracker = FakeTracker::new(vec![tt("PROJ-1", TicketStatus::Todo), tt("PROJ-2", TicketStatus::Todo)]);
+        sync::sync_board(&db, &tracker, "now").unwrap();
+        let (one, two) = (TicketKey("PROJ-1".into()), TicketKey("PROJ-2".into()));
+        let blockers = || TicketRepo::get(&db, &one).unwrap().unwrap().blocked_by;
+
+        link_ticket(&db, &tracker, &one, &two, domain::TicketLink::BlockedBy, true).unwrap();
+        assert_eq!(blockers(), vec![two.clone()], "held now, not at the next sync");
+        link_ticket(&db, &tracker, &one, &two, domain::TicketLink::BlockedBy, true).unwrap();
+        assert_eq!(blockers(), vec![two.clone()], "idempotent");
+        link_ticket(&db, &tracker, &one, &two, domain::TicketLink::BlockedBy, false).unwrap();
+        assert!(blockers().is_empty(), "freed now");
+        link_ticket(&db, &tracker, &one, &two, domain::TicketLink::Relates, true).unwrap();
+        assert!(blockers().is_empty(), "a relation never gates the line");
+        link_ticket(&db, &tracker, &TicketKey("PROJ-404".into()), &one, domain::TicketLink::BlockedBy, true)
+            .expect("off the board: the tracker's edge only, synced if it joins");
     }
 
     #[test]

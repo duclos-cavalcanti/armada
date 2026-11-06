@@ -58,7 +58,8 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc arm      [<KEY-N>]        (arm the ticket's MR to merge once green; refused while held or blocked)\n  \
      fleetc ticket   [<KEY-N>] [--where]    (a ticket's full text; --where: its URL or file path)\n  \
      fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (prints the new key)\n  \
-     fleetc ticket   block <KEY-N> --by <KEY-N>   (record an 'is blocked by' edge)\n  \
+     fleetc ticket   block|unblock <KEY-N> --by <KEY-N>   (add or remove an 'is blocked by' edge; unblock: never a cog)\n  \
+     fleetc ticket   relate|unrelate <KEY-N> --to <KEY-N>   (add or remove a 'relates to' link, both ways; the fleet never acts on it)\n  \
      fleetc ticket   edit [<KEY-N>] --body <text|->   (replace the description, whole: read it first)\n  \
      fleetc ticket   comment [<KEY-N>] --body <text|->   (comment on the ticket)\n  \
      fleetc propose  --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (a cog: file a new ticket labelled fleet-proposed; prints its id + key)\n  \
@@ -1154,12 +1155,12 @@ fn arm(args: &[String]) -> Result<()> {
     post_and_print("/arm", &wire::ArmCmd { ticket })
 }
 
-/// `fleetc ticket <KEY-N> | new … | block … | edit … | comment …` — read or write tickets through
+/// `fleetc ticket <KEY-N> | new … | block|unblock … | relate|unrelate … | edit … | comment …` — read or write tickets through
 /// the project's tracker (Jira, the filesystem, …): one verb, whichever adapter fleet.toml picks.
 fn ticket(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("new") => ticket_new(&args[1..]),
-        Some("block") => ticket_block(&args[1..]),
+        Some(sub @ ("block" | "unblock" | "relate" | "unrelate")) => ticket_link(sub, &args[1..]),
         Some(sub @ ("edit" | "comment")) => ticket_text(sub, &args[1..]),
         Some(key) if !key.starts_with('-') => match args.get(1).map(String::as_str) {
             Some("--where") => ticket_where(&ticket_key(key, "ticket")?),
@@ -1169,7 +1170,7 @@ fn ticket(args: &[String]) -> Result<()> {
             let key = ticket_or_own(&[], "ticket")?;
             if args.is_empty() { ticket_show(&key) } else { ticket_where(&key) }
         }
-        _ => bail!("usage: fleetc ticket [<KEY-N>] | new --title <t> --type <type> … | block <KEY-N> --by <KEY-N> | edit|comment [<KEY-N>] --body <text|->"),
+        _ => bail!("usage: fleetc ticket [<KEY-N>] | new --title <t> --type <type> … | block|unblock <KEY-N> --by <KEY-N> | relate|unrelate <KEY-N> --to <KEY-N> | edit|comment [<KEY-N>] --body <text|->"),
     }
 }
 
@@ -1211,9 +1212,11 @@ fn render_ticket(d: &serde_json::Value) -> String {
     if let Some(c) = t["convoy"].as_str() {
         links.push(format!("convoy {c}"));
     }
-    let blockers: Vec<String> = t["blocked_by"].as_array().into_iter().flatten().map(s).collect();
-    if !blockers.is_empty() {
-        links.push(format!("blocked by {}", blockers.join(", ")));
+    let keys = |v: &serde_json::Value| v.as_array().into_iter().flatten().map(s).collect::<Vec<_>>().join(", ");
+    for (what, keys) in [("blocked by", keys(&t["blocked_by"])), ("relates to", keys(&d["related"]))] {
+        if !keys.is_empty() {
+            links.push(format!("{what} {keys}"));
+        }
     }
     let mut out = format!("{}\n{}\n", facts.join(" · "), s(&t["title"]));
     if !links.is_empty() {
@@ -1389,14 +1392,24 @@ fn ticket_text(sub: &str, args: &[String]) -> Result<()> {
     submit(&format!("/ticket-{sub}"), &wire::TicketTextCmd { ticket: key, body })
 }
 
-/// `fleetc ticket block <KEY-N> --by <KEY-N>` — record that the first ticket is blocked by the second.
-fn ticket_block(args: &[String]) -> Result<()> {
-    let key = ticket_key(args.first().ok_or_else(|| anyhow!("ticket block needs a <KEY-N>"))?, "ticket block")?;
-    let by = match &args[1..] {
-        [flag, by] if flag == "--by" => ticket_key(by, "ticket block")?,
-        _ => bail!("usage: fleetc ticket block <KEY-N> --by <KEY-N>"),
+/// `fleetc ticket block|unblock <KEY-N> --by <KEY-N>` — add or remove the edge "the first ticket is
+/// blocked by the second"; `relate|unrelate <KEY-N> --to <KEY-N>` — relate the two, or stop.
+fn ticket_link(sub: &str, args: &[String]) -> Result<()> {
+    // Dropping a blocker reorders the line: the operator's call (or the admiral's), never a cog's.
+    if sub == "unblock" && in_cog() {
+        bail!("a cog doesn't remove a blocker — escalate it for the operator");
+    }
+    let verb = format!("ticket {sub}");
+    let (link, flag) = match sub {
+        "block" | "unblock" => ("blocked-by", "--by"),
+        _ => ("relates", "--to"),
     };
-    submit("/ticket-block", &wire::TicketBlockCmd { ticket: key, by })
+    let (ticket, other) = match args {
+        [key, f, other] if f == flag => (ticket_key(key, &verb)?, ticket_key(other, &verb)?),
+        _ => bail!("usage: fleetc ticket {sub} <KEY-N> {flag} <KEY-N>"),
+    };
+    let on = !sub.starts_with("un");
+    submit("/ticket-link", &wire::TicketLinkCmd { ticket, other, link: link.into(), on })
 }
 
 /// A `--body` value: as given, or stdin's whole text for `-`.
@@ -1661,6 +1674,9 @@ mod tests {
             "description": "## Outcome\n\nneg works.\n"
         });
         assert_eq!(render_ticket(&d), "ARMT-4 · story · todo\nAdd neg\nconvoy ARMT-1 · blocked by ARMT-3\n\n## Outcome\n\nneg works.\n");
+        let mut related = d.clone();
+        related["related"] = serde_json::json!(["ARMT-7", "ARMT-8"]);
+        assert!(render_ticket(&related).contains("convoy ARMT-1 · blocked by ARMT-3 · relates to ARMT-7, ARMT-8\n"));
     }
     use domain::{EntityKind, Event, EventKind, Seq};
 

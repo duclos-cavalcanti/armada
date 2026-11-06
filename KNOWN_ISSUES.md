@@ -21,7 +21,9 @@ Accepted edge cases: understood, not fixed, each with its workaround.
   ticket.
   *Workaround:* after the first block on a Jira project, check the edge in Jira's UI ("KEY is
   blocked by BY") before relying on it.
-  *Fix:* verify against a live Jira; if reversed, swap the two keys in `JiraTracker::block`.
+  *Fix:* verify against a live Jira; if reversed, swap the two keys in `JiraTracker::link`.
+  `fleetc ticket unblock` reads the edge from the same side, so a reversed edge is one it can't
+  find either: remove it in Jira's UI.
 
 - **A `fleetc` call holding a shell variable goes to auto mode's classifier.**
   *Scenario:* Claude Code matches an allow rule only against a command it can check before it

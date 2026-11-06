@@ -1,5 +1,5 @@
 //! The `jira` Tracker driver — shells out to `jira-cli` for reads, creates and transitions.
-//! Field edits (description, labels) go to Jira's REST API through `curl` instead, with jira-cli's
+//! Field edits (description, labels) and unlinks go to Jira's REST API through `curl` instead, with jira-cli's
 //! own credentials: `jira issue edit` re-sends every component on the ticket, so one Jira no longer
 //! accepts (an archived component) fails every edit.
 //!
@@ -8,7 +8,7 @@
 
 use anyhow::{ensure, Context, Result};
 use domain::ports::Tracker;
-use domain::{ConvoyKey, TicketDetail, TicketDraft, TicketKey, TicketStatus, TrackerTicket};
+use domain::{ConvoyKey, TicketDetail, TicketDraft, TicketKey, TicketLink, TicketStatus, TrackerTicket};
 use std::process::Command;
 
 /// `[tracker]` in fleet.toml: the Jira `project` (its key is the ticket prefix) and the optional
@@ -79,16 +79,24 @@ impl JiraTracker {
     }
 
     /// Set fields on an issue — `PUT /rest/api/2/issue/<KEY>` with only the given `body`, so the
-    /// ticket's other fields (its components) aren't re-sent. jira-cli's credentials: the server +
+    /// ticket's other fields (its components) aren't re-sent.
+    fn put_issue(&self, key: &TicketKey, body: &serde_json::Value) -> Result<()> {
+        self.rest("PUT", &format!("issue/{}", key.0), Some(body))
+    }
+
+    /// One call to Jira's REST API (`/rest/api/2/<path>`), with jira-cli's credentials: the server +
     /// login from its config, the token from `JIRA_API_TOKEN` (passed on stdin, never in argv),
     /// else `~/.netrc`.
-    fn put_issue(&self, key: &TicketKey, body: &serde_json::Value) -> Result<()> {
+    fn rest(&self, method: &str, path: &str, body: Option<&serde_json::Value>) -> Result<()> {
         let cfg = jira_cli_config()?;
-        let url = format!("{}/rest/api/2/issue/{}", cfg.server.trim_end_matches('/'), key.0);
+        let url = format!("{}/rest/api/2/{path}", cfg.server.trim_end_matches('/'));
         let token = std::env::var("JIRA_API_TOKEN").ok().filter(|t| !t.is_empty());
         let mut curl = Command::new("curl");
-        curl.args(["-sS", "-X", "PUT", "-H", "Content-Type: application/json", "-w", "\n%{http_code}"])
-            .args(["--data-binary", &body.to_string(), &url])
+        curl.args(["-sS", "-X", method, "-H", "Content-Type: application/json", "-w", "\n%{http_code}"]);
+        if let Some(body) = body {
+            curl.args(["--data-binary", &body.to_string()]);
+        }
+        curl.arg(&url)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
@@ -104,8 +112,7 @@ impl JiraTracker {
         let (resp, code) = stdout.rsplit_once('\n').unwrap_or(("", &stdout));
         ensure!(
             out.status.success() && code.starts_with('2'),
-            "jira PUT {}: {code} {}{}",
-            key.0,
+            "jira {method} {path}: {code} {}{}",
             crate::preflight::one_line(resp.as_bytes()),
             crate::preflight::one_line(&out.stderr)
         );
@@ -243,7 +250,7 @@ impl Tracker for JiraTracker {
             .or_else(|| TicketKey::find_in(&out, &self.project))
             .with_context(|| format!("jira issue create printed no {}-N key: {out}", self.project))?;
         for blocker in &d.blocked_by {
-            self.block(&key, blocker)?;
+            self.link(&key, blocker, TicketLink::BlockedBy, true)?;
         }
         Ok(key)
     }
@@ -257,13 +264,33 @@ impl Tracker for JiraTracker {
         self.put_issue(key, &serde_json::json!({ "update": { "labels": [{ op: label }] } }))
     }
 
-    fn block(&self, key: &TicketKey, by: &TicketKey) -> Result<()> {
-        // `jira issue link INWARD OUTWARD Blocks` reads "INWARD blocks OUTWARD" (Jira's link
-        // convention), so "key is blocked by `by`" is `link by key`. UNVERIFIED against a live Jira.
-        if self.get(key)?.blocked_by.contains(by) {
-            return Ok(()); // idempotent: the edge exists
+    fn link(&self, key: &TicketKey, other: &TicketKey, link: TicketLink, on: bool) -> Result<()> {
+        let issue = self.view(key)?;
+        let fields = issue.get("fields").context("jira issue view: no fields")?;
+        let (name, inward_only) = match link {
+            TicketLink::BlockedBy => ("Blocks", true), // only the inward side: `other` blocks `key`
+            TicketLink::Relates => ("Relates", false),
+        };
+        let ids: Vec<String> = links_of(fields, name)
+            .into_iter()
+            .filter(|l| &l.other == other && (l.inward || !inward_only))
+            .map(|l| l.id)
+            .collect();
+        if !on {
+            // By its id: `jira issue unlink A B` takes no link type, so it can drop a Relates for a Blocks.
+            return ids.iter().try_for_each(|id| self.rest("DELETE", &format!("issueLink/{id}"), None));
         }
-        self.jira(&["issue", "link", &by.0, &key.0, "Blocks"]).map(drop)
+        if !ids.is_empty() {
+            return Ok(()); // idempotent: the link exists
+        }
+        // `jira issue link INWARD OUTWARD Blocks` reads "INWARD blocks OUTWARD" (Jira's link
+        // convention), so "key is blocked by `other`" is `link other key`. UNVERIFIED against a live
+        // Jira. Relates reads the same both ways.
+        match link {
+            TicketLink::BlockedBy => self.jira(&["issue", "link", &other.0, &key.0, "Blocks"]),
+            TicketLink::Relates => self.jira(&["issue", "link", &key.0, &other.0, "Relates"]),
+        }
+        .map(drop)
     }
 }
 
@@ -367,6 +394,7 @@ fn detail_from_issue(issue: &serde_json::Value) -> Option<TicketDetail> {
             Some(doc) if doc.is_object() => adf_text(doc).trim_end().to_string(),
             _ => String::new(),
         },
+        related: links_of(f, "Relates").into_iter().map(|l| l.other).collect(),
         held: None,
         location: browse_url(issue).unwrap_or_default(),
     })
@@ -483,15 +511,36 @@ fn issue_to_ticket(i: &serde_json::Value) -> Option<TrackerTicket> {
 /// NB: jira-cli spells the field two ways — `issue list --raw` says `issueLinks`, `issue view
 /// --raw` (Jira's own REST shape) says `issuelinks`.
 fn parse_blocked_by(fields: &serde_json::Value) -> Vec<TicketKey> {
+    links_of(fields, "Blocks").into_iter().filter(|l| l.inward).map(|l| l.other).collect()
+}
+
+/// One of an issue's links, seen from the issue: its id (what a delete takes), the issue on the
+/// other end, and whether that one is the inward side ("Y blocks X", on X, carries `inwardIssue` = Y).
+struct IssueLink {
+    id: String,
+    other: TicketKey,
+    inward: bool,
+}
+
+/// The issue's links of type `name` (`Blocks`, `Relates`), from its `issueLinks` / `issuelinks`.
+fn links_of(fields: &serde_json::Value, name: &str) -> Vec<IssueLink> {
     let links = fields.get("issueLinks").or_else(|| fields.get("issuelinks"));
-    let Some(links) = links.and_then(|l| l.as_array()) else {
-        return Vec::new();
-    };
     links
-        .iter()
-        .filter(|l| l.get("type").and_then(|t| t.get("name")).and_then(|n| n.as_str()) == Some("Blocks"))
-        .filter_map(|l| l.get("inwardIssue").and_then(|i| i.get("key")).and_then(|k| k.as_str()))
-        .filter_map(|k| TicketKey::parse(k).ok())
+        .and_then(|l| l.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|l| l.pointer("/type/name").and_then(|n| n.as_str()) == Some(name))
+        .filter_map(|l| {
+            let (side, inward) = match l.get("inwardIssue") {
+                Some(i) => (i, true),
+                None => (l.get("outwardIssue")?, false),
+            };
+            Some(IssueLink {
+                id: l.get("id").and_then(|i| i.as_str()).unwrap_or_default().to_string(),
+                other: TicketKey::parse(side.get("key")?.as_str()?).ok()?,
+                inward,
+            })
+        })
         .collect()
 }
 
@@ -617,6 +666,22 @@ mod tests {
             blocker.blocked_by.is_empty(),
             "the outward 'blocks' edge is the reverse (carried on the blocked ticket); Relates is ignored"
         );
+    }
+
+    #[test]
+    fn reads_relates_links_either_way_with_their_ids() {
+        let issue: serde_json::Value = serde_json::from_str(r#"{"key":"PROJ-1","fields":{"summary":"s","status":{"name":"To Do"},
+          "issuelinks":[
+            {"id":"10","type":{"name":"Relates"},"inwardIssue":{"key":"PROJ-2"}},
+            {"id":"11","type":{"name":"Relates"},"outwardIssue":{"key":"PROJ-3"}},
+            {"id":"12","type":{"name":"Blocks"},"inwardIssue":{"key":"PROJ-4"}},
+            {"id":"13","type":{"name":"Blocks"},"outwardIssue":{"key":"PROJ-5"}}]}}"#).unwrap();
+        let d = detail_from_issue(&issue).unwrap();
+        assert_eq!(d.related, vec![TicketKey("PROJ-2".into()), TicketKey("PROJ-3".into())], "either side");
+        assert_eq!(d.ticket.blocked_by, vec![TicketKey("PROJ-4".into())], "only the inward Blocks side");
+        let blocks = links_of(&issue["fields"], "Blocks");
+        let ids: Vec<(&str, bool)> = blocks.iter().map(|l| (l.id.as_str(), l.inward)).collect();
+        assert_eq!(ids, vec![("12", true), ("13", false)], "the id a delete takes, and the side");
     }
 
     #[test]

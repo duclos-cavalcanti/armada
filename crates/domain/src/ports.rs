@@ -268,8 +268,9 @@ pub trait Tracker {
     fn edit(&self, key: &TicketKey, description: &str) -> Result<()>;
     /// Add (`on`) or remove a label on the ticket (idempotent).
     fn label(&self, key: &TicketKey, label: &str, on: bool) -> Result<()>;
-    /// Record that `key` is blocked by `by` (idempotent).
-    fn block(&self, key: &TicketKey, by: &TicketKey) -> Result<()>;
+    /// Add (`on`) or remove a `link` between `key` and `other` (idempotent): `BlockedBy` is "`key`
+    /// is blocked by `other`"; `Relates` relates the two, both ways.
+    fn link(&self, key: &TicketKey, other: &TicketKey, link: TicketLink, on: bool) -> Result<()>;
     /// Add a comment to the ticket — a decision's why, kept where the team reads the ticket.
     fn comment(&self, key: &TicketKey, body: &str) -> Result<()>;
 }

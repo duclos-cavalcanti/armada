@@ -104,7 +104,7 @@ fn handle(
         (Some("POST"), Some("/arm")) => handle_arm(&request, cmds),
         (Some("GET"), Some(p)) if p.starts_with("/ticket?") => handle_ticket_view(cmds, p),
         (Some("POST"), Some("/ticket-new")) => handle_ticket_new(&request, cmds),
-        (Some("POST"), Some("/ticket-block")) => handle_ticket_block(&request, cmds),
+        (Some("POST"), Some("/ticket-link")) => handle_ticket_link(&request, cmds),
         (Some("POST"), Some("/ticket-edit")) => handle_ticket_text(&request, cmds, false),
         (Some("POST"), Some("/ticket-comment")) => handle_ticket_text(&request, cmds, true),
         (Some("POST"), Some("/propose")) => handle_propose(&request, cmds),
@@ -643,22 +643,27 @@ fn relay(cmds: &Sender<Command>, cmd: impl FnOnce(Sender<Result<String, String>>
     }
 }
 
-/// `POST /ticket-block` — record that a ticket is blocked by another.
-fn handle_ticket_block(request: &str, cmds: &Sender<Command>) -> String {
+/// `POST /ticket-link` — add or remove a link between two tickets: "is blocked by", or "relates to".
+fn handle_ticket_link(request: &str, cmds: &Sender<Command>) -> String {
     let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
-    let dto: wire::TicketBlockCmd = match serde_json::from_str(body) {
+    let dto: wire::TicketLinkCmd = match serde_json::from_str(body) {
         Ok(d) => d,
         Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
     };
-    let (ticket, by) = match (parse_ticket(&dto.ticket), parse_ticket(&dto.by)) {
-        (Ok(t), Ok(b)) => (t, b),
+    let (ticket, other) = match (parse_ticket(&dto.ticket), parse_ticket(&dto.other)) {
+        (Ok(t), Ok(o)) => (t, o),
         (Err(r), _) | (_, Err(r)) => return r,
     };
-    if ticket == by {
-        return http_response("400 Bad Request", "text/plain", "a ticket can't block itself");
+    let link = match dto.link.as_str() {
+        "blocked-by" => domain::TicketLink::BlockedBy,
+        "relates" => domain::TicketLink::Relates,
+        other => return http_response("400 Bad Request", "text/plain", &format!("unknown link {other:?}: blocked-by or relates")),
+    };
+    if ticket == other {
+        return http_response("400 Bad Request", "text/plain", "a ticket can't link to itself");
     }
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    if cmds.send(Command::BlockTicket { ticket, by, reply: reply_tx }).is_err() {
+    if cmds.send(Command::LinkTicket { ticket, other, link, on: dto.on, reply: reply_tx }).is_err() {
         return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
     }
     match reply_rx.recv() {
@@ -1057,7 +1062,7 @@ mod tests {
                     | Command::Decommission { reply, .. }
                     | Command::RemoveFromConvoy { reply, .. }
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::BlockTicket { reply, .. }
+                    Command::LinkTicket { reply, .. }
                     | Command::EditTicket { reply, .. }
                     | Command::CommentTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
@@ -1124,7 +1129,7 @@ mod tests {
                     | Command::Decommission { reply, .. }
                     | Command::RemoveFromConvoy { reply, .. }
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::BlockTicket { reply, .. }
+                    Command::LinkTicket { reply, .. }
                     | Command::EditTicket { reply, .. }
                     | Command::CommentTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }

@@ -560,6 +560,14 @@ impl TicketLabel {
     }
 }
 
+/// A link between two tickets, as `fleetc ticket block|relate` writes it. `BlockedBy` gates the line
+/// (dispatch, merge); `Relates` only points one at the other, both ways, and the fleet never acts on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TicketLink {
+    BlockedBy,
+    Relates,
+}
+
 /// A ticket's full text, as `fleetc ticket <KEY>` shows it: the board facts plus its type
 /// (`story`, `bug`, `task`, `epic`, …) and its description.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -567,6 +575,9 @@ pub struct TicketDetail {
     pub ticket: TrackerTicket,
     pub kind: String,
     pub description: String,
+    /// The tickets it relates to (`TicketLink::Relates`): shown, never acted on.
+    #[serde(default)]
+    pub related: Vec<TicketKey>,
     /// The fleet's hold on it, from the ledger (not the tracker): the reason, `""` when none was
     /// given; `None` when it isn't held.
     #[serde(default)]

@@ -1,6 +1,6 @@
 //! The filesystem Tracker driver — tickets as markdown files in a folder, one `<KEY>.md` each. No
 //! service, no CLI: the folder is the tracker. Each file opens with a YAML header the fleet reads
-//! and writes (title, type, status, convoy, blocked_by, assignee, parent); the body below it is the
+//! and writes (title, type, status, convoy, blocked_by, related, assignee, parent); the body below it is the
 //! human-authored description, which fleetd never touches.
 //!
 //! ```markdown
@@ -20,7 +20,7 @@
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use domain::ports::Tracker;
-use domain::{ConvoyKey, TicketDetail, TicketDraft, TicketKey, TicketStatus, TrackerTicket};
+use domain::{ConvoyKey, TicketDetail, TicketDraft, TicketKey, TicketLink, TicketStatus, TrackerTicket};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -46,6 +46,9 @@ struct Header {
     convoy: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     blocked_by: Vec<String>,
+    /// The tickets it relates to, kept on both sides.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    related: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     assignee: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -221,6 +224,7 @@ impl Tracker for FsTracker {
         Ok(TicketDetail {
             kind: t.header.kind.clone(),
             description: t.body.clone(),
+            related: t.header.related.iter().filter_map(|k| TicketKey::parse(k).ok()).collect(),
             ticket: self.to_ticket(key.clone(), &t),
             held: None,
             location: self.path(key).to_string_lossy().into_owned(),
@@ -245,6 +249,7 @@ impl Tracker for FsTracker {
                 status: TicketStatus::Todo,
                 convoy: d.convoy.as_ref().map(|c| c.0.clone()),
                 blocked_by: d.blocked_by.iter().map(|b| b.0.clone()).collect(),
+                related: vec![],
                 assignee: None,
                 parent: None,
                 labels: d.labels.clone(),
@@ -277,12 +282,24 @@ impl Tracker for FsTracker {
         })
     }
 
-    fn block(&self, key: &TicketKey, by: &TicketKey) -> Result<()> {
-        self.update(key, |h| {
-            if !h.blocked_by.contains(&by.0) {
-                h.blocked_by.push(by.0.clone());
+    fn link(&self, key: &TicketKey, other: &TicketKey, link: TicketLink, on: bool) -> Result<()> {
+        if on {
+            self.load(other)?; // a link to a ticket that isn't there is refused, as Jira refuses it
+        }
+        let set = |keys: &mut Vec<String>, k: &TicketKey| {
+            if !on {
+                keys.retain(|x| x != &k.0);
+            } else if !keys.contains(&k.0) {
+                keys.push(k.0.clone());
             }
-        })
+        };
+        match link {
+            TicketLink::BlockedBy => self.update(key, |h| set(&mut h.blocked_by, other)),
+            TicketLink::Relates => {
+                self.update(key, |h| set(&mut h.related, other))?;
+                self.update(other, |h| set(&mut h.related, key))
+            }
+        }
     }
 
     /// A comment is appended to the ticket's body, under a dated heading.
@@ -365,8 +382,8 @@ mod tests {
         };
         let key = t.create(&draft).unwrap();
         assert_eq!(key, TicketKey("ARMT-10".into()), "after the highest number, bad files included");
-        t.block(&key, &TicketKey("ARMT-4".into())).unwrap();
-        t.block(&key, &TicketKey("ARMT-4".into())).unwrap(); // idempotent
+        t.link(&key, &TicketKey("ARMT-4".into()), TicketLink::BlockedBy, true).unwrap();
+        t.link(&key, &TicketKey("ARMT-4".into()), TicketLink::BlockedBy, true).unwrap(); // idempotent
         let d = t.read(&key).unwrap();
         assert_eq!((d.kind.as_str(), d.description.as_str()), ("story", "## Outcome\n\nmul works.\n"));
         assert_eq!((d.ticket.status, d.ticket.blocked_by.clone()), (TicketStatus::Todo, vec![TicketKey("ARMT-4".into())]));
@@ -377,6 +394,25 @@ mod tests {
         t.edit(&key, "## Outcome\n\nmul and div work.").unwrap();
         let d = t.read(&key).unwrap();
         assert_eq!((d.description.as_str(), d.ticket.title.as_str()), ("## Outcome\n\nmul and div work.\n", "Add mul"), "the body only");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unblocks_and_relates_both_ways() {
+        let armt_5 = ARMT_4.replace("title: Add neg", "title: Add abs").replace("blocked_by: [ARMT-3]\n", "");
+        let (t, dir) = tracker("link", &[("ARMT-4.md", ARMT_4), ("ARMT-5.md", &armt_5)]);
+        let (four, five, three) = (TicketKey("ARMT-4".into()), TicketKey("ARMT-5".into()), TicketKey("ARMT-3".into()));
+        t.link(&four, &three, TicketLink::BlockedBy, false).unwrap();
+        t.link(&four, &three, TicketLink::BlockedBy, false).unwrap(); // idempotent, and ARMT-3 needn't exist
+        assert!(t.read(&four).unwrap().ticket.blocked_by.is_empty());
+        assert!(t.link(&four, &three, TicketLink::BlockedBy, true).is_err(), "no ARMT-3 file to link to");
+
+        t.link(&four, &five, TicketLink::Relates, true).unwrap();
+        t.link(&five, &four, TicketLink::Relates, true).unwrap(); // the same link, from the other side
+        assert_eq!(t.read(&four).unwrap().related, vec![five.clone()]);
+        assert_eq!(t.read(&five).unwrap().related, vec![four.clone()], "kept on both sides");
+        t.link(&five, &four, TicketLink::Relates, false).unwrap();
+        assert!(t.read(&four).unwrap().related.is_empty() && t.read(&five).unwrap().related.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 

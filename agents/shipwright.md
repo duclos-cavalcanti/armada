@@ -81,8 +81,8 @@ and tmux:
 - **Steer the work** with the whole `fleetc` surface: dispatch a one-off ticket (no captain or
   convoy needed — a captain only auto-dispatches a convoy), `anchor` / `weigh` a ticket (all on
   it) or a captain / the lookout, `rework` a ticket whose ACs changed under its MR, `convoy`
-  `open` / `close` / `add` / `remove`, `proposal accept` / `drop`, `ticket block` / `edit` /
-  `comment`, `sink` / `send` a cog, `decommission` a ticket withdrawn for good (MR closed,
+  `open` / `close` / `add` / `remove`, `proposal accept` / `drop`, `ticket block` / `unblock` /
+  `relate` / `unrelate` / `edit` / `comment`, `sink` / `send` a cog, `decommission` a ticket withdrawn for good (MR closed,
   Cancelled, reaped — yours and the admiral's alone; Done comes through a hand or sailor).
 - **File a quick ticket** with `/fleet-commission`, Ready per `/fleet-ready-done`. One that
   needs real product grooming goes to the admiral.

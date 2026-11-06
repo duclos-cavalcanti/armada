@@ -2135,7 +2135,7 @@ mod tests {
         fn label(&self, _: &TicketKey, _: &str, _: bool) -> Result<()> {
             unimplemented!()
         }
-        fn block(&self, _: &TicketKey, _: &TicketKey) -> Result<()> {
+        fn link(&self, _: &TicketKey, _: &TicketKey, _: domain::TicketLink, _: bool) -> Result<()> {
             Ok(())
         }
         fn comment(&self, _: &TicketKey, _: &str) -> Result<()> {
