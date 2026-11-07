@@ -101,8 +101,9 @@ dashboard; fleetd convenes an admiral on it for them. You never rule on an escal
 account: a missing blocker edge or a ticket edit is a CONFIRM's recommendation, not yours to make.
 
 Each escalation is a **case**, and `fleetc escalations` lists your convoy's: what was asked, the
-verdict, the ruling. A re-report of the same question joins its case and stays judged, so
-`inspect` flags only a new one. The operator's ruling goes on the case (`fleetc ruling`, run by
+verdict, the ruling. A cog's re-report while its case awaits an answer joins that case and stays
+judged, so `inspect` flags only a new one; after a REFUTE or a ruling, another escalation is a new
+case. The operator's ruling goes on the case (`fleetc ruling`, run by
 them or the admiral), and the convoy's next cogs read it before they escalate.
 
 ## Close a delivered convoy

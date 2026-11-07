@@ -3414,8 +3414,10 @@ mod tests {
         escalate("X?", "2000-01-01T00:00:00Z");
         finish(&now_rfc3339());
         assert!(plan(&db, &[], true, &Levers { captain_sleep_secs: 900, ..LIVE }).unwrap().is_empty(), "escalated before the last pass: it rests");
-        escalate("X?", &now_rfc3339());
-        assert!(plan(&db, &[], true, &Levers { captain_sleep_secs: 900, ..LIVE }).unwrap().is_empty(), "a re-report of the same case (a heal's) wakes no one");
+        escalate("relaunched; still X?", &now_rfc3339());
+        assert!(plan(&db, &[], true, &Levers { captain_sleep_secs: 900, ..LIVE }).unwrap().is_empty(), "a re-report of a case awaiting its answer (a restart's) wakes no one");
+        let state = CogState::Worker(WorkerState::Implementing);
+        ReportRepo::record(&db, &Report { session: worker.id.clone(), state, last_action: None, reported_at: now_rfc3339() }).unwrap();
         escalate("Y?", &now_rfc3339());
         assert_eq!(plan(&db, &[], true, &Levers { captain_sleep_secs: 900, ..LIVE }).unwrap(), launch, "a new case since: a pass is due");
     }

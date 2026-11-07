@@ -63,7 +63,7 @@ type SettingsReply = std::sync::mpsc::Sender<std::result::Result<Vec<crate::sett
 /// scheduler. Fields are already validated (parsed into `domain` types) — the lint
 /// happened at the edge; this is the authoritative apply.
 pub enum Command {
-    RecordStatus { target: ControlTarget, state: CogState, last_action: Option<String>, reply: Reply },
+    RecordStatus { target: ControlTarget, state: CogState, last_action: Option<String>, reply: UrlReply }, // → "ok", or its case's note
     Dispatch { order: Order, reply: Reply },
     LaunchHand { worktree_path: String, reply: Reply }, // ticketless operator-driven hand, no order
     OpenConvoy { key: ConvoyKey, title: Option<String>, plan: Option<String>, reply: Reply },
@@ -1034,14 +1034,16 @@ fn signal<H: SessionHost>(ledger: &Ledger, host: &H, verb: Verb, s: &Session) ->
 }
 
 /// Resolve the live session for `(ticket, cog)` and record its report. No live session
-/// = an anomaly (a cog reporting after it was reaped), surfaced as an error to the client.
+/// = an anomaly (a cog reporting after it was reaped), surfaced as an error to the client. Replies
+/// `ok`, or, to an escalation, what it did to the cog's case: raised a new one, or joined the one
+/// still awaiting its answer (so the cog waits, rather than escalate again).
 fn record_status(
     ledger: &Ledger,
     forge: &dyn Forge,
     target: &ControlTarget,
     state: CogState,
     last_action: Option<String>,
-) -> Result<()> {
+) -> Result<String> {
     let session = live_sessions_for(ledger, target)?
         .into_iter()
         .next()
@@ -1075,13 +1077,24 @@ fn record_status(
             anyhow::ensure!(open == 0, "!{iid} has {open} open review threads — answer them (/fleet-parley), then report review");
         }
     }
+    let before = ledger.open_case(&session.id)?.map(|c| c.id);
     ledger.record(&Report {
-        session: session.id,
+        session: session.id.clone(),
         state,
         last_action,
         reported_at: now_rfc3339(),
     })?;
-    Ok(())
+    let Some(case) = ledger.open_case(&session.id)?.filter(|_| state.is_escalated()) else {
+        return Ok("ok".into());
+    };
+    if before.as_ref() == Some(&case.id) {
+        return Ok(format!(
+            "case #{} still awaits its answer, so this report joined it: nothing else changes. Wait in your pane: \
+             the answer comes to you (a REFUTE's way out, or ⚖ the operator's ruling).",
+            case.id.0
+        ));
+    }
+    Ok(format!("case #{} raised: a captain inspects it. Wait in your pane for the answer.", case.id.0))
 }
 
 fn tick_liveness(ledger: &Ledger, host: &TmuxHost, snapshot: &Snapshot, thresholds: &LivenessThresholds) {
@@ -1439,6 +1452,35 @@ mod tests {
         record_status(&db, &FakeForge::default(), &me, concluded, None).unwrap();
     }
 
+    #[test]
+    fn an_escalation_is_told_its_case_and_a_second_one_to_wait() {
+        let db = Ledger::in_memory().unwrap();
+        sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]), "now").unwrap();
+        let worker = Session {
+            id: SessionId(0),
+            kind: CrewKind::Worker,
+            ticket: Some(TicketKey("PROJ-1".into())),
+            convoy: None,
+            worktree_path: "/wt".into(),
+            tmux_session: "worker-PROJ-1".into(),
+            harness_session_id: None,
+            created_at: "t".into(),
+            ended_at: None,
+            anchored_at: None,
+            ship: None,
+        };
+        SessionRepo::start(&db, &worker).unwrap().expect("session start");
+        let me = ControlTarget::Cog { cog: CrewKind::Worker, ticket: TicketKey("PROJ-1".into()) };
+        let escalated = CogState::Worker(WorkerState::Escalated);
+        let forge = FakeForge::default();
+        let first = record_status(&db, &forge, &me, escalated, Some("X?".into())).unwrap();
+        assert!(first.starts_with("case #1 raised"), "{first}");
+        let again = record_status(&db, &forge, &me, escalated, Some("restarted; X?".into())).unwrap();
+        assert!(again.starts_with("case #1 still awaits its answer") && again.contains("Wait in your pane"), "{again}");
+        let implementing = CogState::Worker(WorkerState::Implementing);
+        assert_eq!(record_status(&db, &forge, &me, implementing, None).unwrap(), "ok");
+    }
+
     /// Our ship on `key` at `iid`, its ticket dispatched (an order), so the fleet owns it.
     fn our_ship(db: &Ledger, key: &str, iid: i64) -> ShipId {
         db.dispatch(&Order {
@@ -1630,11 +1672,12 @@ mod tests {
         let got = db.inspection(&id).unwrap().unwrap();
         assert_eq!((got.reported_at.as_str(), got.verdict), ("t2", Verdict::Confirm), "judged against that report");
         assert!(!flagged(&db), "judged");
-        ReportRepo::record(&db, &report(CogState::Worker(WorkerState::Escalated), "t3")).unwrap();
-        assert!(!flagged(&db), "a re-report of the same question (a heal's) joins its judged case");
-        let other = Report { last_action: Some("Y?".into()), ..report(CogState::Worker(WorkerState::Escalated), "t4") };
-        ReportRepo::record(&db, &other).unwrap();
-        assert!(flagged(&db), "a new question is a new case, unjudged");
+        let reworded = Report { last_action: Some("relaunched; still X?".into()), ..report(CogState::Worker(WorkerState::Escalated), "t3") };
+        ReportRepo::record(&db, &reworded).unwrap();
+        assert!(!flagged(&db), "awaiting its ruling: a re-report joins its judged case, whatever its words");
+        inspect(&db, &key, Verdict::Refute, "**Verdict:** REFUTE".into()).unwrap();
+        ReportRepo::record(&db, &report(CogState::Worker(WorkerState::Escalated), "t4")).unwrap();
+        assert!(flagged(&db), "answered: another escalation is a new case, unjudged");
     }
 
     #[test]

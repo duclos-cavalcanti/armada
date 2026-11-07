@@ -170,11 +170,16 @@ fn status(args: &[String]) -> Result<()> {
     let parsed = CogState::parse(kind, &state)
         .ok_or_else(|| anyhow!("invalid state '{state}' for cog '{cog}'"))?;
 
-    submit("/status", &wire::StatusReport {
-        target,
-        state: parsed.as_str().into(),
-        last_action,
-    })
+    // An escalation's reply says what it did to the cog's case: print it, so the cog knows to wait.
+    let report = wire::StatusReport { target, state: parsed.as_str().into(), last_action };
+    let (code, resp) = wire::post_json(&socket(), "/status", &report)?;
+    if code != 200 {
+        bail!("fleetd rejected the request ({code}): {resp}");
+    }
+    if resp != "ok" {
+        println!("{resp}");
+    }
+    Ok(())
 }
 
 /// `fleetc dispatch` — submit an order intent (the dispatch packet) to the queue, for

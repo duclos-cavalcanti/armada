@@ -695,22 +695,27 @@ impl ReportRepo for Ledger {
     }
 }
 
-/// Keep the session's case in step with its report, in the report's txn: a worker's or sailor's
-/// escalation opens a case, a re-report of the same question joins it, and any other report settles it.
+/// Keep the session's case in step with its report, in the report's txn. A worker's or sailor's
+/// escalation opens a case. Until the case is answered (a REFUTE's way out, or a ruling) its cog
+/// waits on it, so another escalation joins it, whatever its wording (a restart's re-report).
+/// Once answered, another escalation means the answer didn't hold: a new case. Any other report
+/// settles it.
 fn track_case(tx: &Connection, r: &Report) -> Result<()> {
     if !matches!(r.state, CogState::Worker(_) | CogState::Sailor(_)) {
         return Ok(());
     }
     let question = r.last_action.as_deref().unwrap_or("").trim();
-    let open: Option<(i64, String)> = tx
+    let open: Option<(i64, bool)> = tx
         .query_row(
-            "SELECT id, question FROM cases WHERE session_id = ?1 AND settled_at IS NULL",
+            "SELECT c.id, c.ruling IS NOT NULL
+                 OR (SELECT verdict FROM inspections WHERE case_id = c.id ORDER BY id DESC LIMIT 1) IS 'refute'
+             FROM cases c WHERE c.session_id = ?1 AND c.settled_at IS NULL",
             params![r.session.0],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    if let Some((id, asked)) = open {
-        if r.state.is_escalated() && asked == question {
+    if let Some((id, answered)) = open {
+        if r.state.is_escalated() && !answered {
             tx.execute("UPDATE cases SET reports = reports + 1 WHERE id = ?1", params![id])?;
             return Ok(());
         }
@@ -2093,30 +2098,37 @@ mod repo_tests {
     }
 
     #[test]
-    fn an_escalation_opens_a_case_a_rereport_joins_it_and_moving_on_settles_it() {
+    fn an_escalation_awaiting_its_answer_takes_every_rereport_and_an_answered_one_takes_none() {
         let db = db_with("PROJ-1");
         let id = db.start(&worker_on("PROJ-1")).unwrap().unwrap();
         escalate(&db, &id, "  needs a ruling on X ", "t1");
         let case = db.open_case(&id).unwrap().expect("raised");
         assert_eq!((case.question.as_str(), case.reports, case.cog), ("needs a ruling on X", 1, Some(CrewKind::Worker)));
+        escalate(&db, &id, "relaunched; still awaiting a ruling on X", "t2"); // a restart's re-report, reworded
         verdict_on(&db, &case, Verdict::Confirm);
-
-        escalate(&db, &id, "needs a ruling on X", "t2"); // a heal's re-report
+        escalate(&db, &id, "still waiting", "t3"); // confirmed is not answered: the ruling hasn't come
         let joined = db.open_case(&id).unwrap().unwrap();
-        assert_eq!((joined.id.clone(), joined.reports), (case.id.clone(), 2), "the same case, not a new one");
+        assert_eq!((joined.id.clone(), joined.reports, joined.question.as_str()), (case.id.clone(), 3, "needs a ruling on X"), "one case, its question kept");
         assert!(db.verdict(&joined.id).unwrap().is_some_and(|v| v.judges(&joined)), "still judged");
 
-        escalate(&db, &id, "a different question", "t3");
+        let ruling = Ruling { question: "X?".into(), answer: "Do Y.".into(), ruled_at: "t4".into() };
+        db.rule(&case.id, &ruling).unwrap();
+        escalate(&db, &id, "needs a ruling on X", "t5"); // answered: the same words are a new case
         let next = db.open_case(&id).unwrap().unwrap();
-        assert_ne!(next.id, case.id, "a new question is a new case");
-        assert_eq!(db.case(&case.id).unwrap().unwrap().settled_at.as_deref(), Some("t3"));
+        assert_ne!(next.id, case.id, "the ruling didn't hold: a new case");
+        assert_eq!(db.case(&case.id).unwrap().unwrap().settled_at.as_deref(), Some("t5"));
         assert_eq!(db.verdict(&next.id).unwrap(), None, "unjudged until it's inspected");
 
+        verdict_on(&db, &next, Verdict::Refute);
+        escalate(&db, &id, "the way out failed", "t6");
+        let third = db.open_case(&id).unwrap().unwrap();
+        assert_ne!(third.id, next.id, "a REFUTE answered it too: a new case");
+
         let state = CogState::Worker(WorkerState::Implementing);
-        db.record(&Report { session: id.clone(), state, last_action: None, reported_at: "t4".into() }).unwrap();
+        db.record(&Report { session: id.clone(), state, last_action: None, reported_at: "t7".into() }).unwrap();
         assert_eq!(db.open_case(&id).unwrap(), None, "moved on: settled");
         let all = db.cases(None, &TicketKey("PROJ-1".into())).unwrap();
-        assert_eq!(all.iter().map(|c| c.id.clone()).collect::<Vec<_>>(), vec![next.id, case.id], "newest first");
+        assert_eq!(all.iter().map(|c| c.id.clone()).collect::<Vec<_>>(), vec![third.id, next.id, case.id], "newest first");
     }
 
     #[test]

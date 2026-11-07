@@ -96,7 +96,8 @@ Do the work the snapshot calls for, this sweep only:
   (`--case <N>` reads one in full). A ruling, or a REFUTE's way out, that answers your question
   is yours: apply it, cite it (`case #N`) in your reply or commit, and finish the sweep. One that
   nearly fits doesn't stop you escalating, but name it and say why it doesn't fit. Your own case
-  still open (you were restarted mid-escalation) → don't report again; wait. Otherwise report it
+  still awaiting its answer (you were restarted mid-escalation) → don't report again; wait (a
+  report would only join it, and fleetc says so). Otherwise report it
   and **stay alive** so the operator can chat you in your pane:
   `fleetc status --cog sailor --state escalated --last-action "<why>"`,
   then stop and wait. When the operator unblocks you, or sends the ruling (`⚖ Ruling on your

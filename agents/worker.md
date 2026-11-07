@@ -85,7 +85,8 @@ voice only the judgment calls it can't see from outside:
   (`--case <N>` reads one in full). A ruling, or a REFUTE's way out, that answers your question is
   yours: apply it, cite it (`case #N`) in your commit or reply, and carry on. One that nearly
   fits doesn't stop you escalating, but name it and say why it doesn't fit. Your own case still
-  open (you were restarted mid-escalation) → don't report again; wait. Otherwise commit + push
+  awaiting its answer (you were restarted mid-escalation) → don't report again; wait (a report
+  would only join it, and fleetc says so). Otherwise commit + push
   WIP so nothing is lost, then
   `fleetc status --cog worker --state escalated --last-action "<why>"`,
   and stop — that report ends your goal. The operator will chat in your tmux pane, or send the

@@ -157,9 +157,10 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 
 -- Cases — an escalation start to finish: raised by a worker's or sailor's escalated report,
--- inspected by the lookout's verdict (`inspections.case_id`), ruled by the operator. A re-report of
--- the same question joins its open case (`reports` counts them), so it isn't judged twice; a report
--- of anything else, or the session ending, settles it. A ruling with no escalation behind it has no
+-- inspected by the lookout's verdict (`inspections.case_id`), ruled by the operator. Until it's
+-- answered (a REFUTE, or a ruling), another escalation from its cog joins it, whatever its wording
+-- (`reports` counts them), so it isn't judged twice; once answered, another escalation is a new
+-- case. Any other report, or the session ending, settles it. A ruling with no escalation behind it has no
 -- session and is settled at once. `convoy` = the ticket's when raised: a cog reads its own convoy's
 -- cases before it escalates.
 CREATE TABLE IF NOT EXISTS cases (

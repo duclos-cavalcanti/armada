@@ -150,7 +150,7 @@ fn handle_status(request: &str, cmds: &Sender<Command>) -> String {
         return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
     }
     match reply_rx.recv() {
-        Ok(Ok(())) => http_response("200 OK", "text/plain", "ok"),
+        Ok(Ok(note)) => http_response("200 OK", "text/plain", &note),
         Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
         Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
     }
@@ -1063,8 +1063,8 @@ mod tests {
         std::thread::spawn(move || {
             for cmd in rx {
                 match cmd {
-                    Command::RecordStatus { reply, .. }
-                    | Command::Dispatch { reply, .. }
+                    Command::RecordStatus { reply, .. } => { let _ = reply.send(Ok("ok".into())); }
+                    Command::Dispatch { reply, .. }
                     | Command::LaunchHand { reply, .. }
                     | Command::OpenConvoy { reply, .. }
                     | Command::CloseConvoy { reply, .. }
@@ -1132,8 +1132,8 @@ mod tests {
                         let _ = seen_tx.send(order.fork_from);
                         let _ = reply.send(Ok(()));
                     }
-                    Command::RecordStatus { reply, .. }
-                    | Command::LaunchHand { reply, .. }
+                    Command::RecordStatus { reply, .. } => { let _ = reply.send(Ok("ok".into())); }
+                    Command::LaunchHand { reply, .. }
                     | Command::OpenConvoy { reply, .. }
                     | Command::CloseConvoy { reply, .. }
                     | Command::Anchor { reply, .. }

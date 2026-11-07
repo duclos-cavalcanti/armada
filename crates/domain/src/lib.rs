@@ -690,9 +690,10 @@ impl Inspection {
 }
 
 /// An escalation, start to finish: a worker's or sailor's escalation (raised), the lookout's
-/// verdict on it (inspected), and the operator's ruling (ruled). A re-report of the same question
-/// joins its open case, so it isn't judged twice; the case settles when its cog stops escalating
-/// that question. A ruling made with no escalation behind it is a case with no cog, settled at
+/// verdict on it (inspected), and the operator's ruling (ruled). Until it's answered (a REFUTE's
+/// way out, or a ruling), another escalation from its cog joins it, whatever its wording, so it
+/// isn't judged twice; once answered, another escalation is a new case. It settles when its cog
+/// reports anything else. A ruling made with no escalation behind it is a case with no cog, settled at
 /// once. The cases of a convoy are its precedent: a cog reads them before it escalates.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Case {
@@ -706,7 +707,7 @@ pub struct Case {
     /// What the cog escalated (its report's `last_action`), or the ruling's question.
     pub question: String,
     pub raised_at: Timestamp,
-    /// The reports that raised it: a re-report of the same question counts here.
+    /// The reports that raised it: one sent while it awaited its answer counts here.
     pub reports: i64,
     pub ruling: Option<Ruling>,
     pub settled_at: Option<Timestamp>,
