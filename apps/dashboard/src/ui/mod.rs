@@ -28,33 +28,42 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 }
 
-/// The keys, one per line: `?` shows them over the dashboard.
+/// The keys that work everywhere, one per line: `?` shows them over the dashboard, then each pane's.
 const HELP: &[(&str, &str)] = &[
     ("q / Esc", "quit"),
     ("r", "refresh"),
     ("Tab / S-Tab", "next / previous tab"),
     ("↑↓ ^n^p 1-6", "focus a pane"),
     ("j / k", "row down / up"),
-    ("h / l", "swap a pane for its alternate: workers ↔ hands (Dispatch, Implementation)"),
+    ("h / l", "swap a pane for its alternate: proposals ↔ anchored, workers ↔ hands"),
     ("space", "zoom the focused pane"),
     ("y / Y", "yank the pane / the page"),
-    ("enter", "switch to the row's tmux session"),
-    ("m", "open the MR"),
-    ("t", "open the ticket"),
-    ("v", "read the verdict"),
-    ("e", "switch to the ticket's escalation admiral"),
-    ("a", "convene an admiral to investigate (Impl, Merge); accept (Proposals)"),
-    ("d / w", "drop a proposal / weigh an anchored ticket"),
     ("?", "this help"),
 ];
 
+/// Each pane's keys, acting on its focused row (`handler.sh` maps them). The pane titles name none.
+const PANE_KEYS: &[(&str, &str)] = &[
+    ("Convoys", "enter its captain · t its epic"),
+    ("Proposals", "enter read it · a accept · d drop"),
+    ("Anchored", "t its ticket · w weigh it"),
+    ("Dispatch", "t its ticket"),
+    ("Workers/Hands", "enter its cog · t ticket · m MR · v verdict · e admiral · a investigate"),
+    ("Merge", "enter its sailor · t ticket · m MR · v verdict · e admiral · a investigate"),
+    ("Reviews", "enter its lookout · m MR"),
+    ("Ships", "m MR · t ticket · l its lookout"),
+    ("Board", "t its ticket"),
+];
+
 fn render_help(f: &mut Frame) {
+    let row = |k: &str, what: &str| Line::from(vec![Span::styled(format!(" {k:<14}"), Style::default().fg(Color::Cyan)), Span::raw(what.to_string())]);
     let lines: Vec<Line> = HELP
         .iter()
-        .map(|(k, what)| Line::from(vec![Span::styled(format!(" {k:<14}"), Style::default().fg(Color::Cyan)), Span::raw(*what)]))
+        .map(|(k, what)| row(k, what))
+        .chain([Line::from(""), Line::from(Span::styled(" per pane  (e: switch to the admiral on its escalation · a: convene one to investigate it)", Style::default().add_modifier(Modifier::BOLD)))])
+        .chain(PANE_KEYS.iter().map(|(pane, keys)| row(pane, keys)))
         .collect();
     let area = f.area();
-    let (w, h) = (area.width.min(84), (lines.len() as u16 + 2).min(area.height));
+    let (w, h) = (area.width.min(104), (lines.len() as u16 + 2).min(area.height));
     let popup = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
     f.render_widget(Clear, popup);
     f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" keys · ? or Esc closes ")), popup);
@@ -194,18 +203,19 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             ticket_rows(&f.board, &f.held_reasons),
         ),
         Pane::Convoys => (
-            format!(" Convoys · {} open · enter captain · t ticket ", f.convoys.len()),
+            format!(" Convoys · {} open ", f.convoys.len()),
             Some(header(&[("Convoy", 16), ("Captain", 10), ("Launched", 9), ("Open", 6), ("Ref/Conf", 9), ("Title", 0)])),
             f.convoys.iter().map(|c| convoy_row(c, f)).collect(),
         ),
         Pane::Proposals => (
-            format!(
-                " Proposals · {} open · {} anchored · enter read · a accept · d drop · t ticket · w weigh ",
-                f.proposals.len(),
-                f.held.len()
-            ),
+            format!(" Proposals · {} open {}", f.proposals.len(), peek(app, pane)),
             Some(header(&[("Id", 5), ("Ticket", 12), ("From", 12), ("Convoy", 12), ("Age", 6), ("Detail", 0)])),
-            f.proposals.iter().map(proposal_row).chain(f.held.iter().map(|t| held_row(t, &f.held_reasons))).collect(),
+            f.proposals.iter().map(proposal_row).collect(),
+        ),
+        Pane::Anchored => (
+            format!(" Anchored · {} tickets {}", f.held.len(), peek(app, pane)),
+            Some(header(&[("Ticket", 12), ("Convoy", 12), ("Why", 0)])),
+            f.held.iter().map(|t| held_row(t, &f.held_reasons)).collect(),
         ),
         Pane::Log => (
             format!(
@@ -495,11 +505,8 @@ fn proposal_row(p: &Proposal) -> Line<'static> {
 fn held_row(t: &Ticket, reasons: &HashMap<String, String>) -> Line<'static> {
     let reason = reasons.get(&t.key.0).map(String::as_str).filter(|r| !r.is_empty()).unwrap_or("(no reason given)");
     cells(vec![
-        ("—".into(), 5, dim()),
         (t.key.0.clone(), 12, Style::default()),
-        ("—".into(), 12, dim()),
         (t.convoy.as_ref().map(|c| c.0.clone()).unwrap_or_default(), 12, Style::default()),
-        ("—".into(), 6, dim()),
         (format!("⚓ {reason}"), 0, yellow()),
     ])
 }

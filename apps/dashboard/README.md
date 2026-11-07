@@ -15,9 +15,10 @@ Cycle with `Tab` / `S-Tab`:
   then the builders and the ships being landed:
   - **Convoys** — the open convoys: the captain's liveness (or off), how many tickets are still
     open; `enter` switches to the captain;
-  - **Proposals** — what waits on you before it can enter the line: open proposals (`a` accept,
-    `d` drop) and convoy tickets a captain anchored as not Ready (`⚓ <reason>`; fix the ticket, then
-    `w` weigh). `enter` reads a proposal, `t` opens an anchored ticket;
+  - **Proposals** — what waits on you before it can enter the line: the open proposals (`enter`
+    reads one, `a` accepts, `d` drops). `h`/`l` swaps in **Anchored**: tickets held before they were
+    dispatched, a captain's not-Ready ones among them (`⚓ <reason>`; `t` opens one; fix it, then `w`
+    weigh). An anchored ticket that has an order shows in Dispatch instead, `⚓` in its "Waiting on";
   - **Dispatch** — the workers' orders (auto-implemented), with their phase (waiting /
     implementation / merge) and what they wait on (anchored ⚓ / blocked ⛔); `h`/`l` swaps in the
     hands' orders (operator-driven);
@@ -53,7 +54,7 @@ mode as its last reconcile pass ran: `dry_run=true` in red (it only plans), `dry
 | `↑` / `↓`, `C-p` / `C-n` | previous / next pane |
 | `1`–`5` | focus the Nth pane |
 | `j` / `k` | move the cursor within the focused pane |
-| `h` / `l` | swap a pane for its alternate: workers ↔ hands, in Dispatch and in Implementation. The title peeks at the hidden one: `/ Hands (3)` |
+| `h` / `l` | swap a pane for its alternate: proposals ↔ anchored, and workers ↔ hands in Dispatch and in Implementation. The title peeks at the hidden one: `/ Hands (3)` |
 | `space` | zoom the focused pane (toggle) |
 | `y` / `Y` | yank the focused pane (every row, in view or not) / the page as drawn |
 | `enter` | switch to the row's tmux session (its cog) |
@@ -62,6 +63,8 @@ mode as its last reconcile pass ran: `dry_run=true` in red (it only plans), `dry
 | `v` | read the verdict on the row's escalation (Implementation, Merge) |
 | `e` | switch to the admiral fleetd convened on the row's confirmed escalation |
 | any other | run `handler.sh <tab/pane> <key> <row fields…>` on the focused row |
+
+The pane titles name no keys: `?` lists the keys that work everywhere, then each pane's.
 
 The keys are fixed, never "smart": `enter` on a row whose session is down (or has none) opens
 nothing else — it fails. A failed action shows in red in the footer for a few seconds.

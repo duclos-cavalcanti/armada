@@ -80,11 +80,12 @@ pub enum Pane {
     Tickets,
     Convoys,
     Proposals,
+    Anchored,
     Log,
 }
 
 impl Pane {
-    const COUNT: usize = 11;
+    const COUNT: usize = 12;
     /// The coordinate the action handler keys on: `tab/pane`.
     fn coordinate(self) -> &'static str {
         match self {
@@ -95,7 +96,7 @@ impl Pane {
             Pane::Ships => "ships/list",
             Pane::Tickets => "board/tickets",
             Pane::Convoys => "fleet/convoys",
-            Pane::Proposals => "fleet/proposals",
+            Pane::Proposals | Pane::Anchored => "fleet/proposals", // the row's kind tells them apart
             Pane::Log => "log/fleetd",
         }
     }
@@ -106,6 +107,8 @@ impl Pane {
             Pane::HandOrders => Some(Pane::Dispatched),
             Pane::Impl => Some(Pane::Hands),
             Pane::Hands => Some(Pane::Impl),
+            Pane::Proposals => Some(Pane::Anchored),
+            Pane::Anchored => Some(Pane::Proposals),
             _ => None,
         }
     }
@@ -117,6 +120,8 @@ impl Pane {
             Pane::HandOrders => "Hands",
             Pane::Impl => "Workers",
             Pane::Hands => "Hands",
+            Pane::Proposals => "Proposals",
+            Pane::Anchored => "Anchored",
             _ => "",
         }
     }
@@ -210,7 +215,8 @@ impl App {
             Pane::Ships => f.armada.len(),
             Pane::Tickets => f.board.len(),
             Pane::Convoys => f.convoys.len(),
-            Pane::Proposals => f.proposals.len() + f.held.len(),
+            Pane::Proposals => f.proposals.len(),
+            Pane::Anchored => f.held.len(),
             Pane::Log => f.log.len(),
         }
     }
@@ -281,10 +287,8 @@ impl App {
                 let captain = f.captain_of(&c.key).map(|s| s.session.tmux_session.clone());
                 vec![c.key.0.clone(), c.title.clone().unwrap_or_default(), captain.unwrap_or_default()]
             }),
-            Pane::Proposals => match f.proposals.get(i) {
-                Some(p) => Some(vec!["proposal".into(), p.id.0.to_string()]),
-                None => f.held.get(i - f.proposals.len()).map(|t| vec!["anchored".into(), t.key.0.clone()]),
-            },
+            Pane::Proposals => f.proposals.get(i).map(|p| vec!["proposal".into(), p.id.0.to_string()]),
+            Pane::Anchored => f.held.get(i).map(|t| vec!["anchored".into(), t.key.0.clone()]),
             Pane::Log => None, // no row actions; `y` yanks
         }?;
         Some((pane.coordinate().to_string(), fields))

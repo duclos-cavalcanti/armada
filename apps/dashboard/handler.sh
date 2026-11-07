@@ -92,7 +92,7 @@ main() {
         fleet/convoys/enter) launch_tmux "${3:-}" "convoy ${1:-} has no captain" ;;
         fleet/convoys/t) launch_ticket "${1:-}" ;;
 
-        # ---- Fleet · proposals: proposals + anchored convoy tickets --------
+        # ---- Fleet · proposals ↔ anchored (an h/l pair; $1 tells them apart) --------
         # enter reads a proposal; a/d settle it; t opens an anchored ticket, w weighs it.
         fleet/proposals/enter) [ "${1:-}" = proposal ] || fail "an anchored ticket: t opens it, w weighs it"; popup proposal "${2:-}" ;;
         fleet/proposals/t) [ "${1:-}" = anchored ] || fail "a proposal isn't a ticket yet: enter reads it"; launch_ticket "${2:-}" ;;
