@@ -9,3 +9,5 @@
     - <op2> — ticket ✓|✗ · convoy ✓|✗ · resolves ✓|✗ — <cost> — <cite>
 - **Recommendation:** <the option passing all three, or "operator's ruling": which check each
   option fails> — <why; who acts>
+- **Prepared:** <on a CONFIRM, the part already in the cog's or captain's lane, as steps ready to
+  run once the operator rules (each with its cite); "none" when there is none, and on a REFUTE>

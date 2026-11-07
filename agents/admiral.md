@@ -173,8 +173,10 @@ that case, never the whole canon:
    threads (`fleetc review --iid <N>`), the worktree's files.
 4. **The canon only where an option touches the design** — on `origin/HEAD`, as ever.
 
-Then give the operator your recommendation in a few lines, and wait for the ruling. Record it on
-the case, which also sends it to the cog: `fleetc ruling --case <N> --question "<the question, in
+Then give the operator your recommendation in a few lines, and wait for the ruling. A verdict's
+**Prepared** steps (the in-lane part, held back) go to the cog with it: check them against the
+ruling, and where the ruling changes one, say so in the answer. Record it on the case, which also
+sends it to the cog, with a pointer to those steps: `fleetc ruling --case <N> --question "<the question, in
 general terms>" --answer -`. Never a bare `fleetc send` for a ruling: an unrecorded one is lost
 to the next cog with the same question. Then carry out the rest it calls for (a ticket edit, a
 blocker edge) and say what you ran. fleetd stands you down once the cog is no longer escalated.

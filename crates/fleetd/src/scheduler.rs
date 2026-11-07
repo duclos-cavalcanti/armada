@@ -795,10 +795,13 @@ fn rule<H: SessionHost>(
     let Some(cog) = live else {
         return Ok(format!("case #{}: ruled; its cog has moved on, so it's recorded only", id.0));
     };
-    // One line: the pane takes a newline as Enter. The ruling in full is on the case.
+    // One line: the pane takes a newline as Enter. The ruling in full is on the case, and so is the
+    // verdict's prepared part, which goes with it: the cog gets the whole solution at once.
     let answer = ruling.answer.split_whitespace().collect::<Vec<_>>().join(" ");
+    let prepared = ledger.verdict(&id)?.and_then(|v| v.prepared()).is_some();
+    let then = if prepared { "carry it out with the verdict's prepared steps, as this ruling amends them" } else { "carry it out" };
     let msg = format!(
-        "⚖ Ruling on your escalation (case #{}): {answer} — carry it out, then report your state. In full: fleetc escalations --case {}",
+        "⚖ Ruling on your escalation (case #{}): {answer} — {then}, then report your state. In full: fleetc escalations --case {}",
         id.0, id.0
     );
     host.send(&cog.tmux_session, &msg).with_context(|| format!("case #{}: ruled, but not delivered to {}", id.0, cog.tmux_session))?;
@@ -2326,14 +2329,15 @@ mod tests {
     use std::cell::RefCell;
     use std::path::Path;
 
-    /// Records kills + sends; the rest are harmless defaults.
+    /// Records kills + sends (where, and what); the rest are harmless defaults.
     struct FakeHost {
         killed: RefCell<Vec<String>>,
         sent: RefCell<Vec<String>>,
+        said: RefCell<Vec<String>>,
     }
     impl FakeHost {
         fn new() -> Self {
-            Self { killed: RefCell::new(vec![]), sent: RefCell::new(vec![]) }
+            Self { killed: RefCell::new(vec![]), sent: RefCell::new(vec![]), said: RefCell::new(vec![]) }
         }
     }
     impl SessionHost for FakeHost {
@@ -2353,8 +2357,9 @@ mod tests {
             self.killed.borrow_mut().push(name.into());
             Ok(())
         }
-        fn send(&self, name: &str, _: &str) -> Result<()> {
+        fn send(&self, name: &str, text: &str) -> Result<()> {
             self.sent.borrow_mut().push(name.into());
+            self.said.borrow_mut().push(text.into());
             Ok(())
         }
         fn list(&self) -> Result<Vec<String>> {
@@ -2417,11 +2422,23 @@ mod tests {
         let said = rule(&db, &host, Some(case.id.clone()), None, "Which auth does an admin route take?".into(), "Rev 4's.\nAll of them.".into()).unwrap();
         assert!(said.contains("sent to worker-PROJ-1"), "{said}");
         assert_eq!(*host.sent.borrow(), vec!["worker-PROJ-1".to_string()]);
+        assert!(!host.said.borrow()[0].contains("prepared"), "no prepared part: {}", host.said.borrow()[0]);
         assert_eq!(db.case(&case.id).unwrap().unwrap().ruling.unwrap().answer, "Rev 4's.\nAll of them.", "recorded in full");
+
+        // A confirm with a prepared part: it goes to the cog with the ruling, at once.
+        let state = CogState::Worker(WorkerState::Implementing);
+        ReportRepo::record(&db, &Report { session: id.clone(), state, last_action: None, reported_at: "t2".into() }).unwrap();
+        let state = CogState::Worker(WorkerState::Escalated);
+        ReportRepo::record(&db, &Report { session: id.clone(), state, last_action: Some("which key?".into()), reported_at: "t3".into() }).unwrap();
+        let next = db.open_case(&id).unwrap().unwrap();
+        inspect(&db, &key, Verdict::Confirm, "**Verdict:** CONFIRM — x\n- **Prepared:** answer threads 4, 7".into()).unwrap();
+        rule(&db, &host, Some(next.id.clone()), None, "Which key?".into(), "The seat's.".into()).unwrap();
+        let said = host.said.borrow()[1].clone();
+        assert!(said.contains("The seat's.") && said.contains("the verdict's prepared steps"), "{said}");
 
         let alone = rule(&db, &host, None, Some(key), "Q?".into(), "A.".into()).unwrap();
         assert!(alone.contains("ruled on PROJ-1"), "{alone}");
-        assert_eq!(host.sent.borrow().len(), 1, "a ruling with no escalation has no cog to send to");
+        assert_eq!(host.sent.borrow().len(), 2, "a ruling with no escalation has no cog to send to");
         assert!(rule(&db, &host, None, None, "Q?".into(), " ".into()).is_err(), "a ruling has an answer");
     }
 

@@ -688,6 +688,16 @@ impl Inspection {
         self.line("- **Recommendation:**")
     }
 
+    /// A CONFIRM's prepared part: the in-lane steps that go to the cog with the ruling. `None` when
+    /// the verdict has none ("none", or no such line). Its continuation lines (indented) included.
+    pub fn prepared(&self) -> Option<String> {
+        let mut lines = self.body.lines().skip_while(|l| !l.trim_start().starts_with("- **Prepared:**"));
+        let first = lines.next()?.trim_start().strip_prefix("- **Prepared:**")?.trim();
+        let rest = lines.take_while(|l| l.starts_with(char::is_whitespace) && !l.trim().is_empty());
+        let text = std::iter::once(first).chain(rest.map(str::trim)).filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n");
+        (!text.is_empty() && !text.eq_ignore_ascii_case("none")).then_some(text)
+    }
+
     fn line(&self, label: &str) -> Option<&str> {
         self.body.lines().find_map(|l| l.trim_start().strip_prefix(label.trim_start())).map(str::trim)
     }
@@ -1299,5 +1309,30 @@ mod order_tests {
         assert!(!order("2026-10-28T10:00:00Z").builder_due(&sailed), "a cog started after it");
         // Reworked: re-dated past every session. Compared as times — as text, ".5Z" sorts after ".52Z".
         assert!(order("2026-10-28T10:00:00.52Z").builder_due(&sailed));
+    }
+}
+
+#[cfg(test)]
+mod inspection_tests {
+    use super::*;
+
+    fn verdict(body: &str) -> Inspection {
+        Inspection {
+            session: SessionId(1),
+            case: Some(CaseId(1)),
+            reported_at: "t".into(),
+            verdict: Verdict::Confirm,
+            body: body.into(),
+            inspected_at: "t".into(),
+        }
+    }
+
+    #[test]
+    fn a_confirm_carries_its_prepared_part_and_none_reads_as_none() {
+        let v = verdict("**Verdict:** CONFIRM — rule on X\n- **Recommendation:** operator's ruling\n- **Prepared:** answer threads 4 and 7\n  as the canon says (§5)\n- **Other:** x");
+        assert_eq!(v.headline(), "CONFIRM — rule on X");
+        assert_eq!(v.prepared().as_deref(), Some("answer threads 4 and 7\nas the canon says (§5)"), "with its indented continuation");
+        assert_eq!(verdict("- **Prepared:** none").prepared(), None);
+        assert_eq!(verdict("**Verdict:** CONFIRM — no prepared line").prepared(), None);
     }
 }

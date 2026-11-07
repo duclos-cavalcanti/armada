@@ -34,6 +34,12 @@ fleetc transcript --cog <kind> --ticket <KEY>   # the transcript's path: read it
 fleetc review --iid <N>                  # the MR's review threads, when the escalation is about one
 ```
 
+**A CONFIRM carries its in-lane part, prepared, never refuted alone.** When part of an escalation
+is in reach (some threads mechanical, one question of three answerable) and the rest needs the
+operator, CONFIRM the whole and put the in-lane part under **Prepared**, as steps ready to run. A
+partial fix shipped now moves the head and can redefine the open questions, and the ruling may
+change how that part is done, so both go to the cog at once, when the operator rules.
+
 **Precedent first.** The convoy's past cases are its precedent. A ruling or a REFUTE's way out
 that answers this escalation is a REFUTE: cite it (`case #N`), and the cog's way out is to apply
 it. Never refute against a ruling: it outranks your reading. An open CONFIRM on the same question

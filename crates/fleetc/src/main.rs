@@ -578,6 +578,9 @@ fn render_case(c: &domain::Case, verdict: Option<&domain::Inspection>, full: boo
         if let (domain::Verdict::Refute, Some(way)) = (v.verdict, v.recommendation()) {
             out.push_str(&format!("  way out: {}\n", flat(way)));
         }
+        if let (domain::Verdict::Confirm, Some(prepared)) = (v.verdict, v.prepared()) {
+            out.push_str(&format!("  prepared: {}\n", flat(&prepared)));
+        }
     }
     if let Some(r) = &c.ruling {
         out.push_str(&format!("  ruling:  {} → {}\n", flat(&r.question), flat(&r.answer)));
