@@ -113,7 +113,7 @@ impl Pane {
     /// Its name in the title of the pane it alternates with, beside its count (the peek).
     pub fn peek_label(self) -> &'static str {
         match self {
-            Pane::Dispatched => "All",
+            Pane::Dispatched => "Workers",
             Pane::HandOrders => "Hands",
             Pane::Impl => "Workers",
             Pane::Hands => "Hands",
@@ -193,10 +193,10 @@ impl App {
         self.cursors[pane as usize]
     }
 
-    /// The orders a dispatch pane lists: every one, or the hand-dispatched (manual) ones only.
+    /// The orders a dispatch pane lists: the workers' (auto-implemented), or the hands' (manual).
     pub fn orders(&self, pane: Pane) -> Vec<&source::OrderRow> {
-        let hands_only = pane == Pane::HandOrders;
-        self.fleet.dispatched.iter().filter(|o| !hands_only || !o.order.auto_impl).collect()
+        let hands = pane == Pane::HandOrders;
+        self.fleet.dispatched.iter().filter(|o| o.order.auto_impl != hands).collect()
     }
 
     pub fn len(&self, pane: Pane) -> usize {

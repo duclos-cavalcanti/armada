@@ -35,7 +35,7 @@ const HELP: &[(&str, &str)] = &[
     ("Tab / S-Tab", "next / previous tab"),
     ("↑↓ ^n^p 1-6", "focus a pane"),
     ("j / k", "row down / up"),
-    ("h / l", "swap a pane for its alternate (Dispatch: hand orders · Workers: hands)"),
+    ("h / l", "swap a pane for its alternate: workers ↔ hands (Dispatch, Implementation)"),
     ("space", "zoom the focused pane"),
     ("y / Y", "yank the pane / the page"),
     ("enter", "switch to the row's tmux session"),
@@ -130,7 +130,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
     match pane {
         Pane::Dispatched | Pane::HandOrders => (
             if pane == Pane::Dispatched {
-                format!(" Dispatch · {} orders {}", app.len(pane), peek(app, pane))
+                format!(" Dispatch · {} worker orders {}", app.len(pane), peek(app, pane))
             } else {
                 format!(" Dispatch · {} hand orders {}", app.len(pane), peek(app, pane))
             },

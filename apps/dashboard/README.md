@@ -18,9 +18,9 @@ Cycle with `Tab` / `S-Tab`:
   - **Proposals** — what waits on you before it can enter the line: open proposals (`a` accept,
     `d` drop) and convoy tickets a captain anchored as not Ready (`⚓ <reason>`; fix the ticket, then
     `w` weigh). `enter` reads a proposal, `t` opens an anchored ticket;
-  - **Dispatch** — every order the fleet is working, with its phase (waiting / implementation /
-    merge) and what it waits on (anchored ⚓ / blocked ⛔); `h`/`l` swaps in the hand-dispatched
-    orders alone;
+  - **Dispatch** — the workers' orders (auto-implemented), with their phase (waiting /
+    implementation / merge) and what they wait on (anchored ⚓ / blocked ⛔); `h`/`l` swaps in the
+    hands' orders (operator-driven);
   - **Implementation** — builders at work (workers + hands): state, liveness, MR + pipeline, last
     action. A worker in **review** has put its MR up for a lookout and waits for its review;
   - **Merge** — our ships being landed: the sailor's state (dimmed once it's stood down),
@@ -53,7 +53,7 @@ mode as its last reconcile pass ran: `dry_run=true` in red (it only plans), `dry
 | `↑` / `↓`, `C-p` / `C-n` | previous / next pane |
 | `1`–`5` | focus the Nth pane |
 | `j` / `k` | move the cursor within the focused pane |
-| `h` / `l` | swap a pane for its alternate: Dispatch's every order ↔ hand orders, Implementation's workers ↔ hands. The title peeks at the hidden one: `/ Hands (3)` |
+| `h` / `l` | swap a pane for its alternate: workers ↔ hands, in Dispatch and in Implementation. The title peeks at the hidden one: `/ Hands (3)` |
 | `space` | zoom the focused pane (toggle) |
 | `y` / `Y` | yank the focused pane (every row, in view or not) / the page as drawn |
 | `enter` | switch to the row's tmux session (its cog) |
