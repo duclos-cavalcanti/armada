@@ -4,6 +4,10 @@
   verdict is binary and every ruling starts from scratch. Give it the powers that keep escalations
   off the operator: add a missing blocker edge, amend an AC within its own convoy, and act on a
   partial verdict. (Past rulings are precedent already: `fleetc escalations`.)
+- [ ] **Keep a cog to its own convoy's cases in `fleetc ledger` too.** `fleetc escalations` refuses
+  a key outside the cog's convoy, but `fleetc ledger "SELECT * FROM cases"` reads every convoy's.
+  Have `fleetc ledger` refuse a cog's query that names `cases` or `inspections`, so the only way in
+  is the scoped verb. A guard against misuse, like the other cog checks, not a boundary.
 - [ ] **Confirm a lookout cog can call the project's review skill.** `review_skill` names a skill
   that isn't in the lookout's `skills:`; the docs say a subagent can call an unlisted project skill
   by name, but not whether a top-level `claude --agent lookout` session can.
