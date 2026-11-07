@@ -260,6 +260,10 @@ pub struct Ticket {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Convoy {
     pub key: ConvoyKey,
+    /// Its short number (`#2`), in the order convoys were opened and never reused: a name to say
+    /// in place of its epic key (fleetc takes `2` or `#2` wherever a convoy goes).
+    #[serde(default)]
+    pub no: i64,
     pub title: Option<String>,
     pub created_at: Timestamp,
     pub ended_at: Option<Timestamp>,    // None = active

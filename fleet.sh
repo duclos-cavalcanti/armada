@@ -88,8 +88,9 @@ groom() {
     path="$(awk -F'"' '/^\[/ { s = $0 } s == "[project]" && $1 ~ /^path[[:space:]]*=/ { print $2; exit }' "$toml")"
     skill="$(awk -F'"' '/^\[/ { exit } $1 ~ /^groom_skill[[:space:]]*=/ { print $2; exit }' "$toml")"
     cd "projects/$PROJECT/${path:?no [project] path in $toml}"
-    local prompt=()
-    [[ -n "${CONVOY:-}" ]] && prompt=("Groom convoy $CONVOY to Ready.")
+    local prompt=() convoy="${CONVOY:-}"
+    [[ "$convoy" =~ ^[0-9]+$ ]] && convoy="#$convoy" # a number is the convoy's short name
+    [[ -n "$convoy" ]] && prompt=("Groom convoy $convoy to Ready.")
     exec env ${skill:+FLEET_GROOM_SKILL="$skill"} claude --agent admiral ${prompt[@]+"${prompt[@]}"}
 }
 

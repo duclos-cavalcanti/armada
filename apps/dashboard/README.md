@@ -40,7 +40,8 @@ Cycle with `Tab` / `S-Tab`:
 
 The tab strip's title is the health light, `fleet: ●`: green while fleetd's last health check
 passed (the ref guard is linked, the checkout's git settings are clean). On a miss it goes out
-(`○`, red), the footer says why, and no lookout launches until a check passes.
+(`○`, red), the footer says why, and no lookout launches until a check passes. Beside it, fleetd's
+mode as its last reconcile pass ran: `dry_run=true` in red (it only plans), `dry_run=false` in green.
 
 ## Keys
 

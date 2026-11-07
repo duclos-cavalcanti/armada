@@ -70,8 +70,14 @@ fn render_tab_strip(f: &mut Frame, area: Rect, app: &App) {
         Some(Err(_)) => Span::styled("○", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
         None => Span::styled("·", Style::default().fg(Color::DarkGray)),
     };
+    // fleetd's mode, as its last reconcile pass ran it: red while it only plans, green while live.
+    let mode = match app.fleet.tick.as_ref().and_then(|t| t.payload["dry_run"].as_bool()) {
+        Some(true) => Span::styled("dry_run=true", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Some(false) => Span::styled("dry_run=false", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        None => Span::styled("dry_run=?", Style::default().fg(Color::DarkGray)),
+    };
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title(Line::from(vec![Span::raw(" fleet: "), light, Span::raw(" ")])))
+        .block(Block::default().borders(Borders::ALL).title(Line::from(vec![Span::raw(" fleet: "), light, Span::raw(" | "), mode, Span::raw(" ")])))
         .select(selected)
         .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
     f.render_widget(tabs, area);
@@ -189,7 +195,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
         ),
         Pane::Convoys => (
             format!(" Convoys · {} open · enter captain · t ticket ", f.convoys.len()),
-            Some(header(&[("Convoy", 12), ("Captain", 10), ("Launched", 9), ("Open", 6), ("Ref/Conf", 9), ("Title", 0)])),
+            Some(header(&[("Convoy", 16), ("Captain", 10), ("Launched", 9), ("Open", 6), ("Ref/Conf", 9), ("Title", 0)])),
             f.convoys.iter().map(|c| convoy_row(c, f)).collect(),
         ),
         Pane::Proposals => (
@@ -455,7 +461,7 @@ fn convoy_row(c: &Convoy, f: &crate::source::Fleet) -> Line<'static> {
     let anchor = if c.anchored_at.is_some() { "⚓ " } else { "" };
     let launched = fmt_age(f.captain_launched.get(&c.key.0).and_then(|at| age_of(at)));
     cells(vec![
-        (c.key.0.clone(), 12, Style::default()),
+        (if c.no > 0 { format!("#{} {}", c.no, c.key.0) } else { c.key.0.clone() }, 16, Style::default()),
         (live.0, 10, live.2),
         (launched, 9, dim()),
         (format!("{open}/{}", members.len()), 6, Style::default()),

@@ -161,6 +161,13 @@ impl Ledger {
         self.conn.total_changes()
     }
 
+    /// The convoy numbered `no` (`#N`), open or closed; `None` = no convoy has that number.
+    pub fn convoy_by_no(&self, no: i64) -> Result<Option<ConvoyKey>> {
+        let key: Option<String> =
+            self.conn.query_row("SELECT key FROM convoys WHERE no = ?1", params![no], |r| r.get(0)).optional()?;
+        Ok(key.map(ConvoyKey))
+    }
+
     // ── settings (the live-config KV; see `schema.sql` and fleetd's `settings` module) ──
 
     /// Read a live-config value. `None` = absent → the caller falls through to its base
@@ -273,6 +280,10 @@ const MIGRATIONS: &[&str] = &[
     DROP TABLE temp.judged;",
     // v10: when an MR's review threads last moved, so a sailor waits for a reviewer to finish.
     "ALTER TABLE ship_snapshots ADD COLUMN threads_changed_at TEXT;",
+    // v11: each convoy's short number (#N), the standing ones numbered in the order they opened.
+    "ALTER TABLE convoys ADD COLUMN no INTEGER;
+    UPDATE convoys SET no = (SELECT COUNT(*) FROM convoys c
+        WHERE c.created_at < convoys.created_at OR (c.created_at = convoys.created_at AND c.key <= convoys.key));",
 ];
 
 /// The ledger's schema version (SQLite `user_version`): one past its last migration.
@@ -767,7 +778,7 @@ mod tests {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; \
-             ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; PRAGMA user_version = 1;",
+             ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; PRAGMA user_version = 1;",
         )
         .unwrap();
         drop(conn);
@@ -783,6 +794,29 @@ mod tests {
     }
 
     #[test]
+    fn a_v10_ledger_numbers_its_convoys_in_the_order_they_opened() {
+        let dir = std::env::temp_dir().join(format!("ledger-migrate-v11-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ledger.db").to_string_lossy().into_owned();
+        drop(Ledger::open(&path).unwrap());
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no;
+             INSERT INTO convoys(key, created_at) VALUES ('PROJ-9', 't2'), ('PROJ-5', 't1'), ('PROJ-7', 't3');
+             PRAGMA user_version = 10;",
+        )
+        .unwrap();
+        drop(conn);
+        let db = Ledger::open(&path).unwrap();
+        let numbered: Vec<_> = (1..=3).map(|n| db.convoy_by_no(n).unwrap().unwrap().0).collect();
+        assert_eq!(numbered, ["PROJ-5", "PROJ-9", "PROJ-7"], "by the order they opened");
+        db.open(&ConvoyKey("PROJ-1".into()), None, "t4").unwrap();
+        assert_eq!(db.convoy_by_no(4).unwrap(), Some(ConvoyKey("PROJ-1".into())));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_v7_ledger_seeds_each_standing_plan_as_its_history() {
         let dir = std::env::temp_dir().join(format!("ledger-migrate-v8-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -793,7 +827,7 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO convoys(key, created_at) VALUES ('PROJ-100', 't1');
              INSERT INTO convoy_plans(convoy, body, updated_at) VALUES ('PROJ-100', 'ship the seed', 't2');
-             ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; PRAGMA user_version = 7;",
+             ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; PRAGMA user_version = 7;",
         )
         .unwrap();
         drop(conn);
@@ -820,7 +854,7 @@ mod tests {
         // Back to v4: the same rebuild, without the admiral kind.
         let v4 = MIGRATIONS[3].replace(",'admiral'", ""); // v5's rebuild
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; PRAGMA user_version = 4;"))
+        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; PRAGMA user_version = 4;"))
             .unwrap();
         drop(conn);
 
@@ -1490,6 +1524,12 @@ impl OrderRepo for Ledger {
 fn row_to_convoy(r: &rusqlite::Row) -> rusqlite::Result<Convoy> {
     Ok(Convoy {
         key: convoy_key(r.get("key")?)?,
+        // Read-only readers (the dashboard, fleetc) can run ahead of fleetd's migration: a ledger
+        // without the column yet reads as unnumbered (0).
+        no: match r.as_ref().column_index("no") {
+            Ok(i) => r.get::<_, Option<i64>>(i)?.unwrap_or_default(),
+            Err(_) => 0,
+        },
         title: r.get("title")?,
         created_at: r.get("created_at")?,
         ended_at: r.get("ended_at")?,
@@ -1538,11 +1578,12 @@ impl ConvoyRepo for Ledger {
     }
 
     fn open(&self, key: &ConvoyKey, title: Option<&str>, now: &str) -> Result<()> {
-        // Idempotent create; re-opening a closed convoy clears ended_at. +ConvoyOpened (CDC).
+        // Idempotent create; re-opening a closed convoy clears ended_at and keeps its number. A new
+        // one takes the next number. +ConvoyOpened (CDC).
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO convoys(key, title, created_at, ended_at)
-             VALUES (?1, ?2, ?3, NULL)
+            "INSERT INTO convoys(key, title, created_at, ended_at, no)
+             VALUES (?1, ?2, ?3, NULL, (SELECT COALESCE(MAX(no), 0) + 1 FROM convoys))
              ON CONFLICT(key) DO UPDATE SET title = excluded.title, ended_at = NULL",
             params![key.0, title, now],
         )?;
@@ -2203,7 +2244,7 @@ mod repo_tests {
             format!("INSERT INTO inspections(session_id, reported_at, verdict, body, inspected_at) VALUES ({}, '{at}', '{v}', 'b', '{at}9');", s.0)
         };
         conn.execute_batch(&format!(
-            "DELETE FROM cases; DROP INDEX one_open_case; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP TABLE cases;
+            "DELETE FROM cases; DROP INDEX one_open_case; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; DROP TABLE cases;
              {} {} {} {} {} {} {}
              INSERT INTO reports(session_id, state, last_action, reported_at) VALUES ({}, 'escalated', 'Y?', 't3'), ({}, 'escalated', 'Z?', 't4');
              PRAGMA user_version = 8;",
@@ -2223,6 +2264,21 @@ mod repo_tests {
         let standing = db.open_case(&two).unwrap().expect("PROJ-2's escalation is a case");
         assert_eq!((standing.question.as_str(), db.verdict(&standing.id).unwrap()), ("Z?", None));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_convoy_takes_the_next_number_and_keeps_it_when_reopened() {
+        let db = Ledger::in_memory().unwrap();
+        let (a, b) = (ConvoyKey("PROJ-100".into()), ConvoyKey("PROJ-200".into()));
+        db.open(&a, None, "t1").unwrap();
+        db.open(&b, Some("Second"), "t2").unwrap();
+        db.close(&a, "t3").unwrap();
+        db.open(&a, Some("Again"), "t4").unwrap();
+        let no = |k: &ConvoyKey| db.active().unwrap().into_iter().find(|c| &c.key == k).unwrap().no;
+        assert_eq!((no(&a), no(&b)), (1, 2), "reopened, it keeps #1");
+        assert_eq!((db.convoy_by_no(2).unwrap(), db.convoy_by_no(3).unwrap()), (Some(b), None));
+        db.open(&ConvoyKey("PROJ-300".into()), None, "t5").unwrap();
+        assert_eq!(db.convoy_by_no(3).unwrap(), Some(ConvoyKey("PROJ-300".into())), "never reused: the next is #3");
     }
 
     #[test]

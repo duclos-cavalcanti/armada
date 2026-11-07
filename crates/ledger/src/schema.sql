@@ -61,8 +61,10 @@ CREATE TABLE IF NOT EXISTS convoys (
     title       TEXT,
     created_at  TEXT NOT NULL,
     ended_at    TEXT,                                 -- NULL = active
-    anchored_at TEXT                                  -- operator anchor (hold the captain); NULL = under way
+    anchored_at TEXT,                                 -- operator anchor (hold the captain); NULL = under way
+    no          INTEGER                               -- its short number (#N): in opening order, never reused
 );
+CREATE UNIQUE INDEX IF NOT EXISTS convoy_no ON convoys(no);
 
 -- A convoy's plan — the fabric tying its tickets together (outcome, sequencing, the invariants
 -- across them, the rulings made), whatever the tracker. Set by `convoy open --plan`; no row = no

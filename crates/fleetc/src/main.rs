@@ -28,6 +28,7 @@ fn socket() -> String {
 
 /// fleetc's usage: a header, then one line per verb form (`fleetc <verb> …`).
 const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project: the cwd's, or -C's — nearest folder with a fleet.toml; in a cog, an omitted ticket / --iid / --convoy is its own)\n  \
+     (convoy keys: a convoy's <KEY> is its epic's key or its number, #N — `fleetc convoy list` shows both)\n  \
      fleetc status   --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] --state <state> [--last-action <text>]\n  \
      fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
      fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
@@ -299,23 +300,23 @@ fn convoy_list() -> Result<()> {
                     (t.key.0.clone(), t.status.map_or("-", |s| s.as_str()).to_string(), branch, t.title.clone().unwrap_or_default())
                 })
                 .collect();
-            (c.key.0, c.title.unwrap_or_default(), tickets)
+            (c.no, c.key.0, c.title.unwrap_or_default(), tickets)
         })
         .collect();
     print!("{}", render_convoy_list(&convoys));
     Ok(())
 }
 
-/// A convoy for `convoy list`: key, title, open tickets (key, status, branch, title).
-type ConvoyRow = (String, String, Vec<(String, String, Option<String>, String)>);
+/// A convoy for `convoy list`: number, key, title, open tickets (key, status, branch, title).
+type ConvoyRow = (i64, String, String, Vec<(String, String, Option<String>, String)>);
 
 fn render_convoy_list(convoys: &[ConvoyRow]) -> String {
     if convoys.is_empty() {
         return "no active convoys\n".into();
     }
     let mut out = String::new();
-    for (key, title, tickets) in convoys {
-        out += &format!("{key}  {title}\n");
+    for (no, key, title, tickets) in convoys {
+        out += &if *no > 0 { format!("#{no} {key}  {title}\n") } else { format!("{key}  {title}\n") };
         for (t, status, branch, title) in tickets {
             out += &format!("  {t:<12} {status:<12} {:<40} {title}\n", branch.as_deref().unwrap_or("-"));
         }
@@ -798,8 +799,21 @@ fn ticket_key(t: &str, verb: &str) -> Result<String> {
 }
 
 /// Validate a convoy key at the edge — same shape as a ticket key.
+/// A convoy argument: its epic's key, or its number (`2` or `#2`), looked up in the ledger.
 fn convoy_key(c: &str, verb: &str) -> Result<String> {
-    domain::ConvoyKey::parse(c).map(|k| k.0).map_err(|e| anyhow!("{verb}: {e}"))
+    let Some(no) = convoy_no(c) else {
+        return domain::ConvoyKey::parse(c).map(|k| k.0).map_err(|e| anyhow!("{verb}: {e}"));
+    };
+    let db = project_dir().ledger();
+    let ledger = ledger::Ledger::open_readonly(&db).map_err(|_| anyhow!("no ledger yet ({db})"))?;
+    let key = ledger.convoy_by_no(no)?.ok_or_else(|| anyhow!("{verb}: no convoy #{no} (fleetc convoy list)"))?;
+    Ok(key.0)
+}
+
+/// A convoy's number, as typed: `2` or `#2`. A ticket key never parses as one.
+fn convoy_no(c: &str) -> Option<i64> {
+    let n = c.strip_prefix('#').unwrap_or(c);
+    (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).then(|| n.parse().ok()).flatten()
 }
 
 /// Parse + validate the uniform cog target for a control verb (§A): `--cog <kind>` is required, and
@@ -813,7 +827,7 @@ fn require_cog_target(args: &[String], verb: &str) -> Result<wire::CogTarget> {
         match flag.as_str() {
             "--cog" => cog = Some(take()?),
             "--ticket" => ticket = Some(take()?),
-            "--convoy" => convoy = Some(take()?),
+            "--convoy" => convoy = Some(convoy_key(&take()?, verb)?),
             "--iid" => iid = Some(take()?.parse().map_err(|_| anyhow!("{verb}: --iid takes an MR number"))?),
             other => bail!("{verb}: unknown flag {other:?}"),
         }
@@ -1796,7 +1810,7 @@ mod tests {
         let export = root.join("snapshot.db");
         ledger::snapshot(&p.ledger(), &export.to_string_lossy()).unwrap();
         let v1 = "ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; \
-                  ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; PRAGMA user_version = 1;";
+                  ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; PRAGMA user_version = 1;";
         assert!(std::process::Command::new("sqlite3").arg(&export).arg(v1).status().unwrap().success());
 
         import_into(&p, &export).unwrap();
@@ -1928,6 +1942,7 @@ mod tests {
     #[test]
     fn render_convoy_list_shows_each_convoy_then_its_open_tickets() {
         let convoys = [(
+            2,
             "PROJ-100".to_string(),
             "Seed".to_string(),
             vec![
@@ -1936,10 +1951,17 @@ mod tests {
             ],
         )];
         let out = render_convoy_list(&convoys);
-        assert!(out.starts_with("PROJ-100  Seed\n  PROJ-1 "), "{out}");
+        assert!(out.starts_with("#2 PROJ-100  Seed\n  PROJ-1 "), "{out}");
         assert!(out.contains("feature/PROJ-1-seed") && out.contains("Seed the quorum\n"), "{out}");
         assert!(out.lines().nth(2).is_some_and(|l| l.contains("PROJ-2") && l.contains(" - ")), "{out}");
         assert_eq!(render_convoy_list(&[]), "no active convoys\n");
+    }
+
+    #[test]
+    fn a_convoy_is_named_by_its_key_or_its_number() {
+        assert_eq!((convoy_no("2"), convoy_no("#12")), (Some(2), Some(12)));
+        assert_eq!((convoy_no("PROJ-2"), convoy_no("#"), convoy_no("2a"), convoy_no("")), (None, None, None, None));
+        assert_eq!(convoy_key("PROJ-100", "t").unwrap(), "PROJ-100", "a key needs no ledger");
     }
 
     #[test]
