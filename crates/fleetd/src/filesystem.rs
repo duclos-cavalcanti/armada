@@ -206,6 +206,14 @@ impl Tracker for FsTracker {
         self.update(key, |h| h.assignee = Some(user))
     }
 
+    /// Back to To Do, unassigned: the folder has no sprint to leave.
+    fn unclaim(&self, key: &TicketKey) -> Result<()> {
+        self.update(key, |h| {
+            h.status = TicketStatus::Todo;
+            h.assignee = None;
+        })
+    }
+
     fn parent_of(&self, key: &TicketKey) -> Result<Option<TicketKey>> {
         Ok(self.load(key)?.header.parent.as_deref().and_then(|p| TicketKey::parse(p).ok()))
     }
@@ -394,6 +402,18 @@ mod tests {
         t.edit(&key, "## Outcome\n\nmul and div work.").unwrap();
         let d = t.read(&key).unwrap();
         assert_eq!((d.description.as_str(), d.ticket.title.as_str()), ("## Outcome\n\nmul and div work.\n", "Add mul"), "the body only");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unclaim_returns_a_ticket_to_todo_unassigned() {
+        let (t, dir) = tracker("unclaim", &[("ARMT-4.md", ARMT_4)]);
+        let key = TicketKey("ARMT-4".into());
+        t.claim(&key).unwrap();
+        t.transition(&key, TicketStatus::InProgress).unwrap();
+        t.unclaim(&key).unwrap();
+        let got = t.get(&key).unwrap();
+        assert_eq!((got.status, got.assignee), (TicketStatus::Todo, None));
         let _ = std::fs::remove_dir_all(dir);
     }
 

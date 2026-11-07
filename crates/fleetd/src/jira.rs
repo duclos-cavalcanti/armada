@@ -81,15 +81,15 @@ impl JiraTracker {
     /// Set fields on an issue — `PUT /rest/api/2/issue/<KEY>` with only the given `body`, so the
     /// ticket's other fields (its components) aren't re-sent.
     fn put_issue(&self, key: &TicketKey, body: &serde_json::Value) -> Result<()> {
-        self.rest("PUT", &format!("issue/{}", key.0), Some(body))
+        self.rest("PUT", &format!("/rest/api/2/issue/{}", key.0), Some(body))
     }
 
-    /// One call to Jira's REST API (`/rest/api/2/<path>`), with jira-cli's credentials: the server +
-    /// login from its config, the token from `JIRA_API_TOKEN` (passed on stdin, never in argv),
-    /// else `~/.netrc`.
+    /// One call to Jira's REST API (`path` from the server root: `/rest/api/2/…`, `/rest/agile/1.0/…`),
+    /// with jira-cli's credentials: the server + login from its config, the token from
+    /// `JIRA_API_TOKEN` (passed on stdin, never in argv), else `~/.netrc`.
     fn rest(&self, method: &str, path: &str, body: Option<&serde_json::Value>) -> Result<()> {
         let cfg = jira_cli_config()?;
-        let url = format!("{}/rest/api/2/{path}", cfg.server.trim_end_matches('/'));
+        let url = format!("{}{path}", cfg.server.trim_end_matches('/'));
         let token = std::env::var("JIRA_API_TOKEN").ok().filter(|t| !t.is_empty());
         let mut curl = Command::new("curl");
         curl.args(["-sS", "-X", method, "-H", "Content-Type: application/json", "-w", "\n%{http_code}"]);
@@ -201,6 +201,23 @@ impl Tracker for JiraTracker {
         Ok(())
     }
 
+    /// UNVERIFIED against a live Jira: the To Do move (the workflow must allow it from where the
+    /// ticket stands) and the Agile backlog call.
+    fn unclaim(&self, key: &TicketKey) -> Result<()> {
+        let to_backlog = serde_json::json!({ "issues": [key.0] });
+        let failed: Vec<String> = [
+            ("todo", self.transition(key, TicketStatus::Todo)),
+            ("unassign", self.put_issue(key, &serde_json::json!({ "fields": { "assignee": null } }))),
+            ("label", self.claim_label.as_ref().map_or(Ok(()), |l| self.label(key, l, false))),
+            ("backlog", self.rest("POST", "/rest/agile/1.0/backlog/issue", Some(&to_backlog))),
+        ]
+        .into_iter()
+        .filter_map(|(step, res)| res.err().map(|e| format!("{step}: {e:#}")))
+        .collect();
+        ensure!(failed.is_empty(), "partial unclaim — {}", failed.join("; "));
+        Ok(())
+    }
+
     fn parent_of(&self, key: &TicketKey) -> Result<Option<TicketKey>> {
         // The issue's `fields.parent.key` (absent for non-sub-tasks).
         let parent = self.view(key)?.pointer("/fields/parent/key").and_then(|k| k.as_str()).map(String::from);
@@ -278,7 +295,7 @@ impl Tracker for JiraTracker {
             .collect();
         if !on {
             // By its id: `jira issue unlink A B` takes no link type, so it can drop a Relates for a Blocks.
-            return ids.iter().try_for_each(|id| self.rest("DELETE", &format!("issueLink/{id}"), None));
+            return ids.iter().try_for_each(|id| self.rest("DELETE", &format!("/rest/api/2/issueLink/{id}"), None));
         }
         if !ids.is_empty() {
             return Ok(()); // idempotent: the link exists

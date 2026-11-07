@@ -373,6 +373,9 @@ mod tests {
         fn label(&self, _: &TicketKey, _: &str, _: bool) -> Result<()> {
             unimplemented!()
         }
+        fn unclaim(&self, _: &TicketKey) -> Result<()> {
+            Ok(())
+        }
         fn link(&self, _: &TicketKey, _: &TicketKey, _: domain::TicketLink, _: bool) -> Result<()> {
             Ok(())
         }

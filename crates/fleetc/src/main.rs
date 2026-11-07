@@ -45,6 +45,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc escalations [--key <KEY-N>] [--case <N>]   (the cases of KEY's convoy, newest first: escalation → verdict → ruling; a cog reads only its own convoy's, before it escalates)\n  \
      fleetc ruling   --case <N> | --key <KEY-N>  --question <text> --answer <text|->   (the operator's ruling on a confirmed case, recorded then sent to its cog; --key: one with no escalation behind it)\n  \
      fleetc decommission <KEY-N> --reason <why> [--yes]   (withdraw it for good: close its MR, cancel it with the reason, reap its cogs + worktree)\n  \
+     fleetc recall   <KEY-N> --reason <why> [--yes]   (forget its work: close its MR, end its cogs, discard its worktree; back to the backlog, anchored)\n  \
      fleetc packet   [<KEY-N>]        (the cog's work-packet: order + ship + ticket)\n  \
      fleetc context  [--convoy <KEY>] [--format table]   (a captain's convoy slice)\n  \
      fleetc plan                       (fleetd's latest reconcile plan — the parity lens)\n  \
@@ -106,6 +107,7 @@ fn run() -> Result<()> {
         Some("sink") => sink(&args[1..]),
         Some("send") => send(&args[1..]),
         Some("decommission") => decommission(&args[1..]),
+        Some("recall") => recall(&args[1..]),
         Some("inspection") => inspection(&args[1..]),
         Some("escalations") => escalations(&args[1..]),
         Some("ruling") => ruling(&args[1..]),
@@ -617,11 +619,25 @@ fn ruling(args: &[String]) -> Result<()> {
 /// reaps its cogs, worktree and order. The operator's call — a cog can't — and it asks first, showing
 /// what will go, unless `--yes`. fleetd refuses once its MR has merged.
 fn decommission(args: &[String]) -> Result<()> {
+    withdraw(args, "decommission")
+}
+
+/// `fleetc recall <KEY-N> --reason <why> [--yes]` — take a ticket off the line and forget its work,
+/// without cancelling it: fleetd closes its open MR (noting why; the branch stays on the forge), ends
+/// its cogs, discards its worktree and order, and returns it to the backlog (To Do, unassigned, out of
+/// the sprint, the reason commented), anchored until it's weighed. The operator's call; it asks first,
+/// showing what will go, unless `--yes`.
+fn recall(args: &[String]) -> Result<()> {
+    withdraw(args, "recall")
+}
+
+/// Decommission or recall a ticket (`verb`): the same flags, a preview to confirm, then fleetd acts.
+fn withdraw(args: &[String], verb: &str) -> Result<()> {
     if in_cog() {
-        bail!("a cog doesn't decommission tickets — the operator does (propose it instead)");
+        bail!("a cog doesn't {verb} tickets — the operator does (propose it instead)");
     }
-    let usage = "usage: fleetc decommission <KEY-N> --reason <why> [--yes]";
-    let ticket = ticket_key(args.first().ok_or_else(|| anyhow!("{usage}"))?, "decommission")?;
+    let usage = format!("usage: fleetc {verb} <KEY-N> --reason <why> [--yes]");
+    let ticket = ticket_key(args.first().ok_or_else(|| anyhow!("{usage}"))?, verb)?;
     let (mut reason, mut yes) = (None, false);
     let mut it = args[1..].iter();
     while let Some(flag) = it.next() {
@@ -631,35 +647,45 @@ fn decommission(args: &[String]) -> Result<()> {
             other => bail!("unknown flag {other:?} — {usage}"),
         }
     }
-    let reason = reason.filter(|r| !r.trim().is_empty()).ok_or_else(|| anyhow!("decommission needs --reason <why> — it goes on the ticket"))?;
+    let reason = reason.filter(|r| !r.trim().is_empty()).ok_or_else(|| anyhow!("{verb} needs --reason <why> — it goes on the ticket"))?;
     if !yes {
-        eprint!("{}Proceed? [y/N] ", decommission_preview(&ticket)?);
+        eprint!("{}Proceed? [y/N] ", withdraw_preview(&ticket, verb)?);
         let mut answer = String::new();
         std::io::stdin().read_line(&mut answer)?;
         if !matches!(answer.trim(), "y" | "Y" | "yes") {
-            bail!("not decommissioned");
+            bail!("not {}", if verb == "recall" { "recalled" } else { "decommissioned" });
         }
     }
-    post_and_print("/decommission", &wire::DecommissionCmd { ticket, reason })
+    post_and_print(&format!("/{verb}"), &wire::DecommissionCmd { ticket, reason })
 }
 
-/// What a decommission takes down, read off the ledger: its open MRs, its live cogs, its worktree.
-fn decommission_preview(ticket: &str) -> Result<String> {
+/// What a decommission or a recall takes down, read off the ledger: its open MRs, its live cogs, its
+/// worktree, and where the ticket ends up.
+fn withdraw_preview(ticket: &str, verb: &str) -> Result<String> {
     use domain::ports::{OrderRepo, SessionRepo, ShipRepo};
     let db = project_dir().ledger();
     let ledger = ledger::Ledger::open_readonly(&db).map_err(|_| anyhow!("no ledger yet ({db})"))?;
     let key = domain::TicketKey(ticket.to_string());
-    let mut out = format!("decommission {ticket} — for good:\n");
+    let recall = verb == "recall";
+    let mut out = if recall { format!("recall {ticket} — its work forgotten:\n") } else { format!("decommission {ticket} — for good:\n") };
     for ship in ShipRepo::armada(&ledger)?.into_iter().filter(|s| s.ticket.as_ref() == Some(&key)) {
         out += &format!("  close !{} (disarmed first, the reason noted on it)\n", ship.iid);
     }
-    out += &format!("  comment the reason on {ticket}, then move it to Cancelled\n");
     for s in SessionRepo::for_ticket(&ledger, &key)?.into_iter().filter(|s| s.ended_at.is_none()) {
         out += &format!("  end {} (its tmux too)\n", s.tmux_session);
     }
     if let Some(wt) = OrderRepo::get(&ledger, &key)?.and_then(|o| o.worktree_path) {
-        out += &format!("  remove the worktree {wt} and its local branch, retire the order\n");
+        out += &if recall {
+            format!("  discard the worktree {wt} and its local branch, uncommitted work and all; retire the order\n")
+        } else {
+            format!("  remove the worktree {wt} and its local branch, retire the order\n")
+        };
     }
+    out += &if recall {
+        format!("  move {ticket} to To Do, unassigned, out of the sprint, the reason commented; anchor it until you weigh it\n")
+    } else {
+        format!("  comment the reason on {ticket}, then move it to Cancelled\n")
+    };
     Ok(out)
 }
 

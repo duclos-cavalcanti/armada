@@ -25,6 +25,14 @@ Accepted edge cases: understood, not fixed, each with its workaround.
   `fleetc ticket unblock` reads the edge from the same side, so a reversed edge is one it can't
   find either: remove it in Jira's UI.
 
+- **`fleetc recall`'s Jira steps are unverified.**
+  *Scenario:* a recall returns the ticket with `jira issue move <KEY> "To Do"`, a REST unassign, and
+  Jira Agile's `POST /rest/agile/1.0/backlog/issue` (out of the sprint). A workflow that doesn't allow
+  To Do from where the ticket stands, or a board without the Agile API, fails that step.
+  *Workaround:* the recall goes on (MR closed, cogs ended, worktree discarded, ticket anchored) and
+  names the failed step; finish it in Jira by hand.
+  *Fix:* verify against the live board on the first recall.
+
 - **A `fleetc` call holding a shell variable goes to auto mode's classifier.**
   *Scenario:* Claude Code matches an allow rule only against a command it can check before it
   runs, so `Bash(fleetc *)` approves `fleetc arm` but not `fleetc arm "$FLEET_TICKET"`. That one

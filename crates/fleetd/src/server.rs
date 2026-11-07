@@ -109,7 +109,8 @@ fn handle(
         (Some("POST"), Some("/ticket-edit")) => handle_ticket_text(&request, cmds, false),
         (Some("POST"), Some("/ticket-comment")) => handle_ticket_text(&request, cmds, true),
         (Some("POST"), Some("/propose")) => handle_propose(&request, cmds),
-        (Some("POST"), Some("/decommission")) => handle_decommission(&request, cmds),
+        (Some("POST"), Some("/decommission")) => handle_decommission(&request, cmds, false),
+        (Some("POST"), Some("/recall")) => handle_decommission(&request, cmds, true),
         (Some("POST"), Some("/proposal-accept")) => handle_proposal(&request, cmds, true),
         (Some("POST"), Some("/proposal-drop")) => handle_proposal(&request, cmds, false),
         (Some("GET"), Some("/settings")) => handle_settings_list(cmds),
@@ -583,15 +584,18 @@ fn handle_propose(request: &str, cmds: &Sender<Command>) -> String {
     }
 }
 
-/// `POST /decommission` — withdraw a ticket from the fleet; reply with what was done.
-fn handle_decommission(request: &str, cmds: &Sender<Command>) -> String {
+/// `POST /decommission` — withdraw a ticket from the fleet for good — or `POST /recall` (`recall`):
+/// back to the backlog, its work forgotten. Reply with what was done.
+fn handle_decommission(request: &str, cmds: &Sender<Command>, recall: bool) -> String {
     let parsed = parse_body::<wire::DecommissionCmd>(request).and_then(|dto| {
         if dto.reason.trim().is_empty() {
-            return Err(http_response("400 Bad Request", "text/plain", "a decommission needs a reason"));
+            let verb = if recall { "recall" } else { "decommission" };
+            return Err(http_response("400 Bad Request", "text/plain", &format!("a {verb} needs a reason")));
         }
         Ok((parse_ticket(&dto.ticket)?, dto.reason))
     });
     match parsed {
+        Ok((ticket, reason)) if recall => relay(cmds, |reply| Command::Recall { ticket, reason, reply }),
         Ok((ticket, reason)) => relay(cmds, |reply| Command::Decommission { ticket, reason, reply }),
         Err(r) => r,
     }
@@ -1088,6 +1092,7 @@ mod tests {
                     | Command::AcceptProposal { reply, .. }
                     | Command::AddToConvoy { reply, .. }
                     | Command::Decommission { reply, .. }
+                    | Command::Recall { reply, .. }
                     | Command::RemoveFromConvoy { reply, .. }
                     | Command::Rule { reply, .. }
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
@@ -1156,6 +1161,7 @@ mod tests {
                     | Command::AcceptProposal { reply, .. }
                     | Command::AddToConvoy { reply, .. }
                     | Command::Decommission { reply, .. }
+                    | Command::Recall { reply, .. }
                     | Command::RemoveFromConvoy { reply, .. }
                     | Command::Rule { reply, .. }
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }

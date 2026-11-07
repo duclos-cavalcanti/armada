@@ -920,8 +920,6 @@ pub(crate) fn reap<T: Tracker + ?Sized, H: SessionHost>(
     ticket: &str,
 ) -> Result<()> {
     let tkey = TicketKey(ticket.to_string());
-    // The worktree to reclaim — read off the order BEFORE we retire it below.
-    let worktree = OrderRepo::get(ledger, &tkey)?.and_then(|o| o.worktree_path);
 
     let status = TicketRepo::get(ledger, &tkey)?.and_then(|t| t.status);
     if !matches!(status, Some(TicketStatus::Done) | Some(TicketStatus::Cancelled)) {
@@ -934,7 +932,15 @@ pub(crate) fn reap<T: Tracker + ?Sized, H: SessionHost>(
     if let Err(e) = roll_up_parent(tracker, &tkey) {
         tracing::warn!("reap {ticket}: parent rollup failed: {e:#}");
     }
+    clear(ledger, host, project, ticket, false)
+}
 
+/// Take a ticket off the line, whatever becomes of it in the tracker: end its cogs, reclaim its
+/// worktree and branch (`discard`: unsaved work and all, a recall; else a dirty tree is kept and
+/// logged), retire its order and its finished ships.
+pub(crate) fn clear<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, ticket: &str, discard: bool) -> Result<()> {
+    let tkey = TicketKey(ticket.to_string());
+    let worktree = OrderRepo::get(ledger, &tkey)?.and_then(|o| o.worktree_path);
     for session in SessionRepo::for_ticket(ledger, &tkey)? {
         if session.ended_at.is_some() {
             continue;
@@ -955,7 +961,8 @@ pub(crate) fn reap<T: Tracker + ?Sized, H: SessionHost>(
     // the reap. Guarded on existence — idempotent, and a no-op in tests (fake paths don't exist).
     if let Some(wt) = worktree {
         if std::path::Path::new(&wt).exists() {
-            if let Err(e) = crate::git::GitWorktrees::new(project).remove(&wt) {
+            let git = crate::git::GitWorktrees::new(project);
+            if let Err(e) = if discard { git.discard(&wt) } else { git.remove(&wt) } {
                 tracing::warn!("reap {ticket}: worktree cleanup failed (non-fatal): {e:#}");
             }
         }
@@ -2153,6 +2160,9 @@ mod tests {
         }
         fn label(&self, _: &TicketKey, _: &str, _: bool) -> Result<()> {
             unimplemented!()
+        }
+        fn unclaim(&self, _: &TicketKey) -> Result<()> {
+            Ok(())
         }
         fn link(&self, _: &TicketKey, _: &TicketKey, _: domain::TicketLink, _: bool) -> Result<()> {
             Ok(())

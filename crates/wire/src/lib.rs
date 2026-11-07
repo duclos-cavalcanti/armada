@@ -205,12 +205,14 @@ pub struct ProposalCmd {
 }
 
 /// Withdraw a ticket from the fleet for good (`POST /decommission`, `fleetc decommission`): close
-/// its open MR, cancel it with `reason` as a comment, and reap its cogs, worktree and order.
+/// its open MR, cancel it with `reason` as a comment, and reap its cogs, worktree and order. A recall
+/// (`POST /recall`, `fleetc recall`) takes the same shape, and returns the ticket to the backlog.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DecommissionCmd {
     pub ticket: String,
     pub reason: String,
 }
+
 
 /// Add (`on`) or remove a link between two tickets (`POST /ticket-link`, `fleetc ticket block |
 /// unblock | relate | unrelate`): `link` is `blocked-by` (`ticket` is blocked by `other`) or `relates`.

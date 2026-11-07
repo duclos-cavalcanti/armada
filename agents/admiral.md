@@ -54,6 +54,8 @@ your own judgment with the whole `fleetc` surface — whatever moves the mission
 - `decommission` a ticket withdrawn for good (`fleetc decommission <KEY> --reason <why>`): its MR
   closed, the ticket Cancelled, its cogs, worktree and order reaped. Yours and the shipwright's
   alone; delivered work reaches Done through its hand or sailor, never this;
+- `recall` a ticket whose work is to be forgotten but not the ticket (`fleetc recall <KEY> --reason
+  <why>`): the same teardown, its worktree discarded, and the ticket back in the backlog, anchored;
 - `convoy open` / `close` / `add` / `remove`; `proposal accept` / `drop`;
 - read the state: `plan`, `context`, `transcript`, `packet`, `ledger`;
 - read and post on Slack (the Slack connector), where the team discusses the work.

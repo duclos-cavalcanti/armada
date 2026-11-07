@@ -43,11 +43,23 @@ impl GitWorktrees {
     /// (uncommitted work) makes git refuse — we'd rather keep it and log than nuke unsaved changes.
     /// The branch delete is best-effort (the worktree is already gone; a leftover ref is cheap).
     pub fn remove(&self, path: &str) -> Result<()> {
+        self.remove_with(path, false)
+    }
+
+    /// Remove the worktree at `path` and its local branch, unsaved work and all: a recalled ticket's
+    /// work is forgotten on purpose. What was pushed stays on the forge.
+    pub fn discard(&self, path: &str) -> Result<()> {
+        self.remove_with(path, true)
+    }
+
+    fn remove_with(&self, path: &str, force: bool) -> Result<()> {
         let branch = current_branch(path); // read before we remove it
 
-        let out = Command::new("git")
-            .args(["-C", &self.project, "worktree", "remove", path])
-            .output()?;
+        let mut args = vec!["-C", self.project.as_str(), "worktree", "remove"];
+        if force {
+            args.push("--force");
+        }
+        let out = Command::new("git").args(&args).arg(path).output()?;
         ensure!(
             out.status.success(),
             "git worktree remove {path} failed: {}",

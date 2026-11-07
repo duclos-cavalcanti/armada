@@ -269,6 +269,10 @@ pub trait Tracker {
     /// (Jira: assign to me, add the claim label, join the active sprint; filesystem: assign to me).
     /// Best-effort follow-ons: try every step, then report the ones that failed (idempotent).
     fn claim(&self, key: &TicketKey) -> Result<()>;
+    /// Return the ticket to the backlog, undoing a claim: To Do, unassigned, the claim label off,
+    /// out of the active sprint (Jira's backlog). Best-effort like `claim`: try every step, then
+    /// report the ones that failed (idempotent).
+    fn unclaim(&self, key: &TicketKey) -> Result<()>;
     /// The ticket's parent story (`None` if it isn't a sub-task) — for parent roll-up.
     fn parent_of(&self, key: &TicketKey) -> Result<Option<TicketKey>>;
     /// The tickets whose parent is `parent`, whatever their sprint: a story's sub-tasks, an epic's
