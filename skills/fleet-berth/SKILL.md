@@ -1,7 +1,7 @@
 ---
 description: >-
-  Create a git worktree + branch for a ticket in its project folder (beside the project
-  checkout), forked off a given base (default: origin's default branch) of the project checkout,
+  Create a git worktree + branch for a ticket in its project's `impl/` folder (beside the project
+  checkout and `review/`), forked off a given base (default: origin's default branch) of the project checkout,
   which it locates via `fleetc project` — run it from inside the project (or its checkout / a
   worktree). Pure worktree creation — no ticket lifecycle. The operator or captain runs this when
   producing a dispatch, then passes the emitted path to `fleetc dispatch --worktree`; fleetd's
@@ -14,7 +14,8 @@ argument-hint: <ticket> [<fork-base-branch>]
 You are creating the git worktree + branch for a ticket so downstream work
 can start. **This skill only reads the ticket** — it fetches the ticket's type
 to derive the branch name, refreshes the fork base, then creates the worktree
-in the project folder, beside the **project checkout** it forks off. Tracker-side
+in the project's `impl/` folder, beside the **project checkout** it forks off (and the lookouts'
+`review/`). Tracker-side
 lifecycle (assign, label, sprint, transition) is NOT this skill's concern —
 fleetd's spawn claims the ticket when it launches the cog.
 
@@ -37,7 +38,7 @@ side effects, in order:
    skill refreshes it itself). Never touches the checkout's working tree or any local
    branch.
 2. **Git worktree** — `git worktree add` creates a NEW directory + branch under
-   the project folder (beside the project checkout). Its files are not
+   the project's `impl/` folder. Its files are not
    touched, and no commit is made on any existing branch.
 3. **Shared-cache symlinks** — plants the target repo's declared
    `worktree.symlinkDirectories` symlinks (e.g. `target/`, a virtualenv) **into the
@@ -73,12 +74,13 @@ calls):
      else (`task`, `sub-task`, …) → `chore`.
    - **slug** — a kebab-case condensation of the summary (3–5 words).
    - **branch** = `<prefix>/<ticket>-<slug>`.
-   - **path** — in the project folder (beside the project checkout), named
-     `<branch-with-"/"-as-"-">`. E.g. checkout `projects/p/master` + branch
-     `chore/PROJ-944-block-hmac-key` → `projects/p/chore-PROJ-944-block-hmac-key`:
+   - **path** — in the project's `impl/` folder, named `<branch-with-"/"-as-"-">`. E.g.
+     checkout `projects/p/master` + branch `chore/PROJ-944-block-hmac-key` →
+     `projects/p/impl/chore-PROJ-944-block-hmac-key`:
      ```bash
      LEAF="<prefix>-<ticket>-<slug>"        # branch with "/" → "-"
-     WORKTREE_PATH="$(dirname "$REPO")/$LEAF"
+     WORKTREE_PATH="$(dirname "$REPO")/impl/$LEAF"
+     mkdir -p "$(dirname "$WORKTREE_PATH")"
      ```
 4. Refresh the fork base + create the worktree off the checkout (base = the 2nd arg,
    default: origin's default branch, which `git clone` recorded as `origin/HEAD`):
@@ -126,7 +128,7 @@ BRANCH=<prefix>/<ticket>-<slug>
 
 - [ ] Fork base fetched fresh (`git -C "$REPO" fetch origin <base>`) before the
   worktree was cut
-- [ ] Worktree created at `projects/<p>/<leaf>` (beside the project checkout); branch
+- [ ] Worktree created at `projects/<p>/impl/<leaf>`; branch
   derived from issue type; forked off `origin/<base>`
 - [ ] Shared-cache symlinks planted in the new worktree (`target/` etc.) → the
   checkout, per the target repo's `worktree.symlinkDirectories`

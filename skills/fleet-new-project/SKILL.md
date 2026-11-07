@@ -2,7 +2,7 @@
 description: >-
   Set up a new fleet project: grill the operator on what fleet.toml needs (forge, tracker,
   checkout, merge policy), then create projects/<name>/ with its fleet.toml, its tickets/ folder
-  (filesystem tracker), its review/ folder, and its checkout, and run preflight until it's green.
+  (filesystem tracker), its review/ and impl/ folders, and its checkout, and run preflight until it's green.
   Run from the armada repo root. The repeatable way to add a project.
 argument-hint: "[name]"
 ---
@@ -10,7 +10,7 @@ argument-hint: "[name]"
 # Skill: fleet-new-project
 
 You are adding a project to the fleet. A project is a folder, `projects/<name>/`: its
-`fleet.toml`, its checkout, its ticket worktrees, its lookouts' review worktrees in `review/`,
+`fleet.toml`, its checkout, its ticket worktrees in `impl/`, its lookouts' review worktrees in `review/`,
 and its runtime state in `.fleet/` (fleetd creates that). Your job: ask what you need, write the
 folder, prove it with preflight.
 
@@ -55,6 +55,8 @@ mkdir -p "projects/$NAME"
 # the lookouts' review worktrees: fleetd berths each at review/<iid>, a detached checkout of the
 # MR's head, and strikes it when the lookout stands down
 mkdir -p "projects/$NAME/review"
+# the ticket worktrees: /fleet-berth cuts each at impl/<leaf>, a branch off the checkout
+mkdir -p "projects/$NAME/impl"
 # filesystem tracker only:
 mkdir -p "projects/$NAME/tickets"
 git clone "<clone-url>" "projects/$NAME/<checkout>"

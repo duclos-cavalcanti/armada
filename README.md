@@ -98,12 +98,13 @@ make serve-slides                     # serve the slides on :5174, until Ctrl-C
 `fleetc` is the control surface — run `fleetc` for its verbs.
 
 **A project is a folder.** `projects/<name>/` holds the project's `fleet.toml`, its runtime state
-in `.fleet/` (ledger, socket, telemetry, `fleetd.log`), its checkout, and its ticket worktrees. `fleetd`,
-`fleetc`, the dashboard and every cog find the project as the nearest folder with a `fleet.toml`,
-starting from the current directory, or from `-C <dir>` (`fleetc -C projects/<name> …`). Outside a
-project they refuse to run. One fleet runs at a time. To switch, let the cogs finish (or
-`fleetc sink` them), `make stop`, then `make run FLEET_PROJECT=<other>`. Each project's state stays in its
-folder, so you come back to it exactly as you left it.
+in `.fleet/` (ledger, socket, telemetry, `fleetd.log`), its checkout, its ticket worktrees in
+`impl/` and its lookouts' in `review/`. `fleetd`, `fleetc`, the dashboard and every cog find the
+project as the nearest folder with a `fleet.toml`, starting from the current directory, or from
+`-C <dir>` (`fleetc -C projects/<name> …`). Outside a project they refuse to run. One fleet runs
+at a time. To switch, let the cogs finish (or `fleetc sink` them), `make stop`, then
+`make run FLEET_PROJECT=<other>`. Each project's state stays in its folder, so you come back to it
+exactly as you left it.
 
 `.fleet/` is live SQLite; to keep or move a project's state, snapshot its ledger with
 `make snapshot` (a consistent copy, safe beside a running fleet) and restore it with
@@ -163,7 +164,7 @@ armada/
 ├── Makefile     one-word wrappers (run `make` for the cheat sheet)
 ├── TODO.md      the forward backlog
 ├── KNOWN_ISSUES.md  accepted edge cases + workarounds
-└── projects/    one folder per project: fleet.toml + .fleet/ state + checkout + ticket worktrees
-                 + review/ (the lookouts' review worktrees)
+└── projects/    one folder per project: fleet.toml + .fleet/ state + checkout + impl/ (the ticket
+                 worktrees) + review/ (the lookouts' review worktrees)
                  (gitignored, except the armada-test showcase's config + tickets)
 ```
