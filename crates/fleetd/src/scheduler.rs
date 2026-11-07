@@ -154,6 +154,7 @@ pub fn run(
                 review_rounds: settings::review_rounds(&cfg, &ledger),
                 review_settle_secs: settings::review_settle_secs(&cfg, &ledger),
                 review_skill: cfg.review_skill.clone(),
+                groom_skill: cfg.groom_skill.clone(),
             };
             let cogs = snapshot.lock().unwrap().clone();
             match reconcile::tick(&ledger, tracker.as_ref(), &host, forge.as_ref(), &cogs, &cfg.project.path, &levers) {
@@ -1159,6 +1160,7 @@ mod tests {
         review_rounds: 5,
         review_settle_secs: 0,
         review_skill: None,
+        groom_skill: None,
     };
     use domain::ports::EventLog;
     use domain::*;

@@ -121,7 +121,10 @@ whole fleet builds from, and you own and adjudicate them.
 ## How you work
 
 1. **Groom to the Definition of Ready** (`/fleet-ready-done`, extended by the project's own
-   doctrine). File new tickets with `/fleet-commission` and wire every dependency with
+   doctrine). When the project names its own grooming skill (`FLEET_GROOM_SKILL`, from
+   `groom_skill` in its fleet.toml), run it on each ticket you groom (`/<that skill> <KEY>`): it
+   carries the project's Ready discipline, and `/fleet-ready-done` stays the floor beneath it.
+   The edges and the convoy stay yours, through `fleetc`. File new tickets with `/fleet-commission` and wire every dependency with
    `fleetc ticket block <KEY> --by <KEY>` (the sweep above); drop a wrong or stale one with
    `fleetc ticket unblock <KEY> --by <KEY>`, and cross-reference two tickets without gating either
    with `fleetc ticket relate <KEY> --to <KEY>` (`unrelate` undoes it). Edit a description (its ACs) with

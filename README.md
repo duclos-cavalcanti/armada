@@ -86,6 +86,7 @@ make run FLEET_PROJECT=<name>         # restart project <name>'s fleetd, then op
 make restart FLEET_PROJECT=<name>     # rebuild fleetd + reinstall fleetc, (re)start fleetd in the background
 make stop FLEET_PROJECT=<name>        # stop that project's fleet daemon
 make dashboard FLEET_PROJECT=<name>   # build + run the TUI dashboard
+make groom FLEET_PROJECT=<name> [CONVOY=<KEY>]   # an admiral in the project's checkout, to groom a convoy
 make snapshot FLEET_PROJECT=<name>    # snapshot the project's ledger → projects/<name>/exports/<name>-<UTC stamp>.db
 make import FILE=<snapshot> FLEET_PROJECT=<name>   # restore a ledger snapshot (the fleet must be stopped)
 make serve-fleet                      # serve the fleet viewer on :5173, until Ctrl-C

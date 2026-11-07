@@ -40,6 +40,10 @@ pub struct Config {
     /// The project's own review skill (its name, e.g. `mr-review`, run as `/<name> <iid>` from the
     /// project's `.claude/skills/`), which every lookout runs. Unset = the kit's `/fleet-review`.
     pub review_skill: Option<String>,
+    /// The project's own grooming skill (its name, e.g. `groom-ticket`, in the checkout's
+    /// `.claude/skills/`), which an admiral runs on each ticket it grooms. Unset = the kit's
+    /// `/fleet-ready-done` alone. `make groom` hands it over too.
+    pub groom_skill: Option<String>,
     /// Reconcile mode: false (default, post-cutover) = apply the plan through the ports — fleetd
     /// drives the line; true = compute + log only, execute nothing (the parity look, opt in via
     /// `FLEET_DRY_RUN=true`). Flip via config/env, no recompile.
@@ -133,6 +137,7 @@ impl Default for Config {
             review_rounds: 5,
             review_settle_secs: 300,
             review_skill: None,
+            groom_skill: None,
             dry_run: false,
             active_secs: domain::LIVENESS_ACTIVE_SECS,
             quiet_secs: domain::LIVENESS_QUIET_SECS,

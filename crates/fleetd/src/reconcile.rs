@@ -652,6 +652,8 @@ pub struct Levers {
     /// How long an MR's review threads must hold still before a sailor answers them.
     pub review_settle_secs: u64,
     pub review_skill: Option<String>,
+    /// The project's grooming skill, handed to each admiral in `FLEET_GROOM_SKILL`.
+    pub groom_skill: Option<String>,
 }
 
 /// Apply the reconcile plan through the ports. `dry_run=true` logs the plan and executes
@@ -724,7 +726,7 @@ fn execute<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
         Action::LaunchSailor { ticket } => launch_sailor(ledger, forge, host, ticket),
         Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, project, *iid, levers.review_skill.as_deref()),
         Action::StandDownLookout { session } => stand_down_lookout(ledger, host, project, &SessionId(*session)),
-        Action::LaunchAdmiral { ticket } => launch_admiral(ledger, host, project, ticket),
+        Action::LaunchAdmiral { ticket } => launch_admiral(ledger, host, project, ticket, levers.groom_skill.as_deref()),
     }
 }
 
@@ -1394,7 +1396,7 @@ fn stand_down_lookout<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, 
 /// a cog. The ticket's worktree rides in as `--add-dir`: the admiral reads the cog's files while its
 /// cwd stays the checkout, whose CLAUDE.md and settings are the merged canon's, not the branch's.
 /// A tmux session of that name already up is one the operator opened: a benign skip.
-fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, ticket: &str) -> Result<()> {
+fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, ticket: &str, groom_skill: Option<&str>) -> Result<()> {
     let tmux_session = format!("admiral-{ticket}");
     if host.alive(&tmux_session)? {
         return Ok(());
@@ -1423,8 +1425,11 @@ fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, tick
         .and_then(|o| o.worktree_path)
         .map(|wt| format!(" --add-dir '{}'", wt.replace('\'', r"'\''")))
         .unwrap_or_default();
-    // The key is `<PREFIX>-<n>`-validated, so the quoted order is shell-safe.
-    let cmd = format!("{}{add_dir} 'Rule on the confirmed escalation of {ticket}.'", launch_cmd("admiral", Launch::Fresh(&hid)));
+    // The key is `<PREFIX>-<n>`-validated, so the quoted order is shell-safe; so is a skill name
+    // kept to the characters a skill name has.
+    let skill = groom_skill.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric() || "-_:".contains(c)));
+    let env = skill.map(|s| format!("FLEET_GROOM_SKILL={s} ")).unwrap_or_default();
+    let cmd = format!("{env}{}{add_dir} 'Rule on the confirmed escalation of {ticket}.'", launch_cmd("admiral", Launch::Fresh(&hid)));
     host.spawn(&tmux_session, Path::new(project), &cmd)?;
     ledger.append(
         &now_rfc3339(),
@@ -1498,6 +1503,7 @@ mod tests {
         review_rounds: 5,
         review_settle_secs: 0,
         review_skill: None,
+        groom_skill: None,
     };
     const DRY: Levers = Levers { dry_run: true, ..LIVE };
     use domain::ports::EventLog;
@@ -3630,11 +3636,18 @@ mod tests {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let host = FakeHost::new();
-        launch_admiral(&db, &host, "/project", "PROJ-1").unwrap();
+        launch_admiral(&db, &host, "/project", "PROJ-1", None).unwrap();
         let (name, cwd, cmd) = host.spawned.borrow()[0].clone();
         assert_eq!((name.as_str(), cwd.as_str()), ("admiral-PROJ-1", "/project"));
         assert!(cmd.contains("--agent admiral 'Rule on the confirmed escalation of PROJ-1.'"), "{cmd}");
         assert!(!cmd.contains("FLEET_TICKET"), "an admiral isn't a cog: {cmd}");
+        assert!(!cmd.contains("FLEET_GROOM_SKILL"), "no grooming skill named: {cmd}");
+
+        ticket(&db, "PROJ-2", TicketStatus::InProgress, false, vec![]);
+        let host = FakeHost::new();
+        launch_admiral(&db, &host, "/project", "PROJ-2", Some("groom-ticket")).unwrap();
+        let cmd = host.spawned.borrow()[0].2.clone();
+        assert!(cmd.starts_with("FLEET_GROOM_SKILL=groom-ticket claude "), "the project's grooming skill rides in: {cmd}");
         let live = SessionRepo::live(&db).unwrap();
         assert!(live.iter().any(|s| s.kind == CrewKind::Admiral && s.ticket == Some(TicketKey("PROJ-1".into()))));
     }
@@ -3645,7 +3658,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         order_wt(&db, "PROJ-1", true, Some("/wt/chore-PROJ-1-it's"));
         let host = FakeHost::new();
-        launch_admiral(&db, &host, "/project", "PROJ-1").unwrap();
+        launch_admiral(&db, &host, "/project", "PROJ-1", None).unwrap();
         let (_, cwd, cmd) = host.spawned.borrow()[0].clone();
         assert_eq!(cwd, "/project", "its cwd stays the checkout");
         assert!(cmd.contains(r"--add-dir '/wt/chore-PROJ-1-it'\''s' 'Rule on"), "{cmd}");

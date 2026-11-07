@@ -42,7 +42,10 @@ as you go.
 6. **Review** — does the project have its own review skill, in the checkout's
    `.claude/skills/` (e.g. `mr-review`)? If so, `review_skill = "<name>"`: every lookout runs it
    on every MR, ours and allies'. If not, leave it out: the kit's `/fleet-review` runs.
-7. **Anything else** — keep the default cadences and `dry_run = false` unless they say
+7. **Grooming** — does it have its own grooming skill there too (e.g. `groom-ticket`)? If so,
+   `groom_skill = "<name>"`: an admiral (`make groom`) runs it on each ticket it grooms. If not,
+   leave it out: `/fleet-ready-done` alone.
+8. **Anything else** — keep the default cadences and `dry_run = false` unless they say
    otherwise.
 
 Read the answers back as the fleet.toml you'll write, and get a yes before Step 2.
@@ -77,6 +80,7 @@ self_lookouts      = -1                # lookouts on our own MRs, apart from the
 review_rounds      = 5
 review_settle_secs = 300               # how long an MR's review threads hold still before a sailor answers them
 # review_skill     = "<name>"          # the project's own review skill; unset = /fleet-review
+# groom_skill      = "<name>"          # the project's own grooming skill (make groom); unset = /fleet-ready-done
 dry_run            = false
 
 [project]

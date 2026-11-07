@@ -10,11 +10,12 @@
 #   ./fleet.sh preflight       check the setup: runtime state, checkout, forge + tracker CLIs, tmux + claude
 #   ./fleet.sh snapshot        snapshot the ledger to projects/<name>/exports/ (safe while running)
 #   ./fleet.sh import <file>   restore a ledger snapshot, path from the repo root (the fleet must be stopped)
+#   ./fleet.sh groom           open an admiral in the project's checkout to groom (CONVOY=<KEY>: start on it)
 set -euo pipefail
 
 PROJECT="${FLEET_PROJECT:-}"
 
-usage() { sed -n '5,12p' "${BASH_SOURCE[0]}" | sed 's/^#[[:space:]]*//;s/^#//'; }
+usage() { sed -n '5,13p' "${BASH_SOURCE[0]}" | sed 's/^#[[:space:]]*//;s/^#//'; }
 
 check() {
     local projects
@@ -79,10 +80,23 @@ import() {
     cargo run -q -p fleetc -- -C "projects/$PROJECT" import "${1:?import needs a snapshot: FILE=<snapshot>}"
 }
 
+# Open an admiral in the project's checkout, where the project's own skills live, to groom a convoy
+# (CONVOY=<KEY> starts it on one). It runs the project's grooming skill, `groom_skill` in fleet.toml,
+# handed over in FLEET_GROOM_SKILL; none named = the kit's /fleet-ready-done alone.
+groom() {
+    local toml="projects/$PROJECT/fleet.toml" path skill
+    path="$(awk -F'"' '/^\[/ { s = $0 } s == "[project]" && $1 ~ /^path[[:space:]]*=/ { print $2; exit }' "$toml")"
+    skill="$(awk -F'"' '/^\[/ { exit } $1 ~ /^groom_skill[[:space:]]*=/ { print $2; exit }' "$toml")"
+    cd "projects/$PROJECT/${path:?no [project] path in $toml}"
+    local prompt=()
+    [[ -n "${CONVOY:-}" ]] && prompt=("Groom convoy $CONVOY to Ready.")
+    exec env ${skill:+FLEET_GROOM_SKILL="$skill"} claude --agent admiral ${prompt[@]+"${prompt[@]}"}
+}
+
 main() {
     cd "$(dirname "${BASH_SOURCE[0]}")" # `stop` matches on the relative paths above
     case "${1:-}" in
-        run|restart|stop|dashboard|preflight|snapshot|import) check; "$@" ;;
+        run|restart|stop|dashboard|preflight|snapshot|import|groom) check; "$@" ;;
         -h|--help) usage ;;
         *) echo "fleet.sh: unknown verb '${1:-}'" >&2; usage >&2; exit 2 ;;
     esac
