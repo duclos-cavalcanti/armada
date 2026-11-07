@@ -63,7 +63,7 @@ pub enum Action {
 /// liveness). Pure (reads only). `cogs` carry liveness for the heal/terminal checks; `stacks` is
 /// the forge's capability (`Forge::stacks`) — without it, no STACKED spawn and no BLOCK.
 pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Result<Vec<Action>> {
-    let &Levers { captain_sleep_secs, admirals, lookouts, self_lookouts, .. } = levers;
+    let &Levers { captain_sleep_secs, admirals, lookouts, self_lookouts, review_settle_secs, .. } = levers;
     let mut actions = Vec::new();
 
     // DISPATCH — iterate the order queue (intent). Spawn a CLEAN (all blockers terminal) ticket OR
@@ -126,6 +126,10 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
             // launches the sweep that arms.
             // Gated too: a ticket back in To Do (a rework) or with a builder at work is the builder's
             // — one cog in a worktree at a time; the handoff brings the sailor back.
+            // And held while its review settles: threads that moved within `review_settle_secs` may be
+            // a reviewer mid-review, and a sweep now would answer them and move the head under the
+            // rest. It waits for the threads to hold still, unless a conflict or a red pipeline needs
+            // the sailor at once.
             let auto = OrderRepo::get(ledger, tkey)?.is_some_and(|o| o.auto_impl && o.worktree_path.is_some());
             let ticket = TicketRepo::get(ledger, tkey)?;
             let held = ticket.as_ref().is_some_and(|t| t.held);
@@ -135,7 +139,9 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
             let live_sailor = live.contains(&CrewKind::Sailor);
             let live_builder = live.iter().any(|k| matches!(k, CrewKind::Worker | CrewKind::Hand));
             let changed = Some(ship_fingerprint(&snap, has_open_blocker(ledger, tkey)?)) != ship.swept;
-            if auto && !held && !todo && !live_sailor && !live_builder && (needs_work(&snap) || changed) {
+            let urgent = snap.has_conflicts || snap.pipeline == Some(PipelineStatus::Failed);
+            let settled = urgent || rested(ledger.threads_changed_at(&ship.id)?.as_deref(), review_settle_secs);
+            if auto && !held && !todo && !live_sailor && !live_builder && settled && (needs_work(&snap) || changed) {
                 actions.push(Action::LaunchSailor { ticket: tkey.0.clone() });
             }
         }
@@ -602,8 +608,9 @@ fn after(a: &str, b: &str) -> bool {
     }
 }
 
-/// A convoy has rested once `sleep_secs` have passed since its last captain finished (`finished`).
-/// Never finished → rested. An unparseable time counts as rested: a needless pass is harmless.
+/// `sleep_secs` have passed since `finished`: a convoy has rested since its last captain finished,
+/// an MR's review threads have held still. Never → rested. An unparseable time counts as rested: a
+/// needless pass is harmless.
 fn rested(finished: Option<&str>, sleep_secs: u64) -> bool {
     let Some(at) = finished.and_then(instant) else { return true };
     time::OffsetDateTime::now_utc() - at >= time::Duration::seconds(sleep_secs as i64)
@@ -642,6 +649,8 @@ pub struct Levers {
     pub lookouts: i64,
     pub self_lookouts: i64,
     pub review_rounds: u64,
+    /// How long an MR's review threads must hold still before a sailor answers them.
+    pub review_settle_secs: u64,
     pub review_skill: Option<String>,
 }
 
@@ -1487,6 +1496,7 @@ mod tests {
         lookouts: 1,
         self_lookouts: -1,
         review_rounds: 5,
+        review_settle_secs: 0,
         review_skill: None,
     };
     const DRY: Levers = Levers { dry_run: true, ..LIVE };
@@ -2565,6 +2575,40 @@ mod tests {
         let snap = ShipRepo::snapshot(&db, &s.id).unwrap().unwrap();
         db.set_swept(&s.id, Some(&ship_fingerprint(&snap, false))).unwrap();
         assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_sailor_waits_for_review_threads_to_hold_still() {
+        let db = db();
+        ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
+        order_wt(&db, "PROJ-1", true, Some("/wt/PROJ-1"));
+        ship(&db, 10, "PROJ-1", ShipState::Open);
+        let s = db.armada().unwrap().into_iter().find(|s| s.iid == 10).unwrap();
+        let sync = |mutate: &dyn Fn(&mut ShipSnapshot), at: &str| {
+            let mut snap = ShipRepo::snapshot(&db, &s.id).unwrap().unwrap();
+            mutate(&mut snap);
+            snap.synced_at = at.into();
+            db.sync_snapshot(&snap).unwrap();
+        };
+        let settling = Levers { review_settle_secs: 300, ..LIVE };
+        let launch = vec![Action::LaunchSailor { ticket: "PROJ-1".into() }];
+
+        sync(&|n| n.pipeline = Some(PipelineStatus::Success), &now_rfc3339()); // threads didn't move
+        assert_eq!(db.threads_changed_at(&s.id).unwrap(), None);
+        sync(&|n| { n.open_threads = 1; n.total_threads = 1; }, &now_rfc3339()); // review a.1 lands
+        assert!(plan(&db, &[], true, &settling).unwrap().is_empty(), "a reviewer may be mid-review: wait");
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap(), launch, "review_settle_secs 0: answer at once");
+
+        sync(&|n| n.has_conflicts = true, &now_rfc3339());
+        assert_eq!(plan(&db, &[], true, &settling).unwrap(), launch, "a conflict doesn't wait");
+        sync(&|n| { n.has_conflicts = false; n.pipeline = Some(PipelineStatus::Failed) }, &now_rfc3339());
+        assert_eq!(plan(&db, &[], true, &settling).unwrap(), launch, "nor does a red pipeline");
+
+        let long_ago = "2000-01-01T00:00:00Z";
+        sync(&|n| { n.open_threads = 2; n.total_threads = 2; n.pipeline = Some(PipelineStatus::Success) }, long_ago); // a.2
+        sync(&|n| n.approvals.current = 1, &now_rfc3339()); // a later sync: the threads held still
+        assert_eq!(db.threads_changed_at(&s.id).unwrap().as_deref(), Some(long_ago), "only a thread move restamps it");
+        assert_eq!(plan(&db, &[], true, &settling).unwrap(), launch, "settled: the sailor answers");
     }
 
     /// Re-sync ship `iid`'s snapshot through `mutate`, then mark swept = its (new) fingerprint —

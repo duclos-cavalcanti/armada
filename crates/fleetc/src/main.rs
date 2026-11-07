@@ -1796,7 +1796,7 @@ mod tests {
         let export = root.join("snapshot.db");
         ledger::snapshot(&p.ledger(), &export.to_string_lossy()).unwrap();
         let v1 = "ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; \
-                  ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; PRAGMA user_version = 1;";
+                  ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; PRAGMA user_version = 1;";
         assert!(std::process::Command::new("sqlite3").arg(&export).arg(v1).status().unwrap().success());
 
         import_into(&p, &export).unwrap();

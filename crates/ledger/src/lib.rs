@@ -271,6 +271,8 @@ const MIGRATIONS: &[&str] = &[
             WHERE r.session_id = cases.session_id AND s.ended_at IS NULL AND r.state = 'escalated'
               AND TRIM(COALESCE(r.last_action, '')) = cases.question);
     DROP TABLE temp.judged;",
+    // v10: when an MR's review threads last moved, so a sailor waits for a reviewer to finish.
+    "ALTER TABLE ship_snapshots ADD COLUMN threads_changed_at TEXT;",
 ];
 
 /// The ledger's schema version (SQLite `user_version`): one past its last migration.
@@ -765,7 +767,7 @@ mod tests {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; \
-             ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; PRAGMA user_version = 1;",
+             ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; PRAGMA user_version = 1;",
         )
         .unwrap();
         drop(conn);
@@ -791,7 +793,7 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO convoys(key, created_at) VALUES ('PROJ-100', 't1');
              INSERT INTO convoy_plans(convoy, body, updated_at) VALUES ('PROJ-100', 'ship the seed', 't2');
-             ALTER TABLE inspections DROP COLUMN case_id; PRAGMA user_version = 7;",
+             ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; PRAGMA user_version = 7;",
         )
         .unwrap();
         drop(conn);
@@ -818,7 +820,7 @@ mod tests {
         // Back to v4: the same rebuild, without the admiral kind.
         let v4 = MIGRATIONS[3].replace(",'admiral'", ""); // v5's rebuild
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; PRAGMA user_version = 4;"))
+        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; PRAGMA user_version = 4;"))
             .unwrap();
         drop(conn);
 
@@ -1343,6 +1345,9 @@ impl ShipRepo for Ledger {
                  blocked_by_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
              ON CONFLICT(ship_id) DO UPDATE SET
+               threads_changed_at = CASE
+                 WHEN open_threads <> excluded.open_threads OR total_threads <> excluded.total_threads THEN excluded.synced_at
+                 ELSE threads_changed_at END,
                title=excluded.title, state=excluded.state, head_sha=excluded.head_sha,
                has_conflicts=excluded.has_conflicts, open_threads=excluded.open_threads, total_threads=excluded.total_threads,
                approvals_current=excluded.approvals_current, approvals_required=excluded.approvals_required,
@@ -1363,6 +1368,14 @@ impl ShipRepo for Ledger {
             .conn
             .query_row("SELECT * FROM ship_snapshots WHERE ship_id = ?1", params![id.0], row_to_snapshot)
             .optional()?)
+    }
+
+    fn threads_changed_at(&self, id: &ShipId) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT threads_changed_at FROM ship_snapshots WHERE ship_id = ?1", params![id.0], |r| r.get(0))
+            .optional()?
+            .flatten())
     }
 
     fn set_reviewed(&self, id: &ShipId, head_sha: Option<&str>) -> Result<()> {
@@ -2190,7 +2203,7 @@ mod repo_tests {
             format!("INSERT INTO inspections(session_id, reported_at, verdict, body, inspected_at) VALUES ({}, '{at}', '{v}', 'b', '{at}9');", s.0)
         };
         conn.execute_batch(&format!(
-            "DELETE FROM cases; DROP INDEX one_open_case; ALTER TABLE inspections DROP COLUMN case_id; DROP TABLE cases;
+            "DELETE FROM cases; DROP INDEX one_open_case; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP TABLE cases;
              {} {} {} {} {} {} {}
              INSERT INTO reports(session_id, state, last_action, reported_at) VALUES ({}, 'escalated', 'Y?', 't3'), ({}, 'escalated', 'Z?', 't4');
              PRAGMA user_version = 8;",

@@ -75,6 +75,7 @@ admirals           = 3
 lookouts           = 3
 self_lookouts      = -1                # lookouts on our own MRs, apart from the allies': -1 = no cap
 review_rounds      = 5
+review_settle_secs = 300               # how long an MR's review threads hold still before a sailor answers them
 # review_skill     = "<name>"          # the project's own review skill; unset = /fleet-review
 dry_run            = false
 

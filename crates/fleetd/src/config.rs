@@ -34,6 +34,9 @@ pub struct Config {
     pub self_lookouts: i64,
     /// Review rounds a worker gets on its MR: past them with threads still open, it escalates.
     pub review_rounds: u64,
+    /// How long an MR's review threads must hold still before a sailor answers them, so a reviewer
+    /// mid-review isn't answered (and the head moved) under them. 0 = answer at once.
+    pub review_settle_secs: u64,
     /// The project's own review skill (its name, e.g. `mr-review`, run as `/<name> <iid>` from the
     /// project's `.claude/skills/`), which every lookout runs. Unset = the kit's `/fleet-review`.
     pub review_skill: Option<String>,
@@ -128,6 +131,7 @@ impl Default for Config {
             lookouts: 3,
             self_lookouts: -1,
             review_rounds: 5,
+            review_settle_secs: 300,
             review_skill: None,
             dry_run: false,
             active_secs: domain::LIVENESS_ACTIVE_SECS,

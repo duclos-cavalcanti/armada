@@ -152,6 +152,7 @@ pub fn run(
                 lookouts: settings::lookouts(&cfg, &ledger),
                 self_lookouts: settings::self_lookouts(&cfg, &ledger),
                 review_rounds: settings::review_rounds(&cfg, &ledger),
+                review_settle_secs: settings::review_settle_secs(&cfg, &ledger),
                 review_skill: cfg.review_skill.clone(),
             };
             let cogs = snapshot.lock().unwrap().clone();
@@ -1156,6 +1157,7 @@ mod tests {
         lookouts: 1,
         self_lookouts: -1,
         review_rounds: 5,
+        review_settle_secs: 0,
         review_skill: None,
     };
     use domain::ports::EventLog;
