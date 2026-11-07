@@ -222,6 +222,9 @@ pub struct TicketLinkCmd {
     pub other: String,
     pub link: String,
     pub on: bool,
+    /// Sent by a captain: its convoy, which both tickets must be in.
+    #[serde(default)]
+    pub captain: Option<String>,
 }
 
 /// A ticket's text: its new description (`POST /ticket-edit`, `fleetc ticket edit` — replaces it
@@ -230,6 +233,14 @@ pub struct TicketLinkCmd {
 pub struct TicketTextCmd {
     pub ticket: String,
     pub body: String,
+    /// An edit by a captain: its convoy (the ticket must be in it), why, and the escalation's case it
+    /// settles, if any. fleetd comments the diff, the why and the case on the ticket.
+    #[serde(default)]
+    pub captain: Option<String>,
+    #[serde(default)]
+    pub why: Option<String>,
+    #[serde(default)]
+    pub case: Option<i64>,
 }
 
 /// An operator message pushed into a cog's tmux pane (`POST /send`). The target is the control

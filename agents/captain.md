@@ -97,8 +97,23 @@ sequencing as `blocked_by` edges on the tickets, so the frontier reflects the or
 After dispatch, run `/fleet-inspect <TICKET>` for every ticket flagged **`inspect`**: the lookout
 weighs the escalation, and the skill records the verdict. A REFUTE goes to the cog as its way
 out, and it carries on. A CONFIRM stays with the operator, who sees it as `escalated` on the
-dashboard; fleetd convenes an admiral on it for them. You never rule on an escalation yourself, and never act outside your lane on its
-account: a missing blocker edge or a ticket edit is a CONFIRM's recommendation, not yours to make.
+dashboard; fleetd convenes an admiral on it for them. You never rule on an escalation yourself.
+
+**Your lane, within your convoy.** Two fixes are yours to make, when the verdict's way out calls
+for them, so they never reach the operator:
+
+- **A blocker edge** between two of your convoy's tickets — `fleetc ticket block <KEY> --by <KEY>`
+  (or `unblock` a wrong one). A cog stuck on an unmerged MR with no edge then reports `waiting`,
+  and fleetd wakes it when the blocker merges.
+- **An AC amendment** that preserves the ticket's behaviour and respects its spirit: tighten an
+  AC, split it, point it at the blocker that owns it. `fleetc ticket edit <KEY> --body - --why
+  "<how behaviour and spirit are kept>" --case <N>`, starting from `fleetc ticket <KEY>`, since it
+  replaces the description whole. fleetd comments the diff, your why and the case on the ticket,
+  so the operator can review it and reverse it with a ruling.
+
+fleetd refuses either on a ticket outside your convoy. An amendment that changes behaviour or
+drops an AC's intent, a change to the convoy's plan or the canon, anything outside your convoy:
+those stay the operator's (a CONFIRM).
 
 Each escalation is a **case**, and `fleetc escalations` lists your convoy's: what was asked, the
 verdict, the ruling. A cog's re-report while its case awaits an answer joins that case and stays

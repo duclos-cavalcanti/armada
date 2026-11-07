@@ -64,7 +64,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (prints the new key)\n  \
      fleetc ticket   block|unblock <KEY-N> --by <KEY-N>   (add or remove an 'is blocked by' edge; unblock: never a cog)\n  \
      fleetc ticket   relate|unrelate <KEY-N> --to <KEY-N>   (add or remove a 'relates to' link, both ways; the fleet never acts on it)\n  \
-     fleetc ticket   edit [<KEY-N>] --body <text|->   (replace the description, whole: read it first)\n  \
+     fleetc ticket   edit [<KEY-N>] --body <text|-> [--why <text>] [--case <N>]   (replace the description, whole: read it first; a captain: its convoy's tickets, with why)\n  \
      fleetc ticket   comment [<KEY-N>] --body <text|->   (comment on the ticket)\n  \
      fleetc propose  --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (a cog: file a new ticket labelled fleet-proposed; prints its id + key)\n  \
      fleetc propose  --existing <KEY-N> --why <text> [--convoy <KEY>]   (a cog: propose taking on an existing ticket)\n  \
@@ -1564,26 +1564,47 @@ fn render_proposal(p: &domain::Proposal) -> String {
     format!("{}\n{body}\n", facts.join(" · "))
 }
 
-/// `fleetc ticket edit|comment [<KEY-N>] --body <text|->` — replace the ticket's description
-/// (`edit`: it goes whole, so read it first) or comment on it (`comment`).
+/// `fleetc ticket edit|comment [<KEY-N>] --body <text|-> [--why <text>] [--case <N>]` — replace the
+/// ticket's description (`edit`: it goes whole, so read it first) or comment on it (`comment`). A
+/// captain's edit is scoped to its convoy and says why (`--why`), and the case it settles (`--case`):
+/// fleetd comments the diff on the ticket.
 fn ticket_text(sub: &str, args: &[String]) -> Result<()> {
     let verb = format!("ticket {sub}");
+    let usage = format!("usage: fleetc ticket {sub} [<KEY-N>] --body <text|-> [--why <text>] [--case <N>]");
     let (key, flags) = match args.split_first() {
         Some((k, rest)) if !k.starts_with('-') => (ticket_key(k, &verb)?, rest),
         _ => (ticket_or_own(&[], &verb)?, args),
     };
-    let body = match flags {
-        [flag, body] if flag == "--body" => body_text(body.clone())?,
-        _ => bail!("usage: fleetc ticket {sub} [<KEY-N>] --body <text|->"),
-    };
-    submit(&format!("/ticket-{sub}"), &wire::TicketTextCmd { ticket: key, body })
+    let (mut body, mut why, mut case) = (None, None, None);
+    let mut it = flags.iter();
+    while let Some(flag) = it.next() {
+        let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
+        match flag.as_str() {
+            "--body" => body = Some(body_text(take()?)?),
+            "--why" => why = Some(take()?),
+            "--case" => case = Some(take()?.trim_start_matches('#').parse::<i64>().map_err(|_| anyhow!("--case takes a case number"))?),
+            _ => bail!("{usage}"),
+        }
+    }
+    let body = body.ok_or_else(|| anyhow!("{usage}"))?;
+    let captain = captain_convoy();
+    if sub == "edit" && captain.is_some() && why.is_none() {
+        bail!("a captain's edit says why it keeps the ticket's behaviour and spirit (--why), and names its case (--case)");
+    }
+    submit(&format!("/ticket-{sub}"), &wire::TicketTextCmd { ticket: key, body, captain, why, case })
+}
+
+/// The convoy of the captain running fleetc (`FLEET_CONVOY`, no ticket of its own); `None` otherwise.
+fn captain_convoy() -> Option<String> {
+    own("FLEET_TICKET").is_none().then(|| own("FLEET_CONVOY")).flatten()
 }
 
 /// `fleetc ticket block|unblock <KEY-N> --by <KEY-N>` — add or remove the edge "the first ticket is
 /// blocked by the second"; `relate|unrelate <KEY-N> --to <KEY-N>` — relate the two, or stop.
 fn ticket_link(sub: &str, args: &[String]) -> Result<()> {
-    // Dropping a blocker reorders the line: the operator's call (or the admiral's), never a cog's.
-    if sub == "unblock" && in_cog() {
+    // Dropping a blocker reorders the line: the operator's call, the admiral's, or a captain's
+    // within its convoy (fleetd holds it to its convoy), never a builder's.
+    if sub == "unblock" && in_cog() && captain_convoy().is_none() {
         bail!("a cog doesn't remove a blocker — escalate it for the operator");
     }
     let verb = format!("ticket {sub}");
@@ -1596,7 +1617,7 @@ fn ticket_link(sub: &str, args: &[String]) -> Result<()> {
         _ => bail!("usage: fleetc ticket {sub} <KEY-N> {flag} <KEY-N>"),
     };
     let on = !sub.starts_with("un");
-    submit("/ticket-link", &wire::TicketLinkCmd { ticket, other, link: link.into(), on })
+    submit("/ticket-link", &wire::TicketLinkCmd { ticket, other, link: link.into(), on, captain: captain_convoy() })
 }
 
 /// A `--body` value: as given, or stdin's whole text for `-`.

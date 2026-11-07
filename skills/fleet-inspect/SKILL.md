@@ -41,12 +41,15 @@ EOF
 
 In a chat with the operator (the admiral), show them the verdict too. Then:
 
-- **REFUTE** → send the cog its way out, so it unblocks itself:
+- **REFUTE** → when the way out names a step of the captain's (a blocker edge, an AC amendment
+  that keeps behaviour and spirit), take it first, in your convoy: `fleetc ticket block <KEY> --by
+  <KEY>`, or `fleetc ticket edit <KEY> --body - --why "<…>" --case <N>` (fleetd records the diff on
+  the ticket). Then send the cog its way out, so it unblocks itself:
   ```bash
   fleetc send --cog <kind> --ticket <KEY> "Inspected: REFUTE — <the recommendation, with its cites>. Unblock yourself and carry on."
   ```
 - **CONFIRM** → send nothing; the escalation stands with the operator, and fleetd convenes an
   admiral on it (`admiral-<KEY>`) for them to rule with. Their ruling goes on the case
-  (`fleetc ruling --case <N>`), which sends it to the cog and keeps it for the convoy's next one. When the recommendation
-  names an action that is yours (a missing `is blocked by` edge, a ticket edit), propose it to
-  the operator rather than taking it unasked.
+  (`fleetc ruling --case <N>`), which sends it to the cog and keeps it for the convoy's next one. A
+  CONFIRM's recommendation is beyond your lane by definition (an amendment that changes behaviour,
+  the plan, a ticket outside your convoy): propose it to the operator rather than taking it.

@@ -668,7 +668,11 @@ fn handle_ticket_link(request: &str, cmds: &Sender<Command>) -> String {
         return http_response("400 Bad Request", "text/plain", "a ticket can't link to itself");
     }
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    if cmds.send(Command::LinkTicket { ticket, other, link, on: dto.on, reply: reply_tx }).is_err() {
+    let captain = match dto.captain.as_deref().map(ConvoyKey::parse).transpose() {
+        Ok(c) => c,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &e.to_string()),
+    };
+    if cmds.send(Command::LinkTicket { ticket, other, link, on: dto.on, captain, reply: reply_tx }).is_err() {
         return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
     }
     match reply_rx.recv() {
@@ -692,11 +696,19 @@ fn handle_ticket_text(request: &str, cmds: &Sender<Command>, comment: bool) -> S
     if dto.body.trim().is_empty() {
         return http_response("400 Bad Request", "text/plain", "an empty body");
     }
+    let amend = match dto.captain.as_deref().map(ConvoyKey::parse).transpose() {
+        Ok(Some(captain)) => match dto.why.filter(|w| !w.trim().is_empty()) {
+            Some(why) => Some(crate::scheduler::Amend { captain, why, case: dto.case.map(domain::CaseId) }),
+            None => return http_response("400 Bad Request", "text/plain", "a captain's edit says why (--why)"),
+        },
+        Ok(None) => None,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &e.to_string()),
+    };
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
     let cmd = if comment {
         Command::CommentTicket { ticket, body: dto.body, reply: reply_tx }
     } else {
-        Command::EditTicket { ticket, description: dto.body, reply: reply_tx }
+        Command::EditTicket { ticket, description: dto.body, amend, reply: reply_tx }
     };
     if cmds.send(cmd).is_err() {
         return http_response("503 Service Unavailable", "text/plain", "writer unavailable");

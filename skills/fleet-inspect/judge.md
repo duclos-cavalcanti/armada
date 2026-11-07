@@ -11,11 +11,15 @@ Weigh every option against three checks:
 - **Convoy**: it fits the convoy's plan, and the tickets it holds up still get what they build on.
 - **Resolves**: it clears what blocked the cog (the review thread, the conflict, the failing gate).
 
-**REFUTE** when an option passes all three and the cog can take it in its own lane: that option
-is its way out, whether it was already in the ticket, the canon, the code or its transcript, or is
-one you derived. **CONFIRM** when no option passes all three, or the one that does needs a change
-outside the cog's lane (a ticket edit, a blocker edge, a permission) or a security ruling. An
-option that amends an AC, a plan decision or an invariant fails a check by definition.
+**REFUTE** when an option passes all three and the cog can take it in its own lane, or with its
+captain's: that option is its way out, whether it was already in the ticket, the canon, the code or
+its transcript, or is one you derived. The captain's lane, within its convoy: a blocker edge
+between two of its tickets, and an AC amendment that preserves the ticket's behaviour and respects
+its spirit (tightened, split, pointed at the blocker that owns it). Name that step as the
+captain's in the recommendation. **CONFIRM** when no option passes all three, or the one that does
+needs a change beyond both lanes (an amendment that changes behaviour or an AC's intent, a plan
+decision, an invariant, a permission, a ticket outside the convoy) or a security ruling. Those
+fail a check by definition.
 
 Gather it yourself; your dispatcher's read of it is not evidence:
 

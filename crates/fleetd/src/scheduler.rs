@@ -91,8 +91,8 @@ pub enum Command {
     Arm { ticket: TicketKey, reply: Reply }, // an action: arm the ticket's MR, unless held/blocked (forge)
     GetTicket { ticket: TicketKey, reply: TicketReply }, // a read: a ticket's full text (tracker)
     NewTicket { draft: domain::TicketDraft, reply: UrlReply }, // an action: create a ticket → its key (tracker)
-    LinkTicket { ticket: TicketKey, other: TicketKey, link: domain::TicketLink, on: bool, reply: Reply }, // an action: add or remove a link (tracker, + ledger)
-    EditTicket { ticket: TicketKey, description: String, reply: Reply }, // an action: replace its description (tracker)
+    LinkTicket { ticket: TicketKey, other: TicketKey, link: domain::TicketLink, on: bool, captain: Option<ConvoyKey>, reply: Reply }, // an action: add or remove a link (tracker, + ledger)
+    EditTicket { ticket: TicketKey, description: String, amend: Option<Amend>, reply: Reply }, // an action: replace its description (tracker)
     CommentTicket { ticket: TicketKey, body: String, reply: Reply }, // an action: comment on it (tracker)
     Propose { from: Option<TicketKey>, proposed: Proposed, reply: UrlReply }, // hold a cog's proposal → its id
     AcceptProposal { id: ProposalId, convoy: Option<ConvoyKey>, reply: UrlReply }, // an action: accept it → its key (a new one is filed)
@@ -320,11 +320,20 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         Command::NewTicket { draft, reply } => {
             let _ = reply.send(tracker.create(&draft).map(|k| k.0).map_err(|e| format!("{e:#}")));
         }
-        Command::LinkTicket { ticket, other, link, on, reply } => {
-            let _ = reply.send(link_ticket(ledger, tracker, &ticket, &other, link, on).map_err(|e| format!("{e:#}")));
+        Command::LinkTicket { ticket, other, link, on, captain, reply } => {
+            let res = match &captain {
+                Some(c) => in_convoy(ledger, c, &ticket).and_then(|()| in_convoy(ledger, c, &other)),
+                None => Ok(()),
+            };
+            let res = res.and_then(|()| link_ticket(ledger, tracker, &ticket, &other, link, on));
+            let _ = reply.send(res.map_err(|e| format!("{e:#}")));
         }
-        Command::EditTicket { ticket, description, reply } => {
-            let _ = reply.send(tracker.edit(&ticket, &description).map_err(|e| format!("{e:#}")));
+        Command::EditTicket { ticket, description, amend, reply } => {
+            let res = match &amend {
+                Some(a) => amend_ticket(ledger, tracker, &ticket, &description, a),
+                None => tracker.edit(&ticket, &description),
+            };
+            let _ = reply.send(res.map_err(|e| format!("{e:#}")));
         }
         Command::CommentTicket { ticket, body, reply } => {
             let _ = reply.send(tracker.comment(&ticket, &body).map_err(|e| format!("{e:#}")));
@@ -641,6 +650,47 @@ fn read_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey) -> Resul
         detail.held = Some(ledger.held_reason(key)?.unwrap_or_default());
     }
     Ok(detail)
+}
+
+/// A captain's amendment of a ticket in its convoy: why, and the escalation case it settles, if any.
+#[derive(Debug, Clone)]
+pub struct Amend {
+    pub captain: ConvoyKey,
+    pub why: String,
+    pub case: Option<CaseId>,
+}
+
+/// A captain changes only its own convoy's tickets: `ticket` must be in `convoy`.
+fn in_convoy(ledger: &Ledger, convoy: &ConvoyKey, ticket: &TicketKey) -> Result<()> {
+    let theirs = TicketRepo::get(ledger, ticket)?.and_then(|t| t.convoy);
+    anyhow::ensure!(
+        theirs.as_ref() == Some(convoy),
+        "{} isn't in convoy {}: a captain changes only its own convoy's tickets — escalate it",
+        ticket.0,
+        convoy.0
+    );
+    Ok(())
+}
+
+/// A captain amends a ticket in its convoy: the description is replaced, and the change goes on the
+/// ticket as a comment (the diff, why, the case it settles) and in the ledger, so the operator can
+/// review it afterwards and reverse it with a ruling.
+fn amend_ticket(ledger: &Ledger, tracker: &dyn Tracker, ticket: &TicketKey, description: &str, a: &Amend) -> Result<()> {
+    in_convoy(ledger, &a.captain, ticket)?;
+    let before = tracker.read(ticket)?.description;
+    tracker.edit(ticket, description)?;
+    let diff = similar::TextDiff::from_lines(before.trim_end(), description.trim_end()).unified_diff().context_radius(2).to_string();
+    let case = a.case.as_ref().map(|c| format!(", case #{}", c.0)).unwrap_or_default();
+    let note = format!("Amended by the captain of convoy {}{case}: {}\n\n```diff\n{}```", a.captain.0, a.why.trim(), diff);
+    tracker.comment(ticket, &note)?;
+    ledger.append(
+        &now_rfc3339(),
+        EventKind::TicketAmended,
+        EntityKind::Ticket,
+        &ticket.0,
+        &serde_json::json!({ "captain": a.captain.0, "case": a.case.as_ref().map(|c| c.0), "why": a.why, "diff": diff }),
+    )?;
+    Ok(())
 }
 
 /// Add or remove a link between two tickets in the tracker. A blocking edge goes into the ledger
@@ -1346,10 +1396,11 @@ mod tests {
     struct FakeTracker {
         tickets: RefCell<Vec<TrackerTicket>>,
         labels: RefCell<Vec<(TicketKey, String)>>,
+        comments: RefCell<Vec<(TicketKey, String)>>,
     }
     impl FakeTracker {
         fn new(tickets: Vec<TrackerTicket>) -> Self {
-            Self { tickets: RefCell::new(tickets), labels: RefCell::new(vec![]) }
+            Self { tickets: RefCell::new(tickets), labels: RefCell::new(vec![]), comments: RefCell::new(vec![]) }
         }
     }
     impl Tracker for FakeTracker {
@@ -1422,9 +1473,37 @@ mod tests {
         fn link(&self, _: &TicketKey, _: &TicketKey, _: domain::TicketLink, _: bool) -> Result<()> {
             Ok(())
         }
-        fn comment(&self, _: &TicketKey, _: &str) -> Result<()> {
+        fn comment(&self, key: &TicketKey, body: &str) -> Result<()> {
+            self.comments.borrow_mut().push((key.clone(), body.into()));
             Ok(())
         }
+    }
+
+    #[test]
+    fn a_captain_changes_only_its_convoys_tickets_and_each_amendment_is_recorded() {
+        let db = Ledger::in_memory().unwrap();
+        let c9 = ConvoyKey("PROJ-9".into());
+        let mut mine = tt("PROJ-1", TicketStatus::Todo);
+        mine.convoy = Some(c9.clone());
+        let mut also = tt("PROJ-2", TicketStatus::Todo);
+        also.convoy = Some(c9.clone());
+        let tracker = FakeTracker::new(vec![mine, also, tt("PROJ-3", TicketStatus::Todo)]);
+        sync::sync_board(&db, &tracker, "now").unwrap();
+        let (one, two, three) = (TicketKey("PROJ-1".into()), TicketKey("PROJ-2".into()), TicketKey("PROJ-3".into()));
+
+        assert!(in_convoy(&db, &c9, &one).is_ok() && in_convoy(&db, &c9, &two).is_ok());
+        let e = in_convoy(&db, &c9, &three).unwrap_err().to_string();
+        assert!(e.contains("isn't in convoy PROJ-9"), "{e}");
+
+        let amend = Amend { captain: c9.clone(), why: "AC2 points at the blocker that owns it; behaviour kept".into(), case: Some(CaseId(12)) };
+        amend_ticket(&db, &tracker, &one, "## ACs\n- AC2: as PROJ-2 delivers it\n", &amend).unwrap();
+        let (on, note) = tracker.comments.borrow()[0].clone();
+        assert_eq!(on, one);
+        assert!(note.starts_with("Amended by the captain of convoy PROJ-9, case #12: AC2 points at"), "{note}");
+        assert!(note.contains("```diff") && note.contains("+- AC2: as PROJ-2 delivers it"), "the diff rides along: {note}");
+        assert_eq!(db.events_of(EventKind::TicketAmended).unwrap().len(), 1);
+        assert!(amend_ticket(&db, &tracker, &three, "x", &amend).is_err(), "outside its convoy: refused");
+        assert_eq!(tracker.comments.borrow().len(), 1, "…before anything is written");
     }
 
     #[test]
