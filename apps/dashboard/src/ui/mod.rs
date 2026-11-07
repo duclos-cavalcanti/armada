@@ -35,7 +35,7 @@ const HELP: &[(&str, &str)] = &[
     ("Tab / S-Tab", "next / previous tab"),
     ("↑↓ ^n^p 1-6", "focus a pane"),
     ("j / k", "row down / up"),
-    ("h / l", "swap a pane for its alternate"),
+    ("h / l", "swap a pane for its alternate (Dispatch: hand orders · Workers: hands)"),
     ("space", "zoom the focused pane"),
     ("y / Y", "yank the pane / the page"),
     ("enter", "switch to the row's tmux session"),
@@ -109,12 +109,25 @@ pub fn plain(lines: impl Iterator<Item = String>) -> (usize, String) {
     (lines.len(), lines.join("\n") + "\n")
 }
 
+/// A peek at the pane hidden behind this one (`h`/`l` swap them): its name and count, so you see
+/// whether it holds anything before you switch. Empty for a pane with no alternate.
+fn peek(app: &App, pane: Pane) -> String {
+    match pane.alternate() {
+        Some(alt) => format!("/ {} ({}) ", alt.peek_label(), app.len(alt)),
+        None => String::new(),
+    }
+}
+
 /// A pane's title, column header (if any), and rows.
 fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<'static>>) {
     let f = &app.fleet;
     match pane {
-        Pane::Dispatched => (
-            format!(" Dispatch · {} orders ", f.dispatched.len()),
+        Pane::Dispatched | Pane::HandOrders => (
+            if pane == Pane::Dispatched {
+                format!(" Dispatch · {} orders {}", app.len(pane), peek(app, pane))
+            } else {
+                format!(" Hand dispatch · {} orders {}", app.len(pane), peek(app, pane))
+            },
             Some(header(&[
                 ("Ticket", 12),
                 ("Crew", 7),
@@ -123,13 +136,13 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 ("Age", 6),
                 ("Waiting on", 0),
             ])),
-            f.dispatched.iter().map(order_row).collect(),
+            app.orders(pane).into_iter().map(order_row).collect(),
         ),
         Pane::Impl | Pane::Hands => (
             if pane == Pane::Impl {
-                format!(" Workers · {} ", f.workers.len())
+                format!(" Workers · {} {}", f.workers.len(), peek(app, pane))
             } else {
-                format!(" Hands · {} ", f.hands.len())
+                format!(" Hands · {} {}", f.hands.len(), peek(app, pane))
             },
             Some(header(&[
                 ("Ticket", 12),

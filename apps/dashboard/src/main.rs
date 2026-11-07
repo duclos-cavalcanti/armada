@@ -71,6 +71,7 @@ impl TabId {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Pane {
     Dispatched,
+    HandOrders,
     Impl,
     Hands,
     Merge,
@@ -83,11 +84,11 @@ pub enum Pane {
 }
 
 impl Pane {
-    const COUNT: usize = 10;
+    const COUNT: usize = 11;
     /// The coordinate the action handler keys on: `tab/pane`.
     fn coordinate(self) -> &'static str {
         match self {
-            Pane::Dispatched => "fleet/dispatched",
+            Pane::Dispatched | Pane::HandOrders => "fleet/dispatched", // one row shape: an order
             Pane::Impl | Pane::Hands => "fleet/impl", // one row shape: a builder
             Pane::Merge => "fleet/merge",
             Pane::Reviews => "fleet/reviews",
@@ -101,9 +102,22 @@ impl Pane {
     /// The pane sharing this one's slot — one shows at a time, `h`/`l` swap them.
     fn alternate(self) -> Option<Pane> {
         match self {
+            Pane::Dispatched => Some(Pane::HandOrders),
+            Pane::HandOrders => Some(Pane::Dispatched),
             Pane::Impl => Some(Pane::Hands),
             Pane::Hands => Some(Pane::Impl),
             _ => None,
+        }
+    }
+
+    /// Its name in the title of the pane it alternates with, beside its count (the peek).
+    pub fn peek_label(self) -> &'static str {
+        match self {
+            Pane::Dispatched => "Dispatch",
+            Pane::HandOrders => "Hand dispatch",
+            Pane::Impl => "Workers",
+            Pane::Hands => "Hands",
+            _ => "",
         }
     }
 }
@@ -179,10 +193,16 @@ impl App {
         self.cursors[pane as usize]
     }
 
-    fn len(&self, pane: Pane) -> usize {
+    /// The orders a dispatch pane lists: every one, or the hand-dispatched (manual) ones only.
+    pub fn orders(&self, pane: Pane) -> Vec<&source::OrderRow> {
+        let hands_only = pane == Pane::HandOrders;
+        self.fleet.dispatched.iter().filter(|o| !hands_only || !o.order.auto_impl).collect()
+    }
+
+    pub fn len(&self, pane: Pane) -> usize {
         let f = &self.fleet;
         match pane {
-            Pane::Dispatched => f.dispatched.len(),
+            Pane::Dispatched | Pane::HandOrders => self.orders(pane).len(),
             Pane::Impl => f.workers.len(),
             Pane::Hands => f.hands.len(),
             Pane::Merge => f.landing.len(),
@@ -214,7 +234,7 @@ impl App {
         let f = &self.fleet;
         let key = |k: Option<&domain::TicketKey>| k.map(|k| k.0.clone()).unwrap_or_default();
         let fields = match pane {
-            Pane::Dispatched => f.dispatched.get(i).map(|o| {
+            Pane::Dispatched | Pane::HandOrders => self.orders(pane).get(i).map(|o| {
                 let crew = if o.order.auto_impl { "worker" } else { "hand" };
                 vec![o.order.ticket.0.clone(), crew.into()]
             }),
