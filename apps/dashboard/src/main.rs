@@ -113,8 +113,8 @@ impl Pane {
     /// Its name in the title of the pane it alternates with, beside its count (the peek).
     pub fn peek_label(self) -> &'static str {
         match self {
-            Pane::Dispatched => "Dispatch",
-            Pane::HandOrders => "Hand dispatch",
+            Pane::Dispatched => "All",
+            Pane::HandOrders => "Hands",
             Pane::Impl => "Workers",
             Pane::Hands => "Hands",
             _ => "",

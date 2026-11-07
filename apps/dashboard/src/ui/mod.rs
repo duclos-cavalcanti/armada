@@ -126,7 +126,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             if pane == Pane::Dispatched {
                 format!(" Dispatch · {} orders {}", app.len(pane), peek(app, pane))
             } else {
-                format!(" Hand dispatch · {} orders {}", app.len(pane), peek(app, pane))
+                format!(" Dispatch · {} hand orders {}", app.len(pane), peek(app, pane))
             },
             Some(header(&[
                 ("Ticket", 12),
