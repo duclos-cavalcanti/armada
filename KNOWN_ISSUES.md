@@ -33,6 +33,16 @@ Accepted edge cases: understood, not fixed, each with its workaround.
   names the failed step; finish it in Jira by hand.
   *Fix:* verify against the live board on the first recall.
 
+- **An admiral finds the project's grooming skill without `FLEET_GROOM_SKILL`.**
+  *Scenario:* `make groom` (and an admiral fleetd convenes) hands the admiral `groom_skill` in
+  `FLEET_GROOM_SKILL`. An admiral opened another way (`claude --agent admiral`) has no such variable,
+  but `admiral.md` names the source (`groom_skill` in fleet.toml), so it reads fleet.toml and runs the
+  project's skill all the same (verified: it answers `/groom-ticket <KEY>` either way). The variable
+  is a delivery, not an opt-in.
+  *Workaround:* to groom with `/fleet-ready-done` alone, leave `groom_skill` out of fleet.toml.
+  *Fix if it bites:* make the variable the only switch — `admiral.md` names `FLEET_GROOM_SKILL` and
+  not fleet.toml — so only `make groom` (or fleetd) brings the project's skill in.
+
 - **A `fleetc` call holding a shell variable goes to auto mode's classifier.**
   *Scenario:* Claude Code matches an allow rule only against a command it can check before it
   runs, so `Bash(fleetc *)` approves `fleetc arm` but not `fleetc arm "$FLEET_TICKET"`. That one
