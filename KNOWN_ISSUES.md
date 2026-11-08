@@ -54,6 +54,25 @@ Accepted edge cases: understood, not fixed, each with its workaround.
   *Workaround:* for a cog already stuck, answer it in its pane ("go, arm it"): your message is the
   explicit intent the classifier accepts.
 
+- **Clients read the ledger directly, not through fleetd.**
+  *Scenario:* fleetd is the single writer, but reads bypass it. The dashboard builds its view from
+  the ledger (`apps/dashboard/src/source.rs`, with `GET /context` only for liveness); `fleetc` opens
+  it read-only for `convoy list|plan`, `inspection`, `escalations`, the recall/decommission preview
+  and `#N` resolution, and reads the telemetry DB for `cost`; `/fleet-convoy-report` and
+  `/fleet-cost-report` query both with SQL. The original plan had the TUIs read through fleetd over
+  `wire` (read parity: "`crew`/`dashboard` read from `fleetd`"); the code went direct, and the kit's
+  conventions now say "reads may be direct (read-only)".
+  *Cost:* every reader is coupled to the storage schema, and the meaning on top of it is re-derived
+  per reader: a ticket's open blockers lives in `scheduler::waiting_on`, `reconcile::open_blockers`
+  and the dashboard's `open_blockers`. Facts only fleetd holds in memory (a cog's liveness) can't
+  be read from the ledger at all, and only a Rust client on the same host can use the `ledger`
+  crate.
+  *Workaround:* none needed today; when changing a derivation, change every copy.
+  *To decide:* whether fleetd serves the views it can derive (as `GET /context?convoy=` does for a captain:
+  e.g. `GET /fleet` for the dashboard) and clients only render them, with direct ledger reads kept
+  for debugging (`fleetc ledger`). Then: which reads move first, whether the TUI migrates, and what
+  of the telemetry DB fleetd serves. Parked with the browser-dashboard idea, which depends on it.
+
 - **`fleetc`'s `import_restores_a_snapshot_and_drops_the_stale_wal` test is flaky.**
   *Scenario:* it builds a throwaway project under the temp dir and binds `.fleet/fleetd.sock`
   there. Two failures seen: (1) with a long `TMPDIR` (a sandboxed agent's), the socket path
