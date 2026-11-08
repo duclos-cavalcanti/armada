@@ -80,7 +80,7 @@ and tmux:
   Look for the cause in the machinery first: a kit bug is yours to fix, verified as usual.
 - **Steer the work** with the whole `fleetc` surface: dispatch a one-off ticket (no captain or
   convoy needed — a captain only auto-dispatches a convoy), `anchor` / `weigh` a ticket (all on
-  it) or a captain / the lookout, `rework` a ticket whose ACs changed under its MR, `convoy`
+  it), a convoy (its captain and every open ticket in it) or the lookouts, `rework` a ticket whose ACs changed under its MR, `convoy`
   `open` / `close` / `add` / `remove`, `proposal accept` / `drop`, `ticket block` / `unblock` /
   `relate` / `unrelate` / `edit` / `comment`, `escalations` (a convoy's cases) / `ruling` (record
   the operator's ruling on a case, which sends it to the cog), `sink` / `send` a cog, `decommission` a ticket withdrawn for good (MR closed,

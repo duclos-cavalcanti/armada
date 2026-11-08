@@ -36,8 +36,8 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc convoy   add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N>   (a ticket joins the convoy — its only one, for a hand with --hand — or an added one leaves)\n  \
      fleetc convoy   list | plan [<KEY>] [--history]   (the active convoys + their open tickets | a convoy's plan; --history: each change as a diff)\n  \
      fleetc anchor   <KEY-N> [--reason <why>]   (hold everything on it: off the frontier, its cogs stopped, its MR disarmed + drafted)\n  \
-     fleetc anchor   --cog <captain|lookout> [--convoy <KEY>]   (stop a ticketless cog; lookout: every one)\n  \
-     fleetc weigh    <KEY-N> | --cog <captain|lookout> [--convoy <KEY>]   (release what anchor held)\n  \
+     fleetc anchor   --convoy <KEY> | --cog lookout   (a convoy: its captain, so nothing new is dispatched, and every open ticket in it, as above; lookout: every one)\n  \
+     fleetc weigh    <KEY-N> | --convoy <KEY> | --cog lookout   (release what anchor held; a convoy: its captain and the tickets its anchor held)\n  \
      fleetc sink     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>|--iid <N>]   (scuttle — hard teardown)\n  \
      fleetc send     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>|--iid <N>] <message>   (message into the cog's pane)\n  \
      fleetc rework   <KEY-N> [--hand]   (its ACs changed: back to a worker — or a hand — in its worktree, on its MR)\n  \
@@ -406,9 +406,13 @@ fn weigh(args: &[String]) -> Result<()> {
     }
 }
 
-/// A `--cog` target for anchor/weigh: a ticketed cog is anchored through its ticket, never alone.
+/// A `--cog` target for anchor/weigh: a ticketed cog is anchored through its ticket, never alone. A
+/// convoy (`--convoy <KEY>`, no `--cog`) is its captain's target: anchoring it holds the captain and
+/// every open ticket in it.
 fn ticketless_target(args: &[String], verb: &str) -> Result<wire::CogTarget> {
-    let target = require_cog_target(args, verb)?;
+    let convoy_only = !args.iter().any(|a| a == "--cog") && args.iter().any(|a| a == "--convoy");
+    let args: Vec<String> = if convoy_only { ["--cog".into(), "captain".into()].into_iter().chain(args.iter().cloned()).collect() } else { args.to_vec() };
+    let target = require_cog_target(&args, verb)?;
     if target.ticket.is_some() {
         bail!("{verb} the ticket, which holds its cog too: fleetc {verb} <KEY-N>");
     }

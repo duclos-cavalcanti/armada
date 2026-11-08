@@ -238,11 +238,15 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let _ = reply.send(res);
         }
         Command::Anchor { target, reply } => {
-            let res = control(ledger, host, Verb::Anchor, &target).map_err(|e| e.to_string());
+            let res = control(ledger, host, Verb::Anchor, &target)
+                .and_then(|()| hold_convoy(ledger, forge, host, &target, true))
+                .map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
         Command::Weigh { target, reply } => {
-            let res = control(ledger, host, Verb::Weigh, &target).map_err(|e| e.to_string());
+            let res = control(ledger, host, Verb::Weigh, &target)
+                .and_then(|()| hold_convoy(ledger, forge, host, &target, false))
+                .map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
         Command::Sink { target, reply } => {
@@ -1099,6 +1103,33 @@ fn control_captain<H: SessionHost>(ledger: &Ledger, host: &H, verb: Verb, convoy
     for s in live_sessions_for(ledger, &ControlTarget::Captain { convoy: convoy.clone() })? {
         signal(ledger, host, verb, &s)?;
     }
+    Ok(())
+}
+
+/// A convoy anchor holds the whole convoy, not only its captain: every open ticket in it is anchored
+/// as `fleetc anchor <KEY>` would (its cogs politely interrupted, its MR disarmed and drafted), with
+/// the convoy's reason. Its weigh releases exactly those: a ticket already anchored for a reason of
+/// its own is left as it is, either way. Best-effort per ticket: one that fails is named, the rest
+/// still hold. A no-op for any target but a captain.
+fn hold_convoy<H: SessionHost>(ledger: &Ledger, forge: &dyn Forge, host: &H, target: &ControlTarget, anchor: bool) -> Result<()> {
+    let ControlTarget::Captain { convoy } = target else { return Ok(()) };
+    let reason = format!("convoy {} anchored", convoy.0);
+    let mut failed = Vec::new();
+    for t in TicketRepo::board(ledger)?.into_iter().filter(|t| t.convoy.as_ref() == Some(convoy)) {
+        if matches!(t.status, Some(TicketStatus::Done) | Some(TicketStatus::Cancelled)) {
+            continue;
+        }
+        let ours = ledger.held_reason(&t.key)?.as_deref() == Some(reason.as_str());
+        // Anchor what isn't held yet; weigh only what this anchor held.
+        let ours_to_move = if anchor { !t.held } else { t.held && ours };
+        if !ours_to_move {
+            continue;
+        }
+        if let Err(e) = anchor_ticket(ledger, forge, host, &t.key, anchor, anchor.then_some(reason.as_str())) {
+            failed.push(format!("{}: {e:#}", t.key.0));
+        }
+    }
+    anyhow::ensure!(failed.is_empty(), "{} — the convoy's other tickets are {}", failed.join("; "), if anchor { "anchored" } else { "weighed" });
     Ok(())
 }
 
@@ -2097,6 +2128,73 @@ mod tests {
             reconcile::plan(&db, &[], true, &LEVERS).unwrap(),
             vec![reconcile::Action::Spawn { ticket: "PROJ-1".into(), kind: "hand".into() }]
         );
+    }
+
+    #[test]
+    fn a_convoy_anchor_holds_its_captain_and_open_tickets_and_its_weigh_releases_just_those() {
+        let db = Ledger::in_memory().unwrap();
+        let c9 = ConvoyKey("PROJ-9".into());
+        let in_c9 = |key: &str, status| TrackerTicket { convoy: Some(c9.clone()), ..tt(key, status) };
+        let tracker = FakeTracker::new(vec![
+            in_c9("PROJ-1", TicketStatus::InQa),
+            in_c9("PROJ-2", TicketStatus::Todo),
+            in_c9("PROJ-3", TicketStatus::Done),
+            tt("PROJ-4", TicketStatus::InQa),
+        ]);
+        sync::sync_board(&db, &tracker, "now").unwrap();
+        ConvoyRepo::open(&db, &c9, None, "t").unwrap();
+        let (one, two, three, four) =
+            (TicketKey("PROJ-1".into()), TicketKey("PROJ-2".into()), TicketKey("PROJ-3".into()), TicketKey("PROJ-4".into()));
+        TicketRepo::set_held(&db, &two, true, Some("not Ready: AC2 unclear"), "t").unwrap(); // held already, its own reason
+        let ship = Ship {
+            id: ShipId(0),
+            ticket: Some(one.clone()),
+            iid: 7,
+            url: "u".into(),
+            target: "master".into(),
+            source: String::new(),
+            pilot: "me".into(),
+            created_at: "t".into(),
+            ended_at: None,
+            swept: None,
+            reviewed: None,
+            rounds: 0,
+        };
+        ShipRepo::upsert(&db, &ship).unwrap();
+        let sailor = Session {
+            id: SessionId(0),
+            kind: CrewKind::Sailor,
+            ticket: Some(one.clone()),
+            convoy: None,
+            worktree_path: "/wt".into(),
+            tmux_session: "sailor-PROJ-1".into(),
+            harness_session_id: None,
+            created_at: "t".into(),
+            ended_at: None,
+            anchored_at: None,
+            ship: None,
+        };
+        let sid = SessionRepo::start(&db, &sailor).unwrap().unwrap();
+        let (forge, host) = (FakeForge::default(), FakeHost::new());
+        let held = |k: &TicketKey| TicketRepo::get(&db, k).unwrap().unwrap().held;
+        let target = ControlTarget::Captain { convoy: c9.clone() };
+
+        control(&db, &host, Verb::Anchor, &target).unwrap();
+        hold_convoy(&db, &forge, &host, &target, true).unwrap();
+        assert!(ConvoyRepo::active(&db).unwrap()[0].anchored_at.is_some(), "its captain is held: nothing new dispatched");
+        assert!(held(&one) && db.held_reason(&one).unwrap().as_deref() == Some("convoy PROJ-9 anchored"));
+        assert!(SessionRepo::get(&db, &sid).unwrap().unwrap().anchored_at.is_some(), "its sailor interrupted, not killed");
+        assert!(SessionRepo::get(&db, &sid).unwrap().unwrap().ended_at.is_none());
+        assert_eq!((forge.disarmed.borrow().clone(), forge.drafted.borrow().clone()), (vec![7], vec![(7, true)]), "its MR drafted");
+        assert_eq!(db.held_reason(&two).unwrap().as_deref(), Some("not Ready: AC2 unclear"), "its own hold kept");
+        assert!(!held(&three) && !held(&four), "a Done ticket, and one outside the convoy, untouched");
+
+        control(&db, &host, Verb::Weigh, &target).unwrap();
+        hold_convoy(&db, &forge, &host, &target, false).unwrap();
+        assert!(ConvoyRepo::active(&db).unwrap()[0].anchored_at.is_none());
+        assert!(!held(&one) && SessionRepo::get(&db, &sid).unwrap().unwrap().anchored_at.is_none(), "released, its sailor resumed");
+        assert_eq!(forge.drafted.borrow().last(), Some(&(7, false)), "its MR ready again (In QA)");
+        assert!(held(&two), "a hold of its own outlives the convoy's weigh");
     }
 
     #[test]
