@@ -18,8 +18,8 @@ One page on what the fleet has spent, from the telemetry fleetd collects off eve
 ${CLAUDE_SKILL_DIR}/scripts/report.sh projects/<p> [--since <YYYY-MM-DD|RFC3339>] [<out.html>]
 ```
 
-It prints the page's path (default `projects/<p>/exports/cost-<UTC stamp>.html`), then the
-headline figures as JSON. Open the page (`open <path>`).
+It prints the page's path (default `projects/<p>/exports/fleet-spend_<UTC date>.html`; a second
+run that day replaces it), then the headline figures as JSON. Open the page (`open <path>`).
 
 - `scripts/cost.sql` is every figure, as one JSON object: the telemetry DB read-only, with the
   ledger attached read-only for each ticket's convoy, title and status.

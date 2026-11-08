@@ -30,7 +30,7 @@ main() {
 
   if [[ -z $out ]]; then
     mkdir -p "$proj/exports"
-    out="$proj/exports/cost-$(date -u +%Y%m%dT%H%M%SZ).html"
+    out="$proj/exports/fleet-spend_$(date -u +%Y-%m-%d).html"
   fi
   # `</` escaped so no ticket text can close the data's <script>; ENVIRON, as `awk -v` unescapes.
   DATA=${data//<\//<\\/} awk '$0 == "__DATA__" { print ENVIRON["DATA"]; next } { print }' \

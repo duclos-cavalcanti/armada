@@ -29,7 +29,9 @@ main() {
 
   if [[ -z $out ]]; then
     mkdir -p "$proj/exports"
-    out="$proj/exports/convoy-$(jq -r '.convoy.no // .convoy.key' <<<"$data")-$(date -u +%Y%m%dT%H%M%SZ).html"
+    # <convoy title>_<UTC date>.html, the title made a file name: lowercase, hyphenated.
+    out="$proj/exports/$(jq -r '.convoy.title // .convoy.key' <<<"$data" | tr '[:upper:]' '[:lower:]' \
+          | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')_$(date -u +%Y-%m-%d).html"
   fi
   # `</` escaped so no ticket text can close the data's <script>; ENVIRON, as `awk -v` unescapes.
   DATA=${data//<\//<\\/} awk '$0 == "__DATA__" { print ENVIRON["DATA"]; next } { print }' \
