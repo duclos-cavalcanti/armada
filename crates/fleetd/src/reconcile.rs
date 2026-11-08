@@ -1437,9 +1437,10 @@ fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, tick
         .and_then(|o| o.worktree_path)
         .map(|wt| format!(" --add-dir '{}'", wt.replace('\'', r"'\''")))
         .unwrap_or_default();
-    // The key is `<PREFIX>-<n>`-validated, so the quoted order is shell-safe.
+    // The key is `<PREFIX>-<n>`-validated, so the quoted order is shell-safe. `--` ends the options:
+    // `--add-dir` takes a list, and would swallow the order as a second directory.
     let env = skill_env(skills);
-    let cmd = format!("{env}{}{add_dir} 'Rule on the confirmed escalation of {ticket}.'", launch_cmd("admiral", Launch::Fresh(&hid)));
+    let cmd = format!("{env}{}{add_dir} -- 'Rule on the confirmed escalation of {ticket}.'", launch_cmd("admiral", Launch::Fresh(&hid)));
     host.spawn(&tmux_session, Path::new(project), &cmd)?;
     ledger.append(
         &now_rfc3339(),
@@ -3662,7 +3663,7 @@ mod tests {
         launch_admiral(&db, &host, "/project", "PROJ-1", &[]).unwrap();
         let (name, cwd, cmd) = host.spawned.borrow()[0].clone();
         assert_eq!((name.as_str(), cwd.as_str()), ("admiral-PROJ-1", "/project"));
-        assert!(cmd.contains("--agent admiral 'Rule on the confirmed escalation of PROJ-1.'"), "{cmd}");
+        assert!(cmd.contains("--agent admiral -- 'Rule on the confirmed escalation of PROJ-1.'"), "{cmd}");
         assert!(!cmd.contains("FLEET_TICKET"), "an admiral isn't a cog: {cmd}");
         assert!(!cmd.contains("FLEET_GROOM_SKILL"), "no grooming skill named: {cmd}");
 
@@ -3684,7 +3685,7 @@ mod tests {
         launch_admiral(&db, &host, "/project", "PROJ-1", &[]).unwrap();
         let (_, cwd, cmd) = host.spawned.borrow()[0].clone();
         assert_eq!(cwd, "/project", "its cwd stays the checkout");
-        assert!(cmd.contains(r"--add-dir '/wt/chore-PROJ-1-it'\''s' 'Rule on"), "{cmd}");
+        assert!(cmd.contains(r"--add-dir '/wt/chore-PROJ-1-it'\''s' -- 'Rule on"), "the order follows `--`, not taken as a directory: {cmd}");
     }
 
     #[test]

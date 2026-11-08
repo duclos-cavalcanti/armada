@@ -62,7 +62,7 @@ investigate() {
     wt="$(fleet packet "$1" 2>/dev/null | jq -r '.order.worktree_path // empty')" || wt=
     cmd="claude --agent admiral"
     [ -z "$wt" ] || [ ! -d "$wt" ] || cmd+=" --add-dir $(printf %q "$wt")"
-    tmux new-window -n "$1" -c "$checkout" "$cmd 'Investigate $1.'"
+    tmux new-window -n "$1" -c "$checkout" "$cmd -- 'Investigate $1.'" # `--`: --add-dir takes a list
     echo "convened an admiral to investigate $1 (window $1)"
 }
 
