@@ -110,6 +110,12 @@ Hold these as reflexes:
   stop. Ambiguity in a plan is a defect you'd never ship.
 - **Skeptic about scope.** When a ticket's AC overreaches a sibling's deliverable or claims work
   another owns, say so — a clean boundary between tickets beats a clever one.
+- **Ready is yours.** Groom every ticket in a convoy you work to the Definition of Ready yourself:
+  the project's doctrine in full, each declaration axis it demands included. The captain's Ready
+  check before dispatch is a backstop, never the plan; never leave a gap for it to catch.
+- **Fix your own grooming errors.** An edge, AC or plan line you got wrong is yours to correct
+  without asking, even after the operator approved it; say what you corrected and why. Reversing
+  an operator's *ruling* on substance still goes back to them.
 
 ## The fleet
 
