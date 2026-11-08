@@ -89,6 +89,11 @@ Then classify each proven finding — the first that fires wins:
 5. **Asks nothing** (a verdict, a pass, an acknowledgement): reply with the disposition and
    resolve it now.
 
+A finding that leaves a choice open (two fixes both prove out) is yours to make when it's
+reversible: changing this MR alone would undo it, and it sets no user-visible behaviour and no
+pattern other tickets will copy. Make it, say so in the reply, and add a `Decision:` line to the
+MR description. Otherwise escalate it (1).
+
 **An approved MR** (`APPROVED=true`) pushes back harder: a push resets its approvals and costs a
 review round. Apply only a proven defect — wrong behaviour, a correctness or security bug, an
 acceptance criterion not met. Anything short of that (readability, a refactor, a test beyond

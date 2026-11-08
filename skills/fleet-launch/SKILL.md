@@ -67,7 +67,8 @@ The ticket key in the title links the MR to its ticket.
 
 ## Scope Decisions
 
-<What was intentionally not addressed, and why.>
+<What was intentionally not addressed, and why. Then every choice the ticket left open that you
+made, one line each: `Decision: <the choice> — <why>`; keep the ones already there.>
 
 ## Testing
 

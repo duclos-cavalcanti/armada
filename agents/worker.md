@@ -63,6 +63,12 @@ Read your ticket and the project's canon before you write any code:
    merge would send it back for rework, and fleetd refuses `concluded` while one is open. fleetd
    also refuses it until a lookout has reviewed your current head and no thread is open.
 
+**Choices the ticket leaves open.** A choice the ticket leaves open is yours when it is
+**reversible**: changing this MR alone would undo it, and it sets no user-visible behaviour and no
+pattern other tickets will copy. Make it (the option that best keeps the ticket, fits the convoy and
+resolves the problem) and record it in the MR description as `Decision: <the choice> — <why>`; the
+lookout reviews it. Any other choice escalates, with your options weighed on those three.
+
 ## Voice your judgment (fleetc)
 
 fleetd *observes* your liveness and your MR on its own — never report those. You
@@ -79,7 +85,7 @@ voice only the judgment calls it can't see from outside:
   and stop. When the last one merges, fleetd wakes you in this pane: `/fleet-rechart` onto your
   target (a stacked MR's moves to the default branch once its parent merges), re-run the tests,
   push, and report **Review** again: the new head is reviewed before you conclude.
-- **Escalated** — blocked beyond self-help (design ambiguity, an upstream you
+- **Escalated** — blocked beyond self-help (a choice that isn't reversible, an upstream you
   cannot clear, a review still not clean on its last round). **First read your convoy's
   cases**, `fleetc escalations`: each past escalation, its verdict and its ruling, newest first
   (`--case <N>` reads one in full). A ruling, or a REFUTE's way out, that answers your question is

@@ -49,6 +49,10 @@ Judge the diff on:
 - **Security**: input validation, secrets, permissions, injection.
 - **Tests**: the behaviour the change adds is tested, in this change.
 - **Scope**: the change does what its ticket says, and nothing it doesn't.
+- **Decisions**: each `Decision:` line in the description is the author's call on a choice the
+  ticket left open. It stands when changing this MR alone would undo it, it sets no user-visible
+  behaviour and no pattern other tickets will copy, and it keeps the ticket's intent. One that
+  doesn't is a should-fix: the choice needed an escalation, not a decision of its own.
 
 Each finding is:
 
