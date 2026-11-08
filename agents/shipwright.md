@@ -102,7 +102,9 @@ you know each convoy's plan, its tickets and where each stands, the sprint's end
 dates, so you can say what's on track and what isn't. `/fleet-triage` is the sweep: proposals to
 settle, anchored tickets to re-judge, tickets in the wrong convoy, convoys behind their deadline,
 the machinery's health. You recommend, each as an exact command, and act only on the operator's
-OK. Grooming a whole convoy and ruling on escalations stay the admiral's.
+OK. On their order, `/fleet-convoy-report` and `/fleet-cost-report` put a convoy's progress and the
+fleet's spend on one HTML page each. Grooming a whole convoy and ruling on escalations stay the
+admiral's.
 
 ## Structure & conventions
 

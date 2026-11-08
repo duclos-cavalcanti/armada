@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet spend</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10);
+  /* roles: categorical slots 1–7 in documented order (validated, light + dark) */
+  --worker: #2a78d6; --sailor: #eb6834; --lookout: #1baf7a; --captain: #eda100;
+  --admiral: #e87ba4; --hand: #008300; --interactive: #6250d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+    --worker: #3987e5; --sailor: #d95926; --lookout: #199e70; --captain: #c98500;
+    --admiral: #d55181; --hand: #008300; --interactive: #9085e9;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink);
+       font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1040px; margin: 0 auto; padding: 32px 24px 48px; }
+h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
+h2 { font-size: 15px; margin: 0; font-weight: 600; }
+.sub { color: var(--ink-2); margin: 0; }
+.note { color: var(--muted); font-size: 12px; margin: 4px 0 12px; }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 20px; margin-top: 16px; }
+.hero-num { font-size: 56px; font-weight: 600; line-height: 1; }
+.hero-num small { font-size: 16px; font-weight: 400; color: var(--ink-2); margin-left: 8px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 12px 14px; }
+.tile b { display: block; font-size: 24px; font-weight: 600; }
+.tile span { color: var(--ink-2); font-size: 12px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--ink-2); font-size: 13px; margin-top: 20px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+/* columns: daily spend */
+.cols { position: relative; height: 220px; margin: 24px 0 0 44px; border-bottom: 1px solid var(--axis); }
+.cols .gl { position: absolute; left: 0; right: 0; border-top: 1px solid var(--grid); }
+.cols .gl span { position: absolute; left: -44px; top: -8px; width: 38px; text-align: right; font-size: 11px;
+                 color: var(--muted); font-variant-numeric: tabular-nums; }
+.cols .row { position: absolute; inset: 0; display: flex; align-items: flex-end; }
+.cols .slot { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; }
+.cols .stack { width: min(24px, 70%); display: flex; flex-direction: column-reverse; gap: 2px; }
+.cols .stack div:last-child { border-radius: 4px 4px 0 0; }
+.cols .cap { font-size: 11px; color: var(--ink-2); margin-bottom: 3px; white-space: nowrap; }
+.xlab { display: flex; margin-left: 44px; }
+.xlab span { flex: 1; text-align: center; font-size: 11px; color: var(--muted); white-space: nowrap; }
+/* horizontal bars: role, convoy, ticket */
+.hb { display: grid; grid-template-columns: minmax(160px, 34%) 1fr 92px; gap: 8px 12px; align-items: center; }
+.hb .lab { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hb .lab small { color: var(--muted); margin-left: 4px; }
+.hb .track { display: flex; gap: 2px; height: 18px; }
+.hb .track div:last-child { border-radius: 0 4px 4px 0; }
+.hb .val { text-align: right; font-size: 13px; font-variant-numeric: tabular-nums; }
+.hb .val small { display: block; color: var(--muted); font-size: 11px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+tr:last-child td { border-bottom: 0; }
+details { margin-top: 12px; }
+summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.two .card { margin-top: 16px; }
+@media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+#tip { position: fixed; pointer-events: none; display: none; background: var(--ink); color: var(--page);
+       font-size: 12px; padding: 5px 8px; border-radius: 6px; white-space: pre; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<div id="tip"></div>
+<script id="data" type="application/json">
+__DATA__
+</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const ROLES = ['worker', 'sailor', 'lookout', 'captain', 'admiral', 'hand', 'interactive']; // slot order: color follows the role
+const h = (tag, attrs = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k === 'style' ? e.style.cssText = v : e.setAttribute(k, v);
+  for (const k of kids.flat(Infinity)) if (k != null && k !== false) e.append(k.nodeType ? k : String(k));
+  return e;
+};
+const usd = v => v >= 100 ? `$${Math.round(v).toLocaleString('en-US')}` : `$${v.toFixed(2)}`;
+const pct = (a, b) => b ? `${Math.round(100 * a / b)}%` : '—';
+const num = v => v >= 1e9 ? `${(v / 1e9).toFixed(1)}B` : v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e3 ? `${(v / 1e3).toFixed(1)}K` : String(v);
+const sum = a => a.reduce((s, x) => s + x, 0);
+const roleTip = (label, segs) => [label, ...ROLES.filter(r => segs[r]).map(r => `${r}  ${usd(segs[r])}`)].join('\n');
+
+// Long rows ({key, role, usd}) → one row per key with its spend per role, biggest first.
+const pivot = (rows, keyOf, meta = () => ({})) => {
+  const m = new Map();
+  for (const r of rows) {
+    const k = keyOf(r);
+    if (!m.has(k)) m.set(k, { key: k, segs: {}, total: 0, ...meta(r) });
+    const e = m.get(k);
+    e.segs[r.role] = (e.segs[r.role] || 0) + r.usd;
+    e.total += r.usd;
+  }
+  return [...m.values()];
+};
+const segsOf = segs => ROLES.filter(r => segs[r] > 0);
+const twin = rows => h('details', {}, h('summary', {}, 'Table'), h('table', {},
+  h('tr', {}, h('th', {}, ''), ROLES.map(r => h('th', {}, r)), h('th', {}, 'total')),
+  rows.map(r => h('tr', {}, h('td', {}, r.label), ROLES.map(x => h('td', {}, r.segs[x] ? usd(r.segs[x]) : '')), h('td', {}, usd(r.total))))));
+
+// Horizontal stacked bars; each row: {label, note, segs, total, side}.
+const hbars = rows => {
+  const max = Math.max(...rows.map(r => r.total), 1e-9);
+  return h('div', { class: 'hb' }, rows.map(r => [
+    h('div', { class: 'lab', title: r.label }, r.label, r.note ? h('small', {}, r.note) : null),
+    h('div', { class: 'track', style: `width:${100 * r.total / max}%`, 'data-tip': roleTip(`${r.label} · ${usd(r.total)}`, r.segs) },
+      segsOf(r.segs).map(x => h('div', { style: `flex:${r.segs[x]};background:var(--${x})` }))),
+    h('div', { class: 'val' }, usd(r.total), r.side ? h('small', {}, r.side) : null),
+  ]));
+};
+
+// Daily spend: stacked columns, peak and latest labelled.
+const columns = days => {
+  const max = Math.max(...days.map(d => d.total), 1e-9);
+  const step = 10 ** Math.floor(Math.log10(max)), tick = [1, 2, 5, 10].map(m => m * step).find(t => max / t <= 4);
+  const top = Math.ceil(max / tick) * tick, peak = days.reduce((a, d) => d.total > a.total ? d : a, days[0]);
+  const every = Math.ceil(days.length / 14);
+  return [
+    h('div', { class: 'cols' },
+      Array.from({ length: Math.round(top / tick) + 1 }, (_, i) =>
+        h('div', { class: 'gl', style: `bottom:${100 * i * tick / top}%` }, h('span', {}, usd(i * tick)))),
+      h('div', { class: 'row' }, days.map((d, i) => h('div', { class: 'slot', 'data-tip': roleTip(`${d.label} · ${usd(d.total)}`, d.segs) },
+        d === peak || i === days.length - 1 ? h('div', { class: 'cap' }, usd(d.total)) : null,
+        h('div', { class: 'stack', style: `height:${100 * d.total / top}%` },
+          segsOf(d.segs).map(x => h('div', { style: `flex:${d.segs[x]};background:var(--${x})` }))))))),
+    h('div', { class: 'xlab' }, days.map((d, i) => h('span', {}, i % every ? '' : d.label.slice(5)))),
+  ];
+};
+
+const card = (title, note, ...body) => h('div', { class: 'card' }, h('h2', {}, title), h('p', { class: 'note' }, note), body);
+const day = s => s ? s.slice(0, 10) : '—';
+const t = D.tokens, inTok = (t.input || 0) + (t.cache_read || 0) + (t.cache_write || 0);
+const spent = new Map(pivot(D.by_day, r => r.day).map(r => [r.key, r]));
+const days = []; // every UTC day of the window, a day with no spend as an empty column
+for (let d = new Date(day(D.first)); D.first && d <= new Date(day(D.last)); d.setUTCDate(d.getUTCDate() + 1)) {
+  const k = d.toISOString().slice(0, 10);
+  days.push({ key: k, segs: {}, total: 0, ...spent.get(k), label: k });
+}
+const roles = D.by_role.map(r => ({ label: r.role, segs: { [r.role]: r.usd }, total: r.usd, side: `${pct(r.usd, D.usd)} · ${num(r.requests)} req` }));
+const convoys = pivot(D.by_convoy, r => r.convoy, r => ({ no: r.no, title: r.title }))
+  .map(r => ({ ...r, label: r.key ? `#${r.no} ${r.title || r.key}` : 'Outside the convoys', note: r.key, side: pct(r.total, D.usd) }))
+  .sort((a, b) => (a.key == null) - (b.key == null) || b.total - a.total);
+const tickets = pivot(D.by_ticket, r => r.ticket, r => ({ title: r.title, status: r.status }))
+  .map(r => ({ ...r, label: `${r.key} ${r.title || ''}`, side: r.status || '' }))
+  .sort((a, b) => b.total - a.total);
+
+document.title = `Fleet spend · ${D.project}`;
+document.getElementById('app').append(...[
+  h('h1', {}, `Fleet spend · ${D.project}`),
+  h('p', { class: 'sub' }, `${D.since ? `since ${D.since}` : 'all time'} · ${day(D.first)} → ${day(D.last)} (${D.days} active days)`,
+    ` · report ${D.generated.replace('T', ' ').slice(0, 16)} UTC`),
+  h('div', { class: 'card' },
+    h('div', { class: 'hero-num' }, usd(D.usd), h('small', {}, `${num(D.requests)} requests · ${D.sessions} sessions`))),
+  h('div', { class: 'tiles' }, [
+    [usd(D.last_24h), 'Last 24 h'], [usd(D.last_7d), 'Last 7 days'], [usd(D.days ? D.usd / D.days : 0), 'Per active day'],
+    [D.done.tickets ? usd(D.done.usd / D.done.tickets) : '—', `Per Done ticket (${D.done.tickets})`],
+    [pct(t.cache_read || 0, inTok), 'Input read from cache'],
+  ].map(([v, l]) => h('div', { class: 'tile' }, h('b', {}, v), h('span', {}, l)))),
+  h('div', { class: 'legend' }, ROLES.filter(r => D.by_role.some(x => x.role === r)).map(r => h('span', {}, h('i', { class: 'sw', style: `background:var(--${r})` }), r))),
+  card('1) Daily spend', 'USD per UTC day, by role', days.length ? columns(days) : 'No spend in the window.', twin(days)),
+  card('2) By role', 'USD, share of the total, API requests', hbars(roles)),
+  card('3) By convoy', 'USD by role; a ticket counts to the convoy it sails in, a captain to its own', hbars(convoys), twin(convoys)),
+  card('4) Top tickets', `The ${tickets.length} costliest tickets, USD by role, with their status`, hbars(tickets), twin(tickets)),
+  h('div', { class: 'two' },
+    card('By model', 'USD and API requests', h('table', {}, h('tr', {}, h('th', {}, 'model'), h('th', {}, 'USD'), h('th', {}, 'share'), h('th', {}, 'requests')),
+      D.by_model.map(m => h('tr', {}, h('td', {}, m.model), h('td', {}, usd(m.usd)), h('td', {}, pct(m.usd, D.usd)), h('td', {}, num(m.requests)))))),
+    card('Tokens', 'By type, over every request', h('table', {}, h('tr', {}, h('th', {}, 'type'), h('th', {}, 'tokens'), h('th', {}, 'share')),
+      [['input', t.input], ['cache read', t.cache_read], ['cache write', t.cache_write], ['output', t.output]]
+        .map(([k, v]) => h('tr', {}, h('td', {}, k), h('td', {}, num(v || 0)), h('td', {}, pct(v || 0, inTok + (t.output || 0)))))))),
+].flat(Infinity).filter(Boolean));
+
+const tip = document.getElementById('tip');
+document.addEventListener('mousemove', e => {
+  const el = e.target.closest('[data-tip]');
+  tip.style.display = el ? 'block' : 'none';
+  if (el) { tip.textContent = el.dataset.tip; tip.style.left = `${e.clientX + 12}px`; tip.style.top = `${e.clientY + 12}px`; }
+});
+</script>
+</body>
+</html>

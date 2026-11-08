@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Convoy report</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --ring: rgba(11,11,11,0.10);
+  /* stages: one blue ramp, light → dark as a ticket moves down the line (validated --ordinal) */
+  --todo: #86b6ef; --progress: #5598e7; --qa: #256abf; --done: #184f95;
+  --warning: #fab219; --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --ring: rgba(255,255,255,0.10);
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink);
+       font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1040px; margin: 0 auto; padding: 32px 24px 48px; }
+h1 { font-size: 22px; margin: 0 0 4px; font-weight: 600; }
+h2 { font-size: 15px; margin: 32px 0 8px; font-weight: 600; }
+.sub { color: var(--ink-2); margin: 0; }
+.note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 20px; }
+.hero { margin-top: 20px; }
+.hero-num { font-size: 56px; font-weight: 600; line-height: 1; }
+.hero-num small { font-size: 16px; font-weight: 400; color: var(--ink-2); margin-left: 8px; }
+.bar { display: flex; gap: 2px; height: 24px; margin: 18px 0 10px; }
+.bar > div { min-width: 2px; display: flex; align-items: center; justify-content: center;
+             font-size: 12px; font-weight: 600; cursor: default; }
+.bar > div:first-child { border-radius: 4px 0 0 4px; }
+.bar > div:last-child { border-radius: 0 4px 4px 0; }
+.bar > div:only-child { border-radius: 4px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--ink-2); font-size: 13px; }
+.legend i, .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; margin-top: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 12px 14px; }
+.tile b { display: block; font-size: 26px; font-weight: 600; }
+.tile span { color: var(--ink-2); font-size: 12px; }
+table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--ring);
+        border-radius: 10px; overflow: hidden; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+tr:last-child td { border-bottom: 0; }
+td.key, .nowrap { white-space: nowrap; }
+a { color: inherit; text-decoration-color: var(--muted); text-underline-offset: 2px; }
+.pill { display: inline-block; white-space: nowrap; font-size: 12px; padding: 1px 8px; margin: 1px 4px 1px 0;
+        border: 1px solid var(--ring); border-radius: 999px; color: var(--ink-2); }
+.pill .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+.why { color: var(--ink-2); font-size: 13px; }
+details { margin-top: 32px; }
+summary { cursor: pointer; font-weight: 600; }
+pre { white-space: pre-wrap; background: var(--surface); border: 1px solid var(--ring); border-radius: 10px;
+      padding: 14px; font-size: 12.5px; }
+#tip { position: fixed; pointer-events: none; display: none; background: var(--ink); color: var(--page);
+       font-size: 12px; padding: 5px 8px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<div id="tip"></div>
+<script id="data" type="application/json">
+__DATA__
+</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const STAGES = [ // line order; ink inside a fill by its luminance
+  { id: 'done', label: 'Done', ink: '#fff' }, { id: 'qa', label: 'In QA', ink: '#fff' },
+  { id: 'progress', label: 'In progress', ink: '#0b0b0b' }, { id: 'todo', label: 'To do', ink: '#0b0b0b' },
+];
+const label = id => STAGES.find(s => s.id === id).label;
+const h = (tag, attrs = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k === 'style' ? e.style.cssText = v : e.setAttribute(k, v);
+  for (const k of kids.flat(Infinity)) if (k != null && k !== false) e.append(k.nodeType ? k : String(k));
+  return e;
+};
+const link = (text, href) => href ? h('a', { href, target: '_blank' }, text) : text;
+const ticketLink = key => link(key, D.ticket_url && D.ticket_url.split('{key}').join(key));
+const ticket = t => ticketLink(t.key);
+const mr = t => t.mr ? link(`!${t.mr.iid}`, t.mr.url) : '—';
+const mrCell = t => t.mr ? [mr(t), ' ', h('span', { class: 'why' }, t.mr.state)] : '—';
+const stageCell = t => h('span', { class: 'nowrap' }, h('i', { class: 'sw', style: `background:var(--${t.stage})` }), label(t.stage));
+const pill = (text, dot) => h('span', { class: 'pill' }, dot ? h('span', { class: 'dot', style: `background:var(--${dot})` }) : null, text);
+const flags = t => [
+  t.blocked && t.stage !== 'done' ? pill('▲ blocked', 'warning') : null,
+  t.escalated ? pill('✕ escalated', 'critical') : null,
+  t.held != null && t.stage !== 'done' ? pill('⚓ anchored') : null,
+  t.manual ? pill('✋ by hand') : null,
+];
+const table = (cols, rows) => h('table', {},
+  h('thead', {}, h('tr', {}, cols.map(c => h('th', {}, c[0])))),
+  h('tbody', {}, rows.map(r => h('tr', {}, cols.map(c => h('td', c[0] === 'Ticket' ? { class: 'key' } : {}, c[1](r)))))));
+const section = (title, rows, cols) => rows.length ? [h('h2', {}, `${title} (${rows.length})`), table(cols, rows)] : [];
+const day = s => s ? s.slice(0, 10) : '';
+const days = s => Math.max(0, Math.round((Date.parse(D.generated) - Date.parse(s)) / 864e5));
+
+const c = D.convoy, n = D.total, k = D.counts;
+const order = Object.fromEntries(['qa', 'progress', 'todo', 'done'].map((s, i) => [s, i]));
+const byLine = [...D.tickets].sort((a, b) => order[a.stage] - order[b.stage] || a.key.localeCompare(b.key));
+const open = byLine.filter(t => t.stage !== 'done');
+document.title = `#${c.no ?? '?'} ${c.title ?? c.key} · convoy report`;
+
+const bar = h('div', { class: 'bar', role: 'img', 'aria-label': STAGES.map(s => `${s.label} ${k[s.id]}`).join(', ') },
+  STAGES.filter(s => k[s.id]).map(s => h('div', {
+    style: `flex:${k[s.id]};background:var(--${s.id});color:${s.ink}`,
+    'data-tip': `${s.label} · ${k[s.id]} of ${n} (${Math.round(100 * k[s.id] / n)}%)`,
+  }, 100 * k[s.id] / n >= 6 ? k[s.id] : '')));
+
+document.getElementById('app').append(...[
+  h('h1', {}, `#${c.no ?? '?'} ${c.key} · ${c.title ?? ''}`),
+  h('p', { class: 'sub' }, `${D.project} · opened ${day(c.opened)} (${days(c.opened)} days)`,
+    c.closed ? ` · closed ${day(c.closed)}` : '', ` · report ${D.generated.replace('T', ' ').slice(0, 16)} UTC`),
+  h('div', { class: 'card hero' },
+    h('div', { class: 'hero-num' }, `${D.grade}%`, h('small', {}, `moved · ${k.done} of ${n} done`)),
+    n ? bar : h('p', { class: 'note' }, 'No tickets.'),
+    h('div', { class: 'legend' }, STAGES.map(s => h('span', {}, h('i', { style: `background:var(--${s.id})` }), `${s.label} ${k[s.id]}`))),
+    h('p', { class: 'note' }, `Moved: each ticket weighs by its stage (To do 0 · In progress ⅓ · In QA ⅔ · Done 1), averaged.`,
+      D.cancelled ? ` ${D.cancelled} cancelled left out.` : '')),
+  h('div', { class: 'tiles' }, [
+    ['Tickets', n], ['Done', k.done], ['In QA', k.qa], ['In progress', k.progress], ['To do', k.todo],
+    ['Blocked', k.blocked], ['Anchored', k.anchored], ['By hand', k.manual],
+  ].map(([l, v]) => h('div', { class: 'tile' }, h('b', {}, v), h('span', {}, l)))),
+  section('Blocked', open.filter(t => t.blocked), [
+    ['Ticket', ticket], ['Title', t => t.title], ['Stage', stageCell],
+    ['Waiting on', t => t.blocked_by.length ? t.blocked_by.map(b => [pill(ticketLink(b)), ' ']) : t.status],
+  ]),
+  section('By hand', byLine.filter(t => t.manual), [
+    ['Ticket', ticket], ['Title', t => t.title], ['Stage', stageCell], ['MR', mrCell],
+  ]),
+  section('Anchored', open.filter(t => t.held != null), [
+    ['Ticket', ticket], ['Title', t => t.title], ['Why', t => h('span', { class: 'why' }, t.held || '—')],
+  ]),
+  section('All tickets', byLine, [
+    ['Ticket', ticket], ['Title', t => t.title], ['Stage', stageCell], ['MR', mrCell],
+    ['Cog', t => t.cog ?? '—'], ['Flags', flags],
+  ]),
+  c.plan ? h('details', {}, h('summary', {}, 'Convoy plan'), h('pre', {}, c.plan)) : null,
+].flat(Infinity).filter(Boolean));
+
+const tip = document.getElementById('tip');
+document.addEventListener('mousemove', e => {
+  const t = e.target.closest('[data-tip]');
+  tip.style.display = t ? 'block' : 'none';
+  if (t) { tip.textContent = t.dataset.tip; tip.style.left = `${e.clientX + 12}px`; tip.style.top = `${e.clientY + 12}px`; }
+});
+</script>
+</body>
+</html>
