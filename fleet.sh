@@ -10,7 +10,7 @@
 #   ./fleet.sh preflight       check the setup: runtime state, checkout, forge + tracker CLIs, tmux + claude
 #   ./fleet.sh snapshot        snapshot the ledger to projects/<name>/exports/ (safe while running)
 #   ./fleet.sh import <file>   restore a ledger snapshot, path from the repo root (the fleet must be stopped)
-#   ./fleet.sh groom           open an admiral in the project's checkout to groom (CONVOY=<KEY>: start on it)
+#   ./fleet.sh groom           open an admiral in the project's checkout to groom (CONVOY=<KEY|#N>: /fleet-groom-convoy it)
 set -euo pipefail
 
 PROJECT="${FLEET_PROJECT:-}"
@@ -90,7 +90,7 @@ groom() {
     cd "projects/$PROJECT/${path:?no [project] path in $toml}"
     local prompt=() convoy="${CONVOY:-}"
     [[ "$convoy" =~ ^[0-9]+$ ]] && convoy="#$convoy" # a number is the convoy's short name
-    [[ -n "$convoy" ]] && prompt=("Groom convoy $convoy to Ready.")
+    [[ -n "$convoy" ]] && prompt=("/fleet-groom-convoy $convoy")
     exec env ${skill:+FLEET_GROOM_SKILL="$skill"} claude --agent admiral ${prompt[@]+"${prompt[@]}"}
 }
 

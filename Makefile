@@ -48,7 +48,7 @@ stop:                            ## Stop the project's fleet daemon (waits up to
 dashboard:                       ## Build + run the TUI dashboard over the project (cargo run --release)
 	@./fleet.sh dashboard
 
-groom:                           ## Open an admiral in the project's checkout to groom; CONVOY=<KEY> starts it on one
+groom:                           ## Open an admiral in the project's checkout to groom; CONVOY=<KEY|#N> runs /fleet-groom-convoy on it
 	@CONVOY="$(CONVOY)" ./fleet.sh groom
 
 snapshot:                        ## Snapshot the project's ledger to projects/<name>/exports/<name>-<UTC stamp>.db (safe while running)
