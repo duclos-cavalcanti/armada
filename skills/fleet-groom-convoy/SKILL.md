@@ -91,6 +91,5 @@ Then apply what the operator approves, all of it or the rows they pick, and say 
   `fleetc ticket edit <KEY> --body -`, starting from `fleetc ticket <KEY>` (it replaces the
   description whole). Then weigh it back if it was anchored as not Ready: `fleetc weigh <KEY>`.
 - **A missing ticket**: `/fleet-commission`, into this convoy.
-- **The plan**: `fleetc convoy open <C> --title "<its title>" --plan -`, with the whole revised plan
-  on stdin. Re-opening replaces both, so pass its current title (`fleetc convoy list`). The plan's
-  history keeps the old one (`fleetc convoy plan <C> --history`).
+- **The plan**: `fleetc convoy open <C> --plan -`, with the whole revised plan on stdin (its title
+  stays). The plan's history keeps the old one (`fleetc convoy plan <C> --history`).

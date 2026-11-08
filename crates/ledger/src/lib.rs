@@ -1578,13 +1578,13 @@ impl ConvoyRepo for Ledger {
     }
 
     fn open(&self, key: &ConvoyKey, title: Option<&str>, now: &str) -> Result<()> {
-        // Idempotent create; re-opening a closed convoy clears ended_at and keeps its number. A new
-        // one takes the next number. +ConvoyOpened (CDC).
+        // Idempotent create; re-opening a closed convoy clears ended_at and keeps its number, and its
+        // title unless a new one is given. A new one takes the next number. +ConvoyOpened (CDC).
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
             "INSERT INTO convoys(key, title, created_at, ended_at, no)
              VALUES (?1, ?2, ?3, NULL, (SELECT COALESCE(MAX(no), 0) + 1 FROM convoys))
-             ON CONFLICT(key) DO UPDATE SET title = excluded.title, ended_at = NULL",
+             ON CONFLICT(key) DO UPDATE SET title = COALESCE(excluded.title, convoys.title), ended_at = NULL",
             params![key.0, title, now],
         )?;
         tx.execute(

@@ -226,11 +226,7 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let _ = reply.send(res);
         }
         Command::OpenConvoy { key, title, plan, reply } => {
-            let now = now_rfc3339();
-            let res = sync::sync_convoy(ledger, tracker, &key, &now)
-                .and_then(|()| ledger.open(&key, title.as_deref(), &now))
-                .and_then(|()| ledger.set_plan(&key, plan.as_deref(), &now))
-                .map_err(|e| e.to_string());
+            let res = open_convoy(ledger, tracker, &key, title.as_deref(), plan.as_deref()).map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
         Command::CloseConvoy { key, reply } => {
@@ -654,6 +650,19 @@ fn read_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey) -> Resul
         detail.held = Some(ledger.held_reason(key)?.unwrap_or_default());
     }
     Ok(detail)
+}
+
+/// Open a convoy, or re-open one: its tickets synced, then its title and plan set. On a convoy that
+/// already exists, an omitted title or plan keeps its own, so re-opening to change one never
+/// blanks the other.
+fn open_convoy(ledger: &Ledger, tracker: &dyn Tracker, key: &ConvoyKey, title: Option<&str>, plan: Option<&str>) -> Result<()> {
+    let now = now_rfc3339();
+    sync::sync_convoy(ledger, tracker, key, &now)?;
+    ledger.open(key, title, &now)?;
+    match plan {
+        Some(plan) => ledger.set_plan(key, Some(plan), &now),
+        None => Ok(()),
+    }
 }
 
 /// A captain's amendment of a ticket in its convoy: why, and the escalation case it settles, if any.
@@ -1511,6 +1520,20 @@ mod tests {
             self.comments.borrow_mut().push((key.clone(), body.into()));
             Ok(())
         }
+    }
+
+    #[test]
+    fn re_opening_a_convoy_keeps_the_title_or_plan_it_leaves_out() {
+        let db = Ledger::in_memory().unwrap();
+        let tracker = FakeTracker::new(vec![]);
+        let c9 = ConvoyKey("PROJ-9".into());
+        let title = |db: &Ledger| ConvoyRepo::active(db).unwrap()[0].title.clone();
+        open_convoy(&db, &tracker, &c9, Some("Seed"), Some("ship the seed")).unwrap();
+        open_convoy(&db, &tracker, &c9, None, Some("ship the seed, then the gate")).unwrap();
+        assert_eq!(title(&db).as_deref(), Some("Seed"), "a new plan keeps the title");
+        open_convoy(&db, &tracker, &c9, Some("Seed, gated"), None).unwrap();
+        assert_eq!(ConvoyRepo::plan(&db, &c9).unwrap().as_deref(), Some("ship the seed, then the gate"), "a new title keeps the plan");
+        assert_eq!(title(&db).as_deref(), Some("Seed, gated"));
     }
 
     #[test]

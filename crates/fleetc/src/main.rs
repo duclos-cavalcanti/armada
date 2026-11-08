@@ -32,7 +32,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc status   --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] --state <state> [--last-action <text>]\n  \
      fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
      fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
-     fleetc convoy   open <KEY> [--title <text>] [--plan <file|->] | close [<KEY>]   (the plan ties its tickets together; omitted: none)\n  \
+     fleetc convoy   open <KEY> [--title <text>] [--plan <file|->] | close [<KEY>]   (the plan ties its tickets together; re-opening keeps the title or plan you leave out)\n  \
      fleetc convoy   add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N>   (a ticket joins the convoy — its only one, for a hand with --hand — or an added one leaves)\n  \
      fleetc convoy   list | plan [<KEY>] [--history]   (the active convoys + their open tickets | a convoy's plan; --history: each change as a diff)\n  \
      fleetc anchor   <KEY-N> [--reason <why>]   (hold everything on it: off the frontier, its cogs stopped, its MR disarmed + drafted)\n  \
