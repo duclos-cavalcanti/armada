@@ -5,7 +5,7 @@ description: >-
   lead into each other; every blocker edge is needed and none is missing; and the critical path to
   the outcome is never held up by deferrable work (hardening, backfills, guard tests), which runs as
   a parallel stream after it. Reports first, then applies what the operator approves. For the
-  admiral (`make groom CONVOY=<KEY|#N>`).
+  admiral.
 argument-hint: <KEY|#N> (the convoy)
 ---
 
@@ -31,8 +31,11 @@ already dispatched is past grooming: leave its text alone, but count it in Steps
 
 ## Step 1 — Each ticket Ready
 
-Judge every open, undispatched ticket against `/fleet-ready-done`'s Ready, and the project's own
-doctrine where it extends it. When the project names a grooming skill (`FLEET_GROOM_SKILL`, from
+Judge every open, undispatched ticket by the same bar the captain applies before dispatch, so a
+groomed ticket passes it: the project's readiness check when it names one (`FLEET_ASSESS_SKILL`,
+from `assess_skill` in its fleet.toml; read-only), else `/fleet-ready-done`'s Ready, and in either
+case each AC against what the ticket's blockers deliver (`/fleet-ready-done`'s assess.md). A
+convoy of many tickets: assess each in a fresh `lookout` subagent by that file. When the project names a grooming skill (`FLEET_GROOM_SKILL`, from
 `groom_skill` in its fleet.toml), note each ticket it should run on: it runs in Step 4, since it
 writes. A ticket anchored as not Ready that this grooming would make Ready is weighed back in Step 4;
 one held by a convoy anchor ("convoy <C> anchored") is not yours to weigh.

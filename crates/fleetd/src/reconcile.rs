@@ -654,6 +654,8 @@ pub struct Levers {
     pub review_skill: Option<String>,
     /// The project's grooming skill, handed to each admiral in `FLEET_GROOM_SKILL`.
     pub groom_skill: Option<String>,
+    /// The project's readiness check, handed to each captain and admiral in `FLEET_ASSESS_SKILL`.
+    pub assess_skill: Option<String>,
 }
 
 /// Apply the reconcile plan through the ports. `dry_run=true` logs the plan and executes
@@ -721,12 +723,14 @@ fn execute<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
         Action::Wake { ticket } => wake(ledger, host, ticket),
         Action::ReviewWake { ticket } => review_wake(ledger, forge, host, ticket, levers.review_rounds),
         Action::StandDown { ticket, kind } => stand_down(ledger, host, ticket, kind),
-        Action::LaunchCaptain { convoy } => launch_captain(ledger, host, project, convoy),
+        Action::LaunchCaptain { convoy } => launch_captain(ledger, host, project, convoy, levers.assess_skill.as_deref()),
         Action::StandDownCaptain { convoy } => stand_down_captain(ledger, host, convoy),
         Action::LaunchSailor { ticket } => launch_sailor(ledger, forge, host, ticket),
         Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, project, *iid, levers.review_skill.as_deref()),
         Action::StandDownLookout { session } => stand_down_lookout(ledger, host, project, &SessionId(*session)),
-        Action::LaunchAdmiral { ticket } => launch_admiral(ledger, host, project, ticket, levers.groom_skill.as_deref()),
+        Action::LaunchAdmiral { ticket } => {
+            launch_admiral(ledger, host, project, ticket, &[("FLEET_GROOM_SKILL", levers.groom_skill.as_deref()), ("FLEET_ASSESS_SKILL", levers.assess_skill.as_deref())])
+        }
     }
 }
 
@@ -1109,7 +1113,7 @@ fn stand_down<H: SessionHost>(ledger: &Ledger, host: &H, ticket: &str, kind: &st
 /// adapter-agnostic contract (no tmux/vendor leak into the agent), injected as a cmd-prefix so
 /// `TmuxHost` stays generic. `Ok(None)` from the `one_live_captain_per_convoy` lock means the slot
 /// is already held → a benign skip.
-fn launch_captain<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, convoy: &str) -> Result<()> {
+fn launch_captain<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, convoy: &str, assess_skill: Option<&str>) -> Result<()> {
     let tmux_session = format!("captain-{convoy}");
     let hid = new_session_id();
     let session_id = match SessionRepo::start(
@@ -1132,7 +1136,8 @@ fn launch_captain<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, conv
         None => return Ok(()),
     };
 
-    let cmd = format!("FLEET_CONVOY={convoy} {}", launch_cmd("captain", Launch::Fresh(&hid)));
+    let env = skill_env(&[("FLEET_ASSESS_SKILL", assess_skill)]);
+    let cmd = format!("{env}FLEET_CONVOY={convoy} {}", launch_cmd("captain", Launch::Fresh(&hid)));
     host.spawn(&tmux_session, Path::new(project), &cmd)?;
 
     ledger.append(
@@ -1403,7 +1408,7 @@ fn stand_down_lookout<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, 
 /// a cog. The ticket's worktree rides in as `--add-dir`: the admiral reads the cog's files while its
 /// cwd stays the checkout, whose CLAUDE.md and settings are the merged canon's, not the branch's.
 /// A tmux session of that name already up is one the operator opened: a benign skip.
-fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, ticket: &str, groom_skill: Option<&str>) -> Result<()> {
+fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, ticket: &str, skills: &[(&str, Option<&str>)]) -> Result<()> {
     let tmux_session = format!("admiral-{ticket}");
     if host.alive(&tmux_session)? {
         return Ok(());
@@ -1432,10 +1437,8 @@ fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, tick
         .and_then(|o| o.worktree_path)
         .map(|wt| format!(" --add-dir '{}'", wt.replace('\'', r"'\''")))
         .unwrap_or_default();
-    // The key is `<PREFIX>-<n>`-validated, so the quoted order is shell-safe; so is a skill name
-    // kept to the characters a skill name has.
-    let skill = groom_skill.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric() || "-_:".contains(c)));
-    let env = skill.map(|s| format!("FLEET_GROOM_SKILL={s} ")).unwrap_or_default();
+    // The key is `<PREFIX>-<n>`-validated, so the quoted order is shell-safe.
+    let env = skill_env(skills);
     let cmd = format!("{env}{}{add_dir} 'Rule on the confirmed escalation of {ticket}.'", launch_cmd("admiral", Launch::Fresh(&hid)));
     host.spawn(&tmux_session, Path::new(project), &cmd)?;
     ledger.append(
@@ -1446,6 +1449,15 @@ fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, tick
         &serde_json::json!({ "ticket": ticket, "kind": "admiral" }),
     )?;
     Ok(())
+}
+
+/// The project's skills a cog is handed, as `NAME=skill ` env prefixes: each named one kept to the
+/// characters a skill name has, so the launch line stays shell-safe; an unnamed one is left out.
+fn skill_env(skills: &[(&str, Option<&str>)]) -> String {
+    skills
+        .iter()
+        .filter_map(|(var, skill)| skill.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric() || "-_:".contains(c))).map(|s| format!("{var}={s} ")))
+        .collect()
 }
 
 /// How a cog's claude starts. fleetd mints the session id, so the transcript lands at a known
@@ -1511,6 +1523,7 @@ mod tests {
         review_settle_secs: 0,
         review_skill: None,
         groom_skill: None,
+        assess_skill: None,
     };
     const DRY: Levers = Levers { dry_run: true, ..LIVE };
     use domain::ports::EventLog;
@@ -3646,7 +3659,7 @@ mod tests {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let host = FakeHost::new();
-        launch_admiral(&db, &host, "/project", "PROJ-1", None).unwrap();
+        launch_admiral(&db, &host, "/project", "PROJ-1", &[]).unwrap();
         let (name, cwd, cmd) = host.spawned.borrow()[0].clone();
         assert_eq!((name.as_str(), cwd.as_str()), ("admiral-PROJ-1", "/project"));
         assert!(cmd.contains("--agent admiral 'Rule on the confirmed escalation of PROJ-1.'"), "{cmd}");
@@ -3655,9 +3668,9 @@ mod tests {
 
         ticket(&db, "PROJ-2", TicketStatus::InProgress, false, vec![]);
         let host = FakeHost::new();
-        launch_admiral(&db, &host, "/project", "PROJ-2", Some("groom-ticket")).unwrap();
+        launch_admiral(&db, &host, "/project", "PROJ-2", &[("FLEET_GROOM_SKILL", Some("groom-ticket")), ("FLEET_ASSESS_SKILL", Some("assess-ticket"))]).unwrap();
         let cmd = host.spawned.borrow()[0].2.clone();
-        assert!(cmd.starts_with("FLEET_GROOM_SKILL=groom-ticket claude "), "the project's grooming skill rides in: {cmd}");
+        assert!(cmd.starts_with("FLEET_GROOM_SKILL=groom-ticket FLEET_ASSESS_SKILL=assess-ticket claude "), "the project's skills ride in: {cmd}");
         let live = SessionRepo::live(&db).unwrap();
         assert!(live.iter().any(|s| s.kind == CrewKind::Admiral && s.ticket == Some(TicketKey("PROJ-1".into()))));
     }
@@ -3668,7 +3681,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         order_wt(&db, "PROJ-1", true, Some("/wt/chore-PROJ-1-it's"));
         let host = FakeHost::new();
-        launch_admiral(&db, &host, "/project", "PROJ-1", None).unwrap();
+        launch_admiral(&db, &host, "/project", "PROJ-1", &[]).unwrap();
         let (_, cwd, cmd) = host.spawned.borrow()[0].clone();
         assert_eq!(cwd, "/project", "its cwd stays the checkout");
         assert!(cmd.contains(r"--add-dir '/wt/chore-PROJ-1-it'\''s' 'Rule on"), "{cmd}");
@@ -3710,6 +3723,19 @@ mod tests {
             "cmd was: {cmd}"
         );
         assert!(tracker.moves.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_captain_is_handed_the_projects_readiness_check() {
+        let db = db();
+        db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
+        convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::Todo);
+        let host = FakeHost::new();
+        let levers = Levers { assess_skill: Some("assess-ticket".into()), ..LIVE };
+        tick(&db, &FakeTracker::new(), &host, &FakeForge::new(), &[], "/project", &levers).unwrap();
+        let cmd = host.spawned.borrow()[0].2.clone();
+        assert!(cmd.starts_with("FLEET_ASSESS_SKILL=assess-ticket FLEET_CONVOY=PROJ-100 claude "), "{cmd}");
+        assert_eq!(skill_env(&[("X", Some("a b;rm")), ("Y", None)]), "", "a name a skill can't have, or none, is left out");
     }
 
     #[test]

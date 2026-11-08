@@ -7,7 +7,8 @@ description: >-
   at `review/<iid>`, read-only to it. It runs the project's review skill
   (FLEET_REVIEW_SKILL, else /fleet-review), checks the MR against our convoys' plans, tickets and
   open MRs, posts, approves an ally's MR if clean and clear of our work (never ours), and reports
-  `reviewed`. As a subagent, /fleet-inspect dispatches it to judge a cog's escalation: REFUTE or
+  `reviewed`. As a subagent, a captain dispatches it to assess a ticket before dispatch (fleet-ready-done's
+  assess.md), and /fleet-inspect to judge a cog's escalation: REFUTE or
   CONFIRM. Read-only: it diagnoses, never edits. Not a loop.
 model: opus
 effort: high

@@ -84,14 +84,15 @@ import() {
 # (CONVOY=<KEY> starts it on one). It runs the project's grooming skill, `groom_skill` in fleet.toml,
 # handed over in FLEET_GROOM_SKILL; none named = the kit's /fleet-ready-done alone.
 groom() {
-    local toml="projects/$PROJECT/fleet.toml" path skill
+    local toml="projects/$PROJECT/fleet.toml" path skill assess
     path="$(awk -F'"' '/^\[/ { s = $0 } s == "[project]" && $1 ~ /^path[[:space:]]*=/ { print $2; exit }' "$toml")"
     skill="$(awk -F'"' '/^\[/ { exit } $1 ~ /^groom_skill[[:space:]]*=/ { print $2; exit }' "$toml")"
+    assess="$(awk -F'"' '/^\[/ { exit } $1 ~ /^assess_skill[[:space:]]*=/ { print $2; exit }' "$toml")"
     cd "projects/$PROJECT/${path:?no [project] path in $toml}"
     local prompt=() convoy="${CONVOY:-}"
     [[ "$convoy" =~ ^[0-9]+$ ]] && convoy="#$convoy" # a number is the convoy's short name
     [[ -n "$convoy" ]] && prompt=("/fleet-groom-convoy $convoy")
-    exec env ${skill:+FLEET_GROOM_SKILL="$skill"} claude --agent admiral ${prompt[@]+"${prompt[@]}"}
+    exec env ${skill:+FLEET_GROOM_SKILL="$skill"} ${assess:+FLEET_ASSESS_SKILL="$assess"} claude --agent admiral ${prompt[@]+"${prompt[@]}"}
 }
 
 main() {

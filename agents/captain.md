@@ -69,9 +69,13 @@ can't — a grooming glance — then act on it. A **`hand`** ticket skips the gl
 anchored: the operator works it, so berth and dispatch it as it stands (fleetd makes the order a
 hand's).
 
-1. **Read it** (`fleetc ticket <TICKET>`) and judge it against `/fleet-ready-done`'s
-   Ready: is the goal clear and are the acceptance criteria testable enough to build?
-2. **Well-formed** → dispatch it, forking off the right base:
+1. **Assess it**, in a fresh context: dispatch the `lookout` subagent (the `Agent` tool) with only
+   "Assess `<TICKET>` for dispatch, by `<the fleet-ready-done skill's folder>/assess.md`." It runs
+   the project's readiness check (`FLEET_ASSESS_SKILL`), or `/fleet-ready-done`'s Ready when there
+   is none, and checks each AC against what the ticket's blockers deliver. Only its `VERDICT` line
+   and findings come back, so your context stays your convoy's.
+2. **READY**, or **OVERSIZED** (a note, not a hold: name it in the dispatch's `--ac` summary) →
+   dispatch it, forking off the right base:
    - **`clean`** → fork the default branch: `/fleet-berth <TICKET>` emits the path, then
      `fleetc dispatch --ticket <TICKET> --ac "<summary>" --worktree <path>`.
    - **`stacked`** → fork the **parent's branch**: the slice's `fork_from` for that
@@ -81,8 +85,8 @@ hand's).
      The child's MR targets the parent branch; fleetd declares the block, the sailor
      keeps it rebased on the parent, and it unwinds onto the default branch when the parent merges —
      all automatic.
-3. **Too ill-formed to build** (no clear ACs, ambiguous scope) → **anchor it**, don't
-   dispatch guesswork: `fleetc anchor <TICKET> --reason "<what's missing>"`. The reason
+3. **BLOCKED, UNCLEAR, INVARIANT-GAP or AC-GAP** → **anchor it**, don't dispatch guesswork:
+   `fleetc anchor <TICKET> --reason "<VERDICT>: <the findings, tersely>"`. The reason
    shows wherever the ticket does (`fleetc ticket`, `fleetc context`, the dashboard),
    so the operator sees what to groom. The anchor drops the ticket off the frontier; the
    operator grooms it and `fleetc weigh`s it back. If `fleetc anchor` fails, it says which

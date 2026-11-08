@@ -44,6 +44,10 @@ pub struct Config {
     /// `.claude/skills/`), which an admiral runs on each ticket it grooms. Unset = the kit's
     /// `/fleet-ready-done` alone. `make groom` hands it over too.
     pub groom_skill: Option<String>,
+    /// The project's own readiness check (its name, e.g. `assess-ticket`): read-only, run on a ticket
+    /// before it's dispatched (the captain) and when it's groomed (`/fleet-groom-convoy`), so Ready
+    /// means one thing in both. Unset = `/fleet-ready-done` alone.
+    pub assess_skill: Option<String>,
     /// Reconcile mode: false (default, post-cutover) = apply the plan through the ports — fleetd
     /// drives the line; true = compute + log only, execute nothing (the parity look, opt in via
     /// `FLEET_DRY_RUN=true`). Flip via config/env, no recompile.
@@ -138,6 +142,7 @@ impl Default for Config {
             review_settle_secs: 300,
             review_skill: None,
             groom_skill: None,
+            assess_skill: None,
             dry_run: false,
             active_secs: domain::LIVENESS_ACTIVE_SECS,
             quiet_secs: domain::LIVENESS_QUIET_SECS,
