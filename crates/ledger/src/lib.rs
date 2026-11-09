@@ -1694,7 +1694,7 @@ impl ConvoyRepo for Ledger {
     }
 
     fn active(&self) -> Result<Vec<Convoy>> {
-        let mut stmt = self.conn.prepare("SELECT * FROM convoys WHERE ended_at IS NULL ORDER BY key")?;
+        let mut stmt = self.conn.prepare("SELECT * FROM convoys WHERE ended_at IS NULL ORDER BY no")?;
         let rows = stmt.query_map([], row_to_convoy)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -2279,6 +2279,9 @@ mod repo_tests {
         assert_eq!((db.convoy_by_no(2).unwrap(), db.convoy_by_no(3).unwrap()), (Some(b), None));
         db.open(&ConvoyKey("PROJ-300".into()), None, "t5").unwrap();
         assert_eq!(db.convoy_by_no(3).unwrap(), Some(ConvoyKey("PROJ-300".into())), "never reused: the next is #3");
+        db.open(&ConvoyKey("PROJ-050".into()), None, "t6").unwrap();
+        let order: Vec<i64> = db.active().unwrap().iter().map(|c| c.no).collect();
+        assert_eq!(order, [1, 2, 3, 4], "listed by number, not by key");
     }
 
     #[test]

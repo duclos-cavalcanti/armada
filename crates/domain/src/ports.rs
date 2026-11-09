@@ -100,7 +100,7 @@ pub trait ConvoyRepo {
     fn anchor(&self, key: &ConvoyKey, at: &str) -> Result<()>;
     /// Weigh a convoy — lift the hold: clears `anchored_at`. Appends `ConvoyWeighed`. No-op if not anchored.
     fn weigh(&self, key: &ConvoyKey, at: &str) -> Result<()>;
-    /// The active convoys (`ended_at IS NULL`) — what captain staffing keys off.
+    /// The active convoys (`ended_at IS NULL`), by number (#1…#N) — what captain staffing keys off.
     fn active(&self) -> Result<Vec<Convoy>>;
     /// Put a ticket in `convoy` — its only convoy: one from another epic leaves its epic's convoy (for
     /// the fleet; returned, so the caller can say so). A no-op if it's already a member. Errs if it was
