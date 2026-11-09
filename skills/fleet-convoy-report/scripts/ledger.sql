@@ -1,5 +1,6 @@
 -- The ledger facts `fleetc context` leaves out, as one JSON object: the convoy's header, every
--- ticket's title, each ticket's latest MR, and the tickets worked by hand. `:convoy` is its key.
+-- ticket's title, each ticket's latest MR, the tickets worked by hand, and the open proposals naming
+-- the convoy. `:convoy` is its key.
 SELECT json_object(
   'convoy', (SELECT json_object('key', key, 'no', no, 'title', title, 'opened', created_at, 'closed', ended_at)
              FROM convoys WHERE key = :convoy),
@@ -14,5 +15,10 @@ SELECT json_object(
   'manual', (SELECT json_group_array(ticket) FROM (
                SELECT ticket FROM hand_tickets
                UNION SELECT ticket FROM orders WHERE auto_impl = 0
-               UNION SELECT ticket FROM sessions WHERE kind = 'hand' AND ticket IS NOT NULL))
+               UNION SELECT ticket FROM sessions WHERE kind = 'hand' AND ticket IS NOT NULL)),
+  -- Outside the convoy until accepted: never in its count or grade.
+  'proposals', (SELECT json_group_array(json_object('id', id, 'key', key, 'title', title, 'from', from_ticket))
+                FROM (SELECT p.id, p.existing AS key, coalesce(t.title, p.title) AS title, p.from_ticket
+                      FROM proposals p LEFT JOIN tickets t ON t.key = p.existing
+                      WHERE p.ended_at IS NULL AND p.convoy = :convoy ORDER BY p.id))
 );

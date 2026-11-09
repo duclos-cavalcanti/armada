@@ -41,7 +41,9 @@ def weight: {todo: 0, progress: (1 / 3), qa: (2 / 3), done: 1}[.];
       blocked: ($tickets | map(select(.blocked and .stage != "done")) | length),
       anchored: ($tickets | map(select(.held != null and .stage != "done")) | length),
       manual: ($tickets | map(select(.manual)) | length),
-      escalated: ($tickets | map(select(.escalated)) | length)
+      escalated: ($tickets | map(select(.escalated)) | length),
+      proposed: ($led.proposals | length)
     },
-    tickets: $tickets
+    tickets: $tickets,
+    proposals: $led.proposals
   }

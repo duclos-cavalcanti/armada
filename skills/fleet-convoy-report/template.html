@@ -11,13 +11,13 @@
   --grid: #e1e0d9; --ring: rgba(11,11,11,0.10);
   /* stages: one blue ramp, light → dark as a ticket moves down the line (validated --ordinal) */
   --todo: #86b6ef; --progress: #5598e7; --qa: #256abf; --done: #184f95;
-  --warning: #fab219; --critical: #d03b3b;
+  --warning: #fab219; --critical: #d03b3b; --total: #52514e;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
     --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
-    --grid: #2c2c2a; --ring: rgba(255,255,255,0.10);
+    --grid: #2c2c2a; --ring: rgba(255,255,255,0.10); --total: #c3c2b7;
   }
 }
 * { box-sizing: border-box; }
@@ -40,27 +40,32 @@ h2 { font-size: 15px; margin: 32px 0 8px; font-weight: 600; }
 .bar > div:only-child { border-radius: 4px; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--ink-2); font-size: 13px; }
 .legend i, .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; margin-top: 12px; }
-.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 12px 14px; }
-.tile b { display: block; font-size: 26px; font-weight: 600; }
-.tile span { color: var(--ink-2); font-size: 12px; }
-table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--ring);
+.board { margin-top: 12px; }
+.cols, .col-labels { display: flex; gap: 12px; }
+.cols { align-items: flex-end; border-bottom: 1px solid var(--grid); }
+.col { flex: 1; display: flex; flex-direction: column; align-items: center; cursor: default; }
+.col b { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+.col div { width: 100%; max-width: 64px; border-radius: 4px 4px 0 0; }
+.col .faded { opacity: 0.35; }
+.col-labels span { flex: 1; text-align: center; font-size: 12px; color: var(--ink-2); padding-top: 6px; }
+table { width: 100%; table-layout: fixed; border-collapse: collapse; background: var(--surface); border: 1px solid var(--ring);
         border-radius: 10px; overflow: hidden; }
 th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
 th { color: var(--muted); font-weight: 500; font-size: 12px; }
 tr:last-child td { border-bottom: 0; }
-td.key, .nowrap { white-space: nowrap; }
+td.key, td.mr, .nowrap { white-space: nowrap; }
 a { color: inherit; text-decoration-color: var(--muted); text-underline-offset: 2px; }
 .pill { display: inline-block; white-space: nowrap; font-size: 12px; padding: 1px 8px; margin: 1px 4px 1px 0;
         border: 1px solid var(--ring); border-radius: 999px; color: var(--ink-2); }
 .pill .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
 .why { color: var(--ink-2); font-size: 13px; }
-details { margin-top: 32px; }
+.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; cursor: default; }
+details { margin-top: 24px; }
 summary { cursor: pointer; font-weight: 600; }
 pre { white-space: pre-wrap; background: var(--surface); border: 1px solid var(--ring); border-radius: 10px;
       padding: 14px; font-size: 12.5px; }
 #tip { position: fixed; pointer-events: none; display: none; background: var(--ink); color: var(--page);
-       font-size: 12px; padding: 5px 8px; border-radius: 6px; }
+       font-size: 12px; padding: 5px 8px; border-radius: 6px; max-width: 520px; }
 </style>
 </head>
 <body>
@@ -71,11 +76,12 @@ __DATA__
 </script>
 <script>
 const D = JSON.parse(document.getElementById('data').textContent);
+// The one set of labels, on every chart, list and note.
+const LABEL = { todo: 'To-Do', progress: 'In-Progress', qa: 'In-QA', blocked: 'Blocked', done: 'Done' };
+const label = id => LABEL[id];
 const STAGES = [ // line order; ink inside a fill by its luminance
-  { id: 'done', label: 'Done', ink: '#fff' }, { id: 'qa', label: 'In QA', ink: '#fff' },
-  { id: 'progress', label: 'In progress', ink: '#0b0b0b' }, { id: 'todo', label: 'To do', ink: '#0b0b0b' },
-];
-const label = id => STAGES.find(s => s.id === id).label;
+  { id: 'done', ink: '#fff' }, { id: 'qa', ink: '#fff' }, { id: 'progress', ink: '#0b0b0b' }, { id: 'todo', ink: '#0b0b0b' },
+].map(s => ({ ...s, label: label(s.id) }));
 const h = (tag, attrs = {}, ...kids) => {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) k === 'style' ? e.style.cssText = v : e.setAttribute(k, v);
@@ -89,23 +95,29 @@ const mr = t => t.mr ? link(`!${t.mr.iid}`, t.mr.url) : '—';
 const mrCell = t => t.mr ? [mr(t), ' ', h('span', { class: 'why' }, t.mr.state)] : '—';
 const stageCell = t => h('span', { class: 'nowrap' }, h('i', { class: 'sw', style: `background:var(--${t.stage})` }), label(t.stage));
 const pill = (text, dot) => h('span', { class: 'pill' }, dot ? h('span', { class: 'dot', style: `background:var(--${dot})` }) : null, text);
-const flags = t => [
-  t.blocked && t.stage !== 'done' ? pill('▲ blocked', 'warning') : null,
-  t.escalated ? pill('✕ escalated', 'critical') : null,
-  t.held != null && t.stage !== 'done' ? pill('⚓ anchored') : null,
-  t.manual ? pill('✋ by hand') : null,
-];
+const flags = t => [t.escalated ? pill('✕ escalated', 'critical') : null, t.manual ? pill('✋ by hand') : null];
+// The title, and under it why the ticket is anchored: two lines, the rest on hover.
+const titleCell = t => [t.title, t.held != null && t.stage !== 'done'
+  ? h('div', { class: 'why clamp', 'data-tip': t.held || 'anchored' }, `⚓ ${t.held || 'anchored'}`) : null];
+// One width per column name, so the lanes' columns line up; Title takes the rest.
+const WIDTH = { Ticket: 110, Proposal: 90, Stage: 110, 'Waiting on': 210, MR: 100, Cog: 80, Flags: 130, From: 110 };
 const table = (cols, rows) => h('table', {},
-  h('thead', {}, h('tr', {}, cols.map(c => h('th', {}, c[0])))),
-  h('tbody', {}, rows.map(r => h('tr', {}, cols.map(c => h('td', c[0] === 'Ticket' ? { class: 'key' } : {}, c[1](r)))))));
-const section = (title, rows, cols) => rows.length ? [h('h2', {}, `${title} (${rows.length})`), table(cols, rows)] : [];
+  h('thead', {}, h('tr', {}, cols.map(c => h('th', WIDTH[c[0]] ? { style: `width:${WIDTH[c[0]]}px` } : {}, c[0])))),
+  h('tbody', {}, rows.map(r => h('tr', {}, cols.map(c => h('td', { class: { Ticket: 'key', MR: 'mr' }[c[0]] ?? '' }, c[1](r)))))));
+const section = (b, rows, cols) => rows.length ? [h('h2', {}, h('i', { class: 'sw', style: swatch(b) }), `${b.label} (${rows.length})`), table(cols, rows)] : [];
 const day = s => s ? s.slice(0, 10) : '';
 const days = s => Math.max(0, Math.round((Date.parse(D.generated) - Date.parse(s)) / 864e5));
 
 const c = D.convoy, n = D.total, k = D.counts;
-const order = Object.fromEntries(['qa', 'progress', 'todo', 'done'].map((s, i) => [s, i]));
-const byLine = [...D.tickets].sort((a, b) => order[a.stage] - order[b.stage] || a.key.localeCompare(b.key));
-const open = byLine.filter(t => t.stage !== 'done');
+// The board: every ticket in one column, in line order; an open ticket waiting on a blocker sits in
+// Blocked, out of its stage, so the five add up to Tickets. Proposed stands outside, faded.
+const BOARD = ['todo', 'progress', 'qa', 'blocked', 'done']
+  .map(id => ({ id, label: label(id), fill: id === 'blocked' ? 'warning' : null }));
+const PROPOSED = { id: 'proposed', label: 'Proposed', fill: 'total', faded: true };
+const swatch = b => `background:var(--${b.fill ?? b.id})${b.faded ? ';opacity:0.35' : ''}`;
+const column = t => t.stage !== 'done' && t.blocked ? 'blocked' : t.stage;
+const byKey = (a, b) => (a.key ?? '').localeCompare(b.key ?? '', undefined, { numeric: true });
+const lane = Object.fromEntries(BOARD.map(b => [b.id, D.tickets.filter(t => column(t) === b.id).sort(byKey)]));
 document.title = `#${c.no ?? '?'} ${c.title ?? c.key} · convoy report`;
 
 const bar = h('div', { class: 'bar', role: 'img', 'aria-label': STAGES.map(s => `${s.label} ${k[s.id]}`).join(', ') },
@@ -114,35 +126,42 @@ const bar = h('div', { class: 'bar', role: 'img', 'aria-label': STAGES.map(s => 
     'data-tip': `${s.label} · ${k[s.id]} of ${n} (${Math.round(100 * k[s.id] / n)}%)`,
   }, 100 * k[s.id] / n >= 6 ? k[s.id] : '')));
 
+const cols = [
+  { id: 'total', label: 'Tickets', v: n, tip: `${n} tickets in the convoy` },
+  ...BOARD.map(b => ({ ...b, v: lane[b.id].length, tip: `${b.label} · ${lane[b.id].length} of ${n}` })),
+  { ...PROPOSED, v: k.proposed, tip: `${k.proposed} open proposals, outside the convoy until accepted` },
+];
+const peak = Math.max(1, ...cols.map(x => x.v)), PLOT = 160;
+const board = h('div', { class: 'card board', role: 'img', 'aria-label': cols.map(x => `${x.label} ${x.v}`).join(', ') },
+  h('div', { class: 'cols', style: `height:${PLOT + 26}px` }, cols.map(x => h('div', { class: 'col', 'data-tip': x.tip },
+    h('b', {}, x.v),
+    h('div', { class: x.faded ? 'faded' : '', style: `height:${Math.round(PLOT * x.v / peak)}px;background:var(--${x.fill ?? x.id})` })))),
+  h('div', { class: 'col-labels' }, cols.map(x => h('span', {}, x.label))),
+  h('p', { class: 'note' }, `An open ticket waiting on a blocker counts as ${label('blocked')}, not under its stage, so`,
+    ` ${BOARD.map(b => b.label).join(' · ')} add up to Tickets.`));
+
+const row = [['Ticket', ticket], ['Title', titleCell], ['MR', mrCell], ['Cog', t => t.cog ?? '—'], ['Flags', flags]];
 document.getElementById('app').append(...[
   h('h1', {}, `#${c.no ?? '?'} ${c.key} · ${c.title ?? ''}`),
   h('p', { class: 'sub' }, `${D.project} · opened ${day(c.opened)} (${days(c.opened)} days)`,
     c.closed ? ` · closed ${day(c.closed)}` : '', ` · report ${D.generated.replace('T', ' ').slice(0, 16)} UTC`),
   h('div', { class: 'card hero' },
-    h('div', { class: 'hero-num' }, `${D.grade}%`, h('small', {}, `moved · ${k.done} of ${n} done`)),
+    h('div', { class: 'hero-num' }, `${D.grade}%`, h('small', {}, `moved · ${k.done} of ${n} ${label('done')}`)),
     n ? bar : h('p', { class: 'note' }, 'No tickets.'),
     h('div', { class: 'legend' }, STAGES.map(s => h('span', {}, h('i', { style: `background:var(--${s.id})` }), `${s.label} ${k[s.id]}`))),
-    h('p', { class: 'note' }, `Moved: each ticket weighs by its stage (To do 0 · In progress ⅓ · In QA ⅔ · Done 1), averaged.`,
+    h('p', { class: 'note' }, `Moved: each ticket weighs by its stage (${[['todo', '0'], ['progress', '⅓'], ['qa', '⅔'], ['done', '1']]
+      .map(([id, w]) => `${label(id)} ${w}`).join(' · ')}), averaged.`,
       D.cancelled ? ` ${D.cancelled} cancelled left out.` : '')),
-  h('div', { class: 'tiles' }, [
-    ['Tickets', n], ['Done', k.done], ['In QA', k.qa], ['In progress', k.progress], ['To do', k.todo],
-    ['Blocked', k.blocked], ['Anchored', k.anchored], ['By hand', k.manual],
-  ].map(([l, v]) => h('div', { class: 'tile' }, h('b', {}, v), h('span', {}, l)))),
-  section('Blocked', open.filter(t => t.blocked), [
-    ['Ticket', ticket], ['Title', t => t.title], ['Stage', stageCell],
-    ['Waiting on', t => t.blocked_by.length ? t.blocked_by.map(b => [pill(ticketLink(b)), ' ']) : t.status],
-  ]),
-  section('By hand', byLine.filter(t => t.manual), [
-    ['Ticket', ticket], ['Title', t => t.title], ['Stage', stageCell], ['MR', mrCell],
-  ]),
-  section('Anchored', open.filter(t => t.held != null), [
-    ['Ticket', ticket], ['Title', t => t.title], ['Why', t => h('span', { class: 'why' }, t.held || '—')],
-  ]),
-  section('All tickets', byLine, [
-    ['Ticket', ticket], ['Title', t => t.title], ['Stage', stageCell], ['MR', mrCell],
-    ['Cog', t => t.cog ?? '—'], ['Flags', flags],
-  ]),
+  board,
   c.plan ? h('details', {}, h('summary', {}, 'Convoy plan'), h('pre', {}, c.plan)) : null,
+  BOARD.map(b => section(b, lane[b.id], b.id !== 'blocked' ? row : [
+    ['Ticket', ticket], ['Title', titleCell], ['Stage', stageCell],
+    ['Waiting on', t => t.blocked_by.length ? t.blocked_by.map(x => [pill(ticketLink(x)), ' ']) : t.status], ['Flags', flags],
+  ])),
+  section(PROPOSED, D.proposals, [
+    ['Proposal', p => `#${p.id}`], ['Ticket', p => p.key ? ticketLink(p.key) : '—'], ['Title', p => p.title ?? ''],
+    ['From', p => p.from ? ticketLink(p.from) : '—'],
+  ]),
 ].flat(Infinity).filter(Boolean));
 
 const tip = document.getElementById('tip');
