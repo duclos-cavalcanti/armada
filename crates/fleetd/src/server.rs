@@ -89,6 +89,7 @@ fn handle(
         (Some("POST"), Some("/anchor-ticket")) => handle_anchor_ticket(&request, cmds, true),
         (Some("POST"), Some("/weigh-ticket")) => handle_anchor_ticket(&request, cmds, false),
         (Some("POST"), Some("/rework")) => handle_rework(&request, cmds),
+        (Some("POST"), Some("/rounds/reset")) => handle_rounds_reset(&request, cmds),
         (Some("POST"), Some("/inspection")) => handle_inspection(&request, cmds),
         (Some("POST"), Some("/ruling")) => handle_ruling(&request, cmds),
         (Some("GET"), Some(p)) if p.starts_with("/packet") => handle_packet(cmds, p),
@@ -931,6 +932,28 @@ fn handle_rework(request: &str, cmds: &Sender<Command>) -> String {
     }
 }
 
+/// `POST /rounds/reset` — a ticket's open MR back to 0 review rounds (`fleetc rounds --reset`).
+fn handle_rounds_reset(request: &str, cmds: &Sender<Command>) -> String {
+    let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+    let dto: wire::RoundsReset = match serde_json::from_str(body) {
+        Ok(d) => d,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
+    };
+    let ticket = match parse_ticket(&dto.ticket) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::ResetRounds { ticket, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(())) => http_response("200 OK", "text/plain", "ok"),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
 fn handle_anchor_ticket(request: &str, cmds: &Sender<Command>, anchor: bool) -> String {
     let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
     let dto: wire::TicketAnchor = match serde_json::from_str(body) {
@@ -1090,6 +1113,7 @@ mod tests {
                     | Command::Send { reply, .. }
                     | Command::AnchorTicket { reply, .. }
                     | Command::Rework { reply, .. }
+                    | Command::ResetRounds { reply, .. }
                     | Command::Inspect { reply, .. }
                     | Command::SetSetting { reply, .. }
                     | Command::Rebase { reply, .. } => { let _ = reply.send(Ok(())); }
@@ -1159,6 +1183,7 @@ mod tests {
                     | Command::Send { reply, .. }
                     | Command::AnchorTicket { reply, .. }
                     | Command::Rework { reply, .. }
+                    | Command::ResetRounds { reply, .. }
                     | Command::Inspect { reply, .. }
                     | Command::SetSetting { reply, .. }
                     | Command::Rebase { reply, .. } => { let _ = reply.send(Ok(())); }

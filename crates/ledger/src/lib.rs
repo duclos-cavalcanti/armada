@@ -1423,6 +1423,27 @@ impl ShipRepo for Ledger {
         Ok(())
     }
 
+    fn reset_rounds(&self, id: &ShipId, at: &str) -> Result<i64> {
+        // Back to 0 + ShipRoundsReset (CDC, same txn), the count it had in the payload.
+        let tx = self.conn.unchecked_transaction()?;
+        let rounds: i64 = tx.query_row("SELECT rounds FROM ships WHERE id = ?1", params![id.0], |r| r.get(0))?;
+        if rounds > 0 {
+            tx.execute("UPDATE ships SET rounds = 0 WHERE id = ?1", params![id.0])?;
+            tx.execute(
+                "INSERT INTO events(created_at, kind, entity_kind, entity_ref, payload_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    at,
+                    EventKind::ShipRoundsReset.as_str(),
+                    EntityKind::Ship.as_str(),
+                    id.0.to_string(),
+                    serde_json::json!({ "rounds": rounds }).to_string()
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(rounds)
+    }
+
     fn set_swept(&self, id: &ShipId, fingerprint: Option<&str>) -> Result<()> {
         self.conn
             .execute("UPDATE ships SET swept = ?2 WHERE id = ?1", params![id.0, fingerprint])?;
@@ -2022,6 +2043,34 @@ mod repo_tests {
         )
         .unwrap();
         db
+    }
+
+    #[test]
+    fn a_ships_rounds_reset_to_zero_and_log_the_count_they_had_once() {
+        let db = db_with("PROJ-1");
+        let ship = Ship {
+            id: ShipId(0),
+            ticket: Some(TicketKey("PROJ-1".into())),
+            iid: 42,
+            url: "u".into(),
+            target: "master".into(),
+            source: String::new(),
+            pilot: "me".into(),
+            created_at: "t".into(),
+            ended_at: None,
+            swept: None,
+            reviewed: None,
+            rounds: 0,
+        };
+        let id = ShipRepo::upsert(&db, &ship).unwrap();
+        db.count_round(&id).unwrap();
+        db.count_round(&id).unwrap();
+        assert_eq!(db.reset_rounds(&id, "t2").unwrap(), 2, "it had two");
+        assert_eq!(db.armada().unwrap()[0].rounds, 0);
+        assert_eq!(db.reset_rounds(&id, "t3").unwrap(), 0, "already at 0");
+        let resets: Vec<Event> = db.since(Seq(0)).unwrap().into_iter().filter(|e| e.kind == EventKind::ShipRoundsReset).collect();
+        assert_eq!(resets.len(), 1, "a reset at 0 logs nothing");
+        assert_eq!(resets[0].payload["rounds"], 2);
     }
 
     #[test]

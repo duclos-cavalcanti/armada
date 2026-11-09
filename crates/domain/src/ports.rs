@@ -67,6 +67,9 @@ pub trait ShipRepo {
     fn set_reviewed(&self, id: &ShipId, head_sha: Option<&str>) -> Result<()>;
     /// A sailor sweep was launched on it: one review round more.
     fn count_round(&self, id: &ShipId) -> Result<()>;
+    /// Its rounds back to 0, on the operator's ruling: its sailors sweep on past the cap. Appends
+    /// `ShipRoundsReset` with the count it had; one already at 0 logs nothing. Returns that count.
+    fn reset_rounds(&self, id: &ShipId, at: &str) -> Result<i64>;
     /// Retire a ship — it left the open list, merged or closed (sets `ended_at`). Idempotent; a
     /// reopened MR's next upsert clears it again.
     fn retire(&self, id: &ShipId, at: &str) -> Result<()>;
