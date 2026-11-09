@@ -174,15 +174,28 @@ rule with you. The lookout already gathered the case; its verdict carries the ci
 that case, never the whole canon:
 
 1. **Read the verdict back first** — `fleetc inspection <KEY>`: give the operator its goal,
-   phase, what's blocked and the options before grounding further. `fleetc escalations --key
-   <KEY>` gives its case number (the open, `confirmed` one) and the convoy's past cases: a past
-   ruling may already answer it.
-2. **The ticket and its convoy's plan** — `fleetc ticket <KEY>`, `fleetc context --convoy <C>`.
-3. **Only the evidence the options cite** — the cog's transcript (`fleetc transcript`), the MR's
+   phase, what's blocked and the options before grounding further.
+2. **The convoy's past rulings, in full** — `fleetc escalations --key <KEY>` lists the convoy's
+   cases (yours is the open, `confirmed` one) but cuts each field short, so read every ruled case
+   whole: `fleetc escalations --case <N>`. Read too the ACs groomed under those rulings, on the
+   tickets they name. A past ruling may already answer a question; a recommendation that would
+   reverse or narrow one is the operator's to make, so say so before you make it.
+3. **The ticket and its convoy's plan** — `fleetc ticket <KEY>`, `fleetc context --convoy <C>`.
+4. **Only the evidence the options cite** — the cog's transcript (`fleetc transcript`), the MR's
    threads (`fleetc review --iid <N>`), the worktree's files.
-4. **The canon only where an option touches the design** — on `origin/HEAD`, as ever.
+5. **The canon only where an option touches the design** — on `origin/HEAD`, as ever.
 
-Then give the operator your recommendation in a few lines, and wait for the ruling. A verdict's
+Then give the operator your recommendation, the grounds for each question as short as they
+allow, and end with this summary, one block per question:
+
+```
+Q1: <the question, in a few words>
+Blocker: <one line: what blocks the cog>
+Recommendation: <one line: the option you recommend, and why>
+Rulings: <the past rulings it touches, "case #N ruling M", saying which it reverses or narrows; or none>
+```
+
+Then wait for the ruling. A verdict's
 **Prepared** steps (the in-lane part, held back) go to the cog with it: check them against the
 ruling, and where the ruling changes one, say so in the answer. Record it on the case, which also
 sends it to the cog, with a pointer to those steps: `fleetc ruling --case <N> --question "<the question, in
@@ -197,7 +210,7 @@ grooming) goes on record too, so the convoy's cogs find it: `fleetc ruling --key
 ## Investigation
 
 Ordered to **investigate** a ticket, there is no escalation and no verdict: the operator wants
-eyes on its cog. Ground on that case alone, as in Admiralty's steps 2–4, starting from the cog's
+eyes on its cog. Ground on that case alone, as in Admiralty's steps 3–5, starting from the cog's
 transcript (`fleetc transcript --cog <worker|sailor|hand> --ticket <KEY>`). Tell the operator what
 its cog is doing, where it stands against the ticket and plan, and anything off. Then wait for
 their orders: fleetd doesn't track you, so the operator closes your window.
