@@ -128,6 +128,13 @@ impl GlabForge {
         Ok(())
     }
 
+    /// Whether the MR is a draft now, as GitLab has it.
+    fn is_draft(&self, iid: i64) -> Result<bool> {
+        let mr: serde_json::Value =
+            serde_json::from_str(&self.api(&format!("projects/{}/merge_requests/{iid}", self.project))?)?;
+        Ok(mr.get("draft").and_then(|x| x.as_bool()).unwrap_or(false))
+    }
+
     /// The OWNER/REPO path of the configured project — `glab mr` SUBCOMMANDS need it via `-R`.
     /// Unlike `glab api projects/{id}/…` (which pins the project in the REST path), `glab mr <verb>`
     /// resolves its repo from `-R` or the ambient CWD git remote — so without this it shells against
@@ -271,8 +278,9 @@ impl Forge for GlabForge {
     }
 
     fn describe_mr(&self, iid: i64, title: &str, description: &str) -> Result<()> {
+        let title = keep_draft(title, self.is_draft(iid)?);
         let (iid, repo) = (iid.to_string(), self.repo()?);
-        let args = ["mr", "update", &iid, "-R", &repo, "--title", title, "--description", description];
+        let args = ["mr", "update", &iid, "-R", &repo, "--title", &title, "--description", description];
         let out = Command::new("glab").args(args).output()?;
         ensure!(out.status.success(), "glab mr update failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
@@ -290,9 +298,7 @@ impl Forge for GlabForge {
     }
 
     fn set_draft(&self, iid: i64, draft: bool) -> Result<()> {
-        let mr: serde_json::Value =
-            serde_json::from_str(&self.api(&format!("projects/{}/merge_requests/{iid}", self.project))?)?;
-        if mr.get("draft").and_then(|x| x.as_bool()).unwrap_or(false) == draft {
+        if self.is_draft(iid)? == draft {
             return Ok(()); // already there
         }
         let flag = if draft { "--draft" } else { "--ready" };
@@ -602,6 +608,13 @@ fn pipeline_status(s: &str) -> Option<PipelineStatus> {
     }
 }
 
+/// The title to rewrite a draft MR with. GitLab reads draft off the title's prefix, so a new title
+/// without one would mark the MR ready; a rewrite changes the words, never the state.
+fn keep_draft(title: &str, draft: bool) -> String {
+    let marked = ["Draft:", "[Draft]", "(Draft)"].iter().any(|p| title.get(..p.len()).is_some_and(|h| h.eq_ignore_ascii_case(p)));
+    if draft && !marked { format!("Draft: {title}") } else { title.to_string() }
+}
+
 fn ship_state(gitlab_state: &str, draft: bool) -> ShipState {
     match gitlab_state {
         "merged" => ShipState::Merged,
@@ -728,6 +741,13 @@ mod tests {
         assert_eq!(ship_state("opened", true), ShipState::Draft);
         assert_eq!(ship_state("merged", false), ShipState::Merged);
         assert_eq!(ship_state("closed", false), ShipState::Closed);
+    }
+
+    #[test]
+    fn a_rewrite_keeps_a_draft_a_draft() {
+        assert_eq!(keep_draft("PROJ-1: Land it", true), "Draft: PROJ-1: Land it");
+        assert_eq!(keep_draft("draft: PROJ-1: Land it", true), "draft: PROJ-1: Land it"); // already marked
+        assert_eq!(keep_draft("PROJ-1: Land it", false), "PROJ-1: Land it");
     }
 
     #[test]
