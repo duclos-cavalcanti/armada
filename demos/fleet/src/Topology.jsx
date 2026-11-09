@@ -84,6 +84,12 @@ function CompNode({ id, data }) {
   // custody-domain nodes render as centered pills (tree-node look); the rest
   // are left-aligned cards.
   const isDomain = data.kind === 'domain' || data.kind === 'domainnew'
+  // "there are more of these": a bare vertical ellipsis under a trimmed list; click for the rest.
+  if (data.kind === 'more') {
+    return (
+      <div style={{ width: data.w, height: data.h, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--dim)', font: `700 18px ${MONO}`, cursor: 'pointer' }}>⋮</div>
+    )
+  }
   return (
     <>
       {/* drag-to-resize handles on the selected card; writes the new size back
