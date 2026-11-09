@@ -326,6 +326,15 @@ impl Fleet {
         self.armada.iter().find(|r| r.ship.ticket.as_ref() == Some(ticket))
     }
 
+    /// The open convoy a ticket sails in, as its `#N`; `—` outside every open convoy.
+    pub fn convoy_of(&self, ticket: Option<&TicketKey>) -> String {
+        let convoy = self.board.iter().find(|t| Some(&t.key) == ticket).and_then(|t| t.convoy.as_ref());
+        match self.convoys.iter().find(|c| Some(&c.key) == convoy) {
+            Some(c) => format!("#{}", c.no),
+            None => "—".into(),
+        }
+    }
+
     /// The live captain commanding a convoy, if one is.
     pub fn captain_of(&self, convoy: &domain::ConvoyKey) -> Option<&CogRow> {
         self.crew.iter().find(|c| c.session.convoy.as_ref() == Some(convoy))

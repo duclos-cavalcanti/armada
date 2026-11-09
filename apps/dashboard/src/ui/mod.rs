@@ -161,6 +161,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             },
             Some(header(&[
                 ("Ticket", 12),
+                ("Convoy", 7),
                 ("Crew", 7),
                 ("State", 13),
                 ("Live", 7),
@@ -171,13 +172,14 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             ])),
             (if pane == Pane::Impl { &f.workers } else { &f.hands })
                 .iter()
-                .map(|c| builder_row(c, f.is_up(c), f.ship_of(c.session.ticket.as_ref())))
+                .map(|c| builder_row(c, f.is_up(c), f.ship_of(c.session.ticket.as_ref()), f.convoy_of(c.session.ticket.as_ref())))
                 .collect(),
         ),
         Pane::Merge => (
             format!(" Merge · {} landing ", f.landing.len()),
             Some(header(&[
                 ("Ticket", 12),
+                ("Convoy", 7),
                 ("Sailor", 15),
                 ("Live", 7),
                 ("MR", 7),
@@ -189,7 +191,10 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 ("Age", 6),
                 ("Merge status", 0),
             ])),
-            f.landing.iter().map(|r| landing_row(r, r.sailor.as_ref().is_some_and(|s| f.is_up(s)))).collect(),
+            f.landing
+                .iter()
+                .map(|r| landing_row(r, r.sailor.as_ref().is_some_and(|s| f.is_up(s)), f.convoy_of(r.ship.ticket.as_ref())))
+                .collect(),
         ),
         Pane::Reviews => (
             format!(" Reviews · {} on watch ", f.lookouts().count()),
@@ -296,7 +301,7 @@ fn order_row(o: &OrderRow) -> Line<'static> {
     ])
 }
 
-fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>) -> Line<'static> {
+fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>, convoy: String) -> Line<'static> {
     let s = &c.session;
     let state = c.state.clone().unwrap_or_else(|| "·".into());
     let anchor = if s.anchored_at.is_some() { "⚓ " } else { "" };
@@ -306,6 +311,7 @@ fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>) -> Line<'static> {
     };
     cells(vec![
         (s.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| "—".into()), 12, Style::default()),
+        (convoy, 7, Style::default()),
         (s.kind.as_str().into(), 7, Style::default()),
         (state.clone(), 13, state_style(&state)),
         live_cell(c.liveness.as_deref(), up),
@@ -316,7 +322,7 @@ fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>) -> Line<'static> {
     ])
 }
 
-fn landing_row(r: &LandingRow, up: bool) -> Line<'static> {
+fn landing_row(r: &LandingRow, up: bool, convoy: String) -> Line<'static> {
     let snap = r.snapshot.as_ref();
     // An ended sailor's last word stays visible, dimmed: the ship is at rest.
     let sailor = crate::source::sailor_label(r.sailor.as_ref());
@@ -349,6 +355,7 @@ fn landing_row(r: &LandingRow, up: bool) -> Line<'static> {
     };
     cells(vec![
         (r.ship.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_default(), 12, Style::default()),
+        (convoy, 7, Style::default()),
         (sailor, 15, sailor_style),
         live,
         (format!("!{}", r.ship.iid), 7, Style::default()),
