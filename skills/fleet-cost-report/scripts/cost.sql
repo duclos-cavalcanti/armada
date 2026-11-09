@@ -1,9 +1,10 @@
 -- The fleet's spend, as one JSON object, from the telemetry DB (main) and the ledger (attached as
 -- `l`). `:since` is the window's start (RFC3339 or a date; '' = all time). A request with no role
--- is a one-off `claude` (the operator's own sessions): `interactive`, as `fleetc cost` has it.
+-- is a one-off `claude` (the operator's own sessions): `interactive`, as `fleetc cost` has it. A
+-- request made by a subagent carries its `agent_id`, and counts to the role that spawned it.
 WITH req AS (
   SELECT ts, substr(ts, 1, 10) AS day, coalesce(role, 'interactive') AS role, ticket, session_id,
-         model, cost_usd AS usd,
+         model, cost_usd AS usd, json_extract(attrs_json, '$.agent_id') IS NOT NULL AS by_subagent,
          json_extract(attrs_json, '$.input_tokens') AS input,
          json_extract(attrs_json, '$.cache_read_tokens') AS cache_read,
          json_extract(attrs_json, '$.cache_creation_tokens') AS cache_write,
@@ -27,7 +28,7 @@ attributed AS (
 top_tickets AS (
   SELECT ticket, sum(usd) AS usd FROM attributed
   WHERE ticket IS NOT NULL AND ticket NOT IN (SELECT key FROM l.convoys)
-  GROUP BY ticket ORDER BY usd DESC LIMIT 15
+  GROUP BY ticket ORDER BY usd DESC LIMIT 10
 ),
 -- Spend recorded on tickets now Done: what a landed ticket costs.
 done AS (
@@ -47,8 +48,9 @@ SELECT json_object(
   'done', (SELECT json_object('usd', coalesce(usd, 0), 'tickets', tickets) FROM done),
   'tokens', (SELECT json_object('input', sum(input), 'cache_read', sum(cache_read),
                                 'cache_write', sum(cache_write), 'output', sum(output)) FROM req),
-  'by_role', (SELECT json_group_array(json_object('role', role, 'usd', usd, 'requests', n)) FROM
-               (SELECT role, sum(usd) AS usd, count(*) AS n FROM req GROUP BY role ORDER BY usd DESC)),
+  'by_role', (SELECT json_group_array(json_object('role', role, 'usd', usd, 'subagents', sub, 'requests', n)) FROM
+               (SELECT role, sum(usd) AS usd, sum(CASE WHEN by_subagent THEN usd ELSE 0 END) AS sub, count(*) AS n
+                FROM req GROUP BY role ORDER BY usd DESC)),
   'by_model', (SELECT json_group_array(json_object('model', model, 'usd', usd, 'requests', n)) FROM
                (SELECT coalesce(model, '?') AS model, sum(usd) AS usd, count(*) AS n FROM req
                 GROUP BY 1 ORDER BY usd DESC)),

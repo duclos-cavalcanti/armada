@@ -111,13 +111,14 @@ const twin = rows => h('details', {}, h('summary', {}, 'Table'), h('table', {},
   h('tr', {}, h('th', {}, ''), ROLES.map(r => h('th', {}, r)), h('th', {}, 'total')),
   rows.map(r => h('tr', {}, h('td', {}, r.label), ROLES.map(x => h('td', {}, r.segs[x] ? usd(r.segs[x]) : '')), h('td', {}, usd(r.total))))));
 
-// Horizontal stacked bars; each row: {label, note, segs, total, side}.
+// Horizontal stacked bars; each row: {label, note, segs, total, side}, or its own {parts, tip}.
 const hbars = rows => {
   const max = Math.max(...rows.map(r => r.total), 1e-9);
   return h('div', { class: 'hb' }, rows.map(r => [
     h('div', { class: 'lab', title: r.label }, r.label, r.note ? h('small', {}, r.note) : null),
-    h('div', { class: 'track', style: `width:${100 * r.total / max}%`, 'data-tip': roleTip(`${r.label} · ${usd(r.total)}`, r.segs) },
-      segsOf(r.segs).map(x => h('div', { style: `flex:${r.segs[x]};background:var(--${x})` }))),
+    h('div', { class: 'track', style: `width:${100 * r.total / max}%`, 'data-tip': r.tip ?? roleTip(`${r.label} · ${usd(r.total)}`, r.segs) },
+      (r.parts ?? segsOf(r.segs).map(x => ({ v: r.segs[x], fill: `background:var(--${x})` })))
+        .filter(p => p.v > 0).map(p => h('div', { style: `flex:${p.v};${p.fill}` }))),
     h('div', { class: 'val' }, usd(r.total), r.side ? h('small', {}, r.side) : null),
   ]));
 };
@@ -149,7 +150,11 @@ for (let d = new Date(day(D.first)); D.first && d <= new Date(day(D.last)); d.se
   const k = d.toISOString().slice(0, 10);
   days.push({ key: k, segs: {}, total: 0, ...spent.get(k), label: k });
 }
-const roles = D.by_role.map(r => ({ label: r.role, segs: { [r.role]: r.usd }, total: r.usd, side: `${pct(r.usd, D.usd)} · ${num(r.requests)} req` }));
+// A role's own requests, then its subagents' (faded).
+const roles = D.by_role.map(r => ({ label: r.role, total: r.usd, side: `${pct(r.usd, D.usd)} · ${num(r.requests)} req`,
+  note: r.subagents > 0 ? `${pct(r.subagents, r.usd)} via subagents` : null,
+  parts: [{ v: r.usd - r.subagents, fill: `background:var(--${r.role})` }, { v: r.subagents, fill: `background:var(--${r.role});opacity:0.4` }],
+  tip: `${r.role} · ${usd(r.usd)}\nitself  ${usd(r.usd - r.subagents)}\nsubagents  ${usd(r.subagents)} (${pct(r.subagents, r.usd)})` }));
 const convoys = pivot(D.by_convoy, r => r.convoy, r => ({ no: r.no, title: r.title }))
   .map(r => ({ ...r, label: r.key ? `#${r.no} ${r.title || r.key}` : 'Outside the convoys', note: r.key, side: pct(r.total, D.usd) }))
   .sort((a, b) => (a.key == null) - (b.key == null) || b.total - a.total);
@@ -171,7 +176,7 @@ document.getElementById('app').append(...[
   ].map(([v, l]) => h('div', { class: 'tile' }, h('b', {}, v), h('span', {}, l)))),
   h('div', { class: 'legend' }, ROLES.filter(r => D.by_role.some(x => x.role === r)).map(r => h('span', {}, h('i', { class: 'sw', style: `background:var(--${r})` }), r))),
   card('1) Daily spend', 'USD per UTC day, by role', days.length ? columns(days) : 'No spend in the window.', twin(days)),
-  card('2) By role', 'USD, share of the total, API requests', hbars(roles)),
+  card('2) By role', 'USD, share of the total, API requests; solid is the role itself, faded its subagents', hbars(roles)),
   card('3) By convoy', 'USD by role; a ticket counts to the convoy it sails in, a captain to its own', hbars(convoys), twin(convoys)),
   card('4) Top tickets', `The ${tickets.length} costliest tickets, USD by role, with their status`, hbars(tickets), twin(tickets)),
   h('div', { class: 'two' },

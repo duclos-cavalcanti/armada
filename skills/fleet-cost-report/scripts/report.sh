@@ -37,7 +37,7 @@ main() {
     "$here/../template.html" > "$out"
 
   echo "$out"
-  jq '{since, first, last, usd, last_24h, last_7d, done, by_role: [.by_role[] | {role, usd}]}' <<<"$data"
+  jq '{since, first, last, usd, last_24h, last_7d, done, by_role: [.by_role[] | {role, usd, subagents}]}' <<<"$data"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi

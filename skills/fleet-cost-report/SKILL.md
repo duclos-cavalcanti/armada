@@ -1,8 +1,8 @@
 ---
 description: >-
   Report the fleet's spend as one self-contained HTML dashboard, from its telemetry: the total, the
-  last 24 h and 7 days, the cost per Done ticket, the cache hit rate, and USD by day, role, convoy,
-  ticket and model. Read-only. For the shipwright, on the operator's order.
+  last 24 h and 7 days, the cost per Done ticket, the cache hit rate, and USD by day, role (with its
+  subagents' share), convoy, ticket and model. Read-only. For the shipwright, on the operator's order.
 argument-hint: "[projects/<p>] [--since <date>]"
 allowed-tools: Bash(${CLAUDE_SKILL_DIR}/scripts/report.sh *)
 ---
@@ -26,7 +26,8 @@ run that day replaces it), then the headline figures as JSON. Open the page (`op
 - `template.html` renders it; the data rides in it as JSON.
 
 **Attribution.** A request is its cog's role; one with no role is `interactive` (a session the
-operator started, as `fleetc cost` has it). A ticket's spend counts to the convoy it sails in, and
+operator started, as `fleetc cost` has it). A subagent's request (it carries an `agent_id`) counts
+to the role that spawned it; **By role** fades that share. A ticket's spend counts to the convoy it sails in, and
 a captain's to its own; an ally's MR or a ticket outside every convoy counts as outside the
 convoys. **Per Done ticket** is the spend recorded on tickets now Done, over how many they are.
 
