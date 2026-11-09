@@ -1,7 +1,7 @@
 {
   "title": "The Fleet — overview",
-  "sha": "1cdee16",
-  "note": "A simplified, opaque view of the fleet. The operator makes the judgment calls and wraps them in a toolkit of /fleet-* skills — the intelligent layer over the mechanical fleetc CLI — which (with the operator's own raw verbs) actuate fleetc; fleetc drives fleetd (the daemon, shown as one box — no internal state machines); fleetd actuates its external systems (a Tracker, a Forge), persists to the Ledger, works inside a Project (the worktrees), and spawns the Crew of cogs. For the real machinery (fleetd's server/scheduler/reconcile, the adapters, telemetry, flows) switch to the Full architecture.",
+  "sha": "578a106",
+  "note": "A simplified, opaque view of the fleet. The operator makes the judgment calls and wraps them in a toolkit of /fleet-* skills — the intelligent layer over the mechanical fleetc CLI — which (with the operator's own raw verbs) actuate fleetc; fleetc drives fleetd (the daemon, shown as one box — no internal state machines); fleetd actuates its external systems (a Tracker, a Forge), persists to the Ledger, works inside a Project (the worktrees), and spawns the Crew of cogs. For what fleetd persists (the domain types and every ledger table) switch to the Data model.",
   "groups": [
     {
       "id": "operators",
@@ -18,7 +18,7 @@
       "x": 30,
       "y": 380,
       "w": 200,
-      "h": 256,
+      "h": 596,
       "color": "#D2A8FF"
     },
     {
@@ -36,7 +36,7 @@
       "x": 850,
       "y": 230,
       "w": 190,
-      "h": 182,
+      "h": 214,
       "color": "#3FB950"
     }
   ],
@@ -51,20 +51,42 @@
       "w": 160,
       "h": 56
     },
-    { "id": "sk_berth", "kind": "skill", "label": "/fleet-berth", "x": 40, "y": 392, "w": 180, "h": 28,
-      "detail": { "type": "skill · worktree producer", "summary": "Creates a git worktree + branch for a ticket (forked off the project's default branch), beside the project checkout. Pure worktree creation — no Jira lifecycle. Run when producing a dispatch, then pass the path to `fleetc dispatch --worktree`; reconcile spawns the cog there (reconcile never creates worktrees)." } },
-    { "id": "sk_launch", "kind": "skill", "label": "/fleet-launch", "x": 40, "y": 424, "w": 180, "h": 28,
-      "detail": { "type": "skill · open the MR", "summary": "Launches the current branch's ship: pushes it, drafts the MR title + description from the ticket and the branch's divergence from its base, then opens the MR via `fleetc launch` (fleetd's forge adapter opens it — GitLab or GitHub alike). Run from the worktree." } },
-    { "id": "sk_parley", "kind": "skill", "label": "/fleet-parley", "x": 40, "y": 456, "w": 180, "h": 28,
-      "detail": { "type": "skill · answer review threads", "summary": "Addresses the open review threads on the current branch's MR (via /mr-reply), with count-gating and outcome propagation so the sailor knows what was resolved." } },
-    { "id": "sk_rechart", "kind": "skill", "label": "/fleet-rechart", "x": 40, "y": 488, "w": 180, "h": 28,
-      "detail": { "type": "skill · rebase the MR", "summary": "Rebases the current branch's MR against its target. Clean divergence → triggers GitLab's server-side rebase via `fleetc rebase` and exits (the sailor re-fires on the result). Conflict → resolves locally with project/code understanding and force-pushes. Escalates only when the conflict needs a product/design decision." } },
-    { "id": "sk_repair", "kind": "skill", "label": "/fleet-repair", "x": 40, "y": 520, "w": 180, "h": 28,
-      "detail": { "type": "skill · fix a broken pipeline", "summary": "Classifies a broken GitLab pipeline on the current branch and attempts a good-faith fix (retry / lint / build / test / infra); escalates if it's unclassifiable or out of scope." } },
-    { "id": "sk_yield", "kind": "skill", "label": "/fleet-yield", "x": 40, "y": 552, "w": 180, "h": 28,
-      "detail": { "type": "skill · hand → sailor handoff", "summary": "The operator's \"pawn it off\" handoff: yields a hand's work to a sailor. Reports `concluded` via fleetc, so fleetd promotes the order to auto, moves Jira → In QA, requests review, and reaps the hand. A ticketless hand has no sailor to yield to. Run from the hand's worktree." } },
-    { "id": "sk_publish", "kind": "skill", "label": "/fleet-publish", "x": 40, "y": 584, "w": 180, "h": 28,
+    { "id": "sk_new_project", "kind": "skill", "label": "/fleet-new-project", "x": 40, "y": 392, "w": 180, "h": 28,
+      "detail": { "type": "skill · set up a project", "summary": "Grills the operator on what fleet.toml needs (forge, tracker, checkout, merge policy), then creates projects/<name>/ with its fleet.toml, tickets/, review/ and impl/ folders and its checkout, and runs preflight until it's green." } },
+    { "id": "sk_bearings", "kind": "skill", "label": "/fleet-bearings", "x": 40, "y": 424, "w": 180, "h": 28,
+      "detail": { "type": "skill · read the design canon", "summary": "Reads the product's merged design canon (design records, specs, conventions, Definition of Ready/Done on origin/HEAD) and the code they point to, before a mission that needs the whole design. The admiral's, on a grooming session." } },
+    { "id": "sk_commission", "kind": "skill", "label": "/fleet-commission", "x": 40, "y": 456, "w": 180, "h": 28,
+      "detail": { "type": "skill · file a Ready ticket", "summary": "Drafts a new ticket to /fleet-ready-done (title, four-section body, duplicate check, blockers + convoy, Ready check), then creates it with `fleetc ticket new` on whichever tracker the project uses. For the admiral and the operator: files work, never dispatches it." } },
+    { "id": "sk_groom_convoy", "kind": "skill", "label": "/fleet-groom-convoy", "x": 40, "y": 488, "w": 180, "h": 28,
+      "detail": { "type": "skill · groom a convoy to Ready", "summary": "Grooms a whole convoy as one: each ticket meets the Definition of Ready, together they cover the plan's outcome, every blocker edge is needed and none is missing, and the critical path is never held up by deferrable work. Reports first, applies what the operator approves. For the admiral." } },
+    { "id": "sk_ready_done", "kind": "skill", "label": "/fleet-ready-done", "x": 40, "y": 520, "w": 180, "h": 28,
+      "detail": { "type": "skill · the Definition of Ready and Done", "summary": "The fleet's reference for how a ticket is structured, when it is Ready to dispatch, and when an MR meets Done. /fleet-commission and /fleet-propose draft to it; the captain judges Ready against it, the worker and the reviewer Done. A project's own stricter doctrine extends it." } },
+    { "id": "sk_triage", "kind": "skill", "label": "/fleet-triage", "x": 40, "y": 552, "w": 180, "h": 28,
+      "detail": { "type": "skill · the operator's sweep", "summary": "Settles the open proposals, re-judges the anchored tickets, keeps every ticket in the convoy it belongs to, and checks the fleet's pace against its deadlines and its machinery's health. One numbered action each with its fleetc command; acts only on the operator's OK. For the shipwright." } },
+    { "id": "sk_convoy_report", "kind": "skill", "label": "/fleet-convoy-report", "x": 40, "y": 584, "w": 180, "h": 28,
+      "detail": { "type": "skill · a convoy's progress page", "summary": "One self-contained HTML page: the convoy's and its critical path's % grade, a board of its tickets by column (the critical path in red), the proposals waiting to join it, its plan, and each ticket linked to the tracker. Read-only. For the shipwright." } },
+    { "id": "sk_cost_report", "kind": "skill", "label": "/fleet-cost-report", "x": 40, "y": 616, "w": 180, "h": 28,
+      "detail": { "type": "skill · the fleet's spend", "summary": "One self-contained HTML dashboard from the telemetry: the total, the last 24 h and 7 days, the cost per Done ticket, the cache hit rate, and USD by day, role, convoy, ticket and model. Read-only. For the shipwright." } },
+    { "id": "sk_publish", "kind": "skill", "label": "/fleet-publish", "x": 40, "y": 648, "w": 180, "h": 28,
       "detail": { "type": "skill · ship the viewer to Splash", "summary": "Builds the demos/architecture viewer into a single self-contained HTML file and publishes it to a Splash page at a stable, SSO-gated URL (Okta handled via a vendored Chrome extension — no token or persisted cookie). First run creates the page and returns its URL; later runs replace the same page." } },
+    { "id": "sk_berth", "kind": "skill", "label": "/fleet-berth", "x": 40, "y": 680, "w": 180, "h": 28,
+      "detail": { "type": "skill · worktree producer", "summary": "Creates a git worktree + branch for a ticket in its project's impl/ folder, forked off a given base (default: origin's default branch). Pure worktree creation — no ticket lifecycle. Run when producing a dispatch, then pass the path to `fleetc dispatch --worktree`; reconcile spawns the cog there (reconcile never creates worktrees)." } },
+    { "id": "sk_inspect", "kind": "skill", "label": "/fleet-inspect", "x": 40, "y": 712, "w": 180, "h": 28,
+      "detail": { "type": "skill · judge an escalation", "summary": "Dispatches the lookout to weigh a cog's escalation against its transcript, worktree, ticket and convoy plan, and return a verdict: REFUTE (a way out keeps the ticket's intent, fits the plan and clears the blocker — sent to the cog) or CONFIRM (the operator rules). For the admiral and captains." } },
+    { "id": "sk_launch", "kind": "skill", "label": "/fleet-launch", "x": 40, "y": 744, "w": 180, "h": 28,
+      "detail": { "type": "skill · open the MR", "summary": "Launches the current branch's ship: pushes it, drafts the MR title + description from the ticket and the branch's divergence from its base, then opens the MR via `fleetc launch` (fleetd's forge adapter opens it — GitLab or GitHub alike). Run from the worktree." } },
+    { "id": "sk_review", "kind": "skill", "label": "/fleet-review", "x": 40, "y": 776, "w": 180, "h": 28,
+      "detail": { "type": "skill · review one MR", "summary": "Reviews one MR, ours or an ally's, against its ticket, Done and the project's own doctrine, and posts the findings — on ours a resolvable thread each, on an ally's one summary comment. Returns VERDICT: clean | changes; never approves. The lookout's default (a project names its own: review_skill)." } },
+    { "id": "sk_parley", "kind": "skill", "label": "/fleet-parley", "x": 40, "y": 808, "w": 180, "h": 28,
+      "detail": { "type": "skill · answer review threads", "summary": "Answers the open review threads on the ticket's MR through `fleetc review` / `fleetc reply` (forge-neutral): proves each finding against the code before fixing it, proposes it or pushes back with evidence, defers nits to one follow-up. Count-gated; surfaces floating notes before declaring the MR clean." } },
+    { "id": "sk_rechart", "kind": "skill", "label": "/fleet-rechart", "x": 40, "y": 840, "w": 180, "h": 28,
+      "detail": { "type": "skill · rebase the MR", "summary": "Rebases the ticket's MR against its target. Clean divergence → triggers the forge's server-side rebase via `fleetc rebase` and exits (the sailor re-fires on the result). Conflict → resolves locally with project/code understanding and force-pushes. Escalates only when the conflict needs a product/design decision." } },
+    { "id": "sk_repair", "kind": "skill", "label": "/fleet-repair", "x": 40, "y": 872, "w": 180, "h": 28,
+      "detail": { "type": "skill · fix a broken CI run", "summary": "Classifies a broken CI run on the ticket's MR (read through `fleetc ci`, forge-neutral) and attempts a good-faith fix (retry / lint / build / test / config); escalates if it's unclassifiable or out of scope." } },
+    { "id": "sk_propose", "kind": "skill", "label": "/fleet-propose", "x": 40, "y": 904, "w": 180, "h": 28,
+      "detail": { "type": "skill · propose work found mid-ticket", "summary": "Drafts work a cog found that isn't its own — a bug nearby, debt, a reviewer's out-of-scope ask, an existing ticket to take on — and proposes it with `fleetc propose`: filed at once, labelled fleet-proposed and outside any convoy, for the operator (or the admiral) to accept or drop. For a worker, sailor or hand." } },
+    { "id": "sk_yield", "kind": "skill", "label": "/fleet-yield", "x": 40, "y": 936, "w": 180, "h": 28,
+      "detail": { "type": "skill · hand → sailor handoff", "summary": "The operator's \"pawn it off\" handoff: yields a hand's work to a sailor. Reports `concluded` via fleetc, so fleetd promotes the order to auto, moves the ticket → In QA, requests review, and reaps the hand. A ticketless hand has no sailor to yield to. Run from the hand's worktree." } },
     {
       "id": "fleetc",
       "kind": "cli",
@@ -86,14 +108,14 @@
       "h": 74,
       "detail": {
         "type": "the single-writer daemon (opaque here)",
-        "summary": "On the Overview fleetd is one opaque box. Inside, its heart is a single scheduling loop (scheduler.rs::run) — the state machine below — that the full view hides.",
+        "summary": "On the Overview fleetd is one opaque box. Inside, its heart is a single scheduling loop (scheduler.rs::run) — the state machine below.",
         "stateMachine": {
           "w": 344,
           "h": 296,
           "states": [
             { "id": "wait", "label": "wait", "sub": "recv ≤ 500ms", "x": 123, "y": 130, "w": 98, "h": 40 },
             { "id": "poll", "label": "poll", "sub": "~5s · read-only", "x": 128, "y": 16, "w": 88, "h": 36, "accent": "#79C0FF" },
-            { "id": "sync", "label": "sync", "sub": "~300s · write", "x": 252, "y": 132, "w": 88, "h": 36, "accent": "#D29922" },
+            { "id": "sync", "label": "sync", "sub": "~300s · write + health", "x": 252, "y": 132, "w": 88, "h": 36, "accent": "#D29922" },
             { "id": "reconcile", "label": "reconcile", "sub": "~60s · write", "x": 128, "y": 248, "w": 88, "h": 36, "accent": "#56D364" },
             { "id": "apply", "label": "apply", "sub": "command · write", "x": 4, "y": 132, "w": 88, "h": 36, "accent": "#9DA7B3" },
             { "id": "exit", "label": "exit", "sub": "channel closed", "x": 4, "y": 250, "w": 92, "h": 30, "accent": "#DB6D28" }
@@ -105,7 +127,7 @@
             { "from": "wait", "to": "apply", "label": "Ok(cmd)", "bidir": true },
             { "from": "wait", "to": "exit", "label": "Disconnected" }
           ],
-          "note": "Verified against scheduler.rs::run. Each pass fires any ticker whose Instant deadline has passed, then blocks on the mpsc command channel for ≤500ms (Timeout → re-loop). poll is READ-ONLY (overwrites the in-memory liveness snapshot — no ledger write, no event); sync, live reconcile, and each client command are the single writer's writes — one transaction appending a CDC event. A Disconnected channel (UDS server gone) breaks the loop. Cadences shown are the config defaults (5/300/60s), re-read live each pass."
+          "note": "Verified against scheduler.rs::run. Each pass fires any ticker whose Instant deadline has passed, then blocks on the mpsc command channel for ≤500ms (Timeout → re-loop). poll is READ-ONLY (overwrites the in-memory liveness snapshot — no ledger write, no event); sync, live reconcile, and each client command are the single writer's writes — one transaction appending a CDC event. Each sync is followed by the health check on the project's git state and its guards: a miss holds the lookouts (and is logged as health_checked when it changes). A Disconnected channel (UDS server gone) breaks the loop. Cadences shown are the config defaults (5/300/60s), re-read live each pass."
         }
       }
     },
@@ -113,7 +135,7 @@
       "id": "tracker",
       "kind": "adapter",
       "label": "Tracker",
-      "sub": "e.g. Jira",
+      "sub": "Jira · filesystem",
       "x": 430,
       "y": 100,
       "w": 180,
@@ -123,7 +145,7 @@
       "id": "forge",
       "kind": "adapter",
       "label": "Forge",
-      "sub": "e.g. GitLab",
+      "sub": "GitLab · GitHub",
       "x": 690,
       "y": 100,
       "w": 180,
@@ -143,22 +165,24 @@
       "id": "project",
       "kind": "config",
       "label": "Project Worktrees",
-      "sub": "per-ticket branches off master",
+      "sub": "impl/ per ticket · review/ per MR",
       "x": 1092,
       "y": 288,
       "w": 200,
       "h": 56
     },
     { "id": "cog_captain", "kind": "cog", "label": "captain", "x": 860, "y": 244, "w": 170, "h": 28,
-      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "Orchestrates one convoy: dispatches its clean frontier." } },
+      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "One pass over one convoy, on a timer (captain_sleep_secs): dispatches its clean frontier, inspects its cogs' escalations, closes it once every ticket is delivered." } },
     { "id": "cog_worker", "kind": "cog", "label": "worker", "x": 860, "y": 276, "w": 170, "h": 28,
-      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "Implements one ticket in one worktree." } },
+      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "Implements one ticket in one worktree to a draft MR, answers its review round after round until a review comes back clean, then concludes." } },
     { "id": "cog_hand", "kind": "cog", "label": "hand", "x": 860, "y": 308, "w": 170, "h": 28,
-      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "Operator-driven implementer — you write the code." } },
+      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "Operator-driven implementer — you write the code; it grounds the ticket, aids on request, and concludes when you say so." } },
     { "id": "cog_sailor", "kind": "cog", "label": "sailor", "x": 860, "y": 340, "w": 170, "h": 28,
-      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "Lands one open MR toward merged." } },
+      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "Lands one open MR: one finishing sweep (rebase / reply / CI fix / arm), then sleeps until the ship needs it again." } },
     { "id": "cog_lookout", "kind": "cog", "label": "lookout", "x": 860, "y": 372, "w": 170, "h": 28,
-      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "Reviews one allied MR." } },
+      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "Reviews one MR — ours or an ally's — in its own review worktree (review/<iid>), posts, and stands down. One per MR, several at once." } },
+    { "id": "cog_admiral", "kind": "cog", "label": "admiral", "x": 860, "y": 404, "w": 170, "h": 28,
+      "detail": { "type": "a crew cog · Claude session in a tmux pane", "summary": "Convened by fleetd on a ticket's confirmed escalation, for the operator to rule with (capped by `admirals`). Reports no states." } },
     {
       "id": "ledger",
       "kind": "sqlite",
@@ -190,7 +214,7 @@
       "h": 50,
       "detail": {
         "type": "startup config · crates/fleetd/src/config.rs",
-        "summary": "Read once at launch. [forge] + [tracker] are required; everything else defaults.",
+        "summary": "Read once at launch. [forge] + [tracker] are required; everything else defaults. The cadences, caps, review levers, thresholds and dry_run are live: `fleetc settings set` overrides them with no restart.",
         "fields": [
           { "section": "cadences & mode", "rows": [
             { "key": "poll_secs", "meta": "5", "informs": "Liveness-poll cadence (s): how often the in-memory cog snapshot refreshes." },
@@ -198,6 +222,18 @@
             { "key": "reconcile_secs", "meta": "60", "informs": "Reconcile cadence (s): converge intent against reality." },
             { "key": "captain_sleep_secs", "meta": "900", "informs": "A convoy's rest (s) between captain passes, from the last one's finish." },
             { "key": "dry_run", "meta": "false", "informs": "true = plan + log only, execute nothing (the parity look)." }
+          ]},
+          { "section": "crew caps & review", "rows": [
+            { "key": "admirals", "meta": "3", "informs": "Admirals convened at once, one per confirmed escalation (-1 = no cap, 0 = none)." },
+            { "key": "lookouts", "meta": "3", "informs": "Lookouts reviewing allied MRs at once, one MR each (-1 = no cap, 0 = none)." },
+            { "key": "self_lookouts", "meta": "-1", "informs": "Lookouts reviewing our own MRs at once, apart from the allies' cap." },
+            { "key": "review_rounds", "meta": "5", "informs": "Review rounds a worker gets on its MR; past them with threads open, it escalates." },
+            { "key": "review_settle_secs", "meta": "300", "informs": "How long an MR's threads must hold still before a sailor answers them (0 = at once)." }
+          ]},
+          { "section": "project skills · opt", "rows": [
+            { "key": "review_skill", "meta": "opt", "informs": "The project's own review skill, which every lookout runs (unset = /fleet-review)." },
+            { "key": "groom_skill", "meta": "opt", "informs": "The project's grooming skill, run by an admiral on each ticket it grooms (unset = /fleet-ready-done)." },
+            { "key": "assess_skill", "meta": "opt", "informs": "The project's read-only readiness check, before dispatch and at grooming (unset = /fleet-ready-done)." }
           ]},
           { "section": "liveness thresholds", "rows": [
             { "key": "active_secs", "meta": "120", "informs": "Activity age under which a cog counts as Active." },
@@ -207,12 +243,12 @@
             { "key": "otel_addr", "meta": "127.0.0.1:4318", "informs": "Bind addr of the OTLP/HTTP receiver that fills telemetry.db." }
           ]},
           { "section": "[project]", "rows": [
-            { "key": "path", "meta": "\"main\"", "informs": "Product's main checkout (relative to fleet.toml) — captains + lookout launch here." }
+            { "key": "path", "meta": "\"main\"", "informs": "Product's main checkout (relative to fleet.toml): owns the impl/ ticket worktrees and the lookouts' review/ worktrees; captains launch here." }
           ]},
           { "section": "[forge] · required", "rows": [
             { "key": "kind", "meta": "gitlab | github", "informs": "Which forge adapter drives the MRs." },
             { "key": "project", "meta": "required", "informs": "GitLab numeric project id, or GitHub owner/repo." },
-            { "key": "auto_merge", "meta": "true", "informs": "Dispatch default: true = sailor arms auto-merge; false = land-to-clean, then await operator." }
+            { "key": "auto_merge", "meta": "true", "informs": "true = `fleetc arm` sets the MR to merge once its gates pass; false = arm refuses, the operator merges on the forge." }
           ]},
           { "section": "[tracker] · required", "rows": [
             { "key": "kind", "meta": "jira | filesystem", "informs": "Which tracker adapter holds tickets." },
