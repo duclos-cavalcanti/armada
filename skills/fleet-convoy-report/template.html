@@ -45,8 +45,10 @@ h2 { font-size: 15px; margin: 32px 0 8px; font-weight: 600; }
 .cols { align-items: flex-end; border-bottom: 1px solid var(--grid); }
 .col { flex: 1; display: flex; flex-direction: column; align-items: center; cursor: default; }
 .col b { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
-.col div { width: 100%; max-width: 64px; border-radius: 4px 4px 0 0; }
-.col .faded { opacity: 0.35; }
+.stack { width: 100%; max-width: 64px; display: flex; flex-direction: column; gap: 2px; }
+.stack > div { display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: #fff; }
+.stack > div:first-child { border-radius: 4px 4px 0 0; }
+.stack.faded { opacity: 0.35; }
 .col-labels span { flex: 1; text-align: center; font-size: 12px; color: var(--ink-2); padding-top: 6px; }
 table { width: 100%; table-layout: fixed; border-collapse: collapse; background: var(--surface); border: 1px solid var(--ring);
         border-radius: 10px; overflow: hidden; }
@@ -95,7 +97,8 @@ const mr = t => t.mr ? link(`!${t.mr.iid}`, t.mr.url) : '—';
 const mrCell = t => t.mr ? [mr(t), ' ', h('span', { class: 'why' }, t.mr.state)] : '—';
 const stageCell = t => h('span', { class: 'nowrap' }, h('i', { class: 'sw', style: `background:var(--${t.stage})` }), label(t.stage));
 const pill = (text, dot) => h('span', { class: 'pill' }, dot ? h('span', { class: 'dot', style: `background:var(--${dot})` }) : null, text);
-const flags = t => [t.escalated ? pill('✕ escalated', 'critical') : null, t.manual ? pill('✋ by hand') : null];
+const flags = t => [t.critical ? pill('critical path', 'critical') : null, t.escalated ? pill('✕ escalated', 'critical') : null,
+  t.manual ? pill('✋ by hand') : null];
 // The title, and under it why the ticket is anchored: two lines, the rest on hover.
 const titleCell = t => [t.title, t.held != null && t.stage !== 'done'
   ? h('div', { class: 'why clamp', 'data-tip': t.held || 'anchored' }, `⚓ ${t.held || 'anchored'}`) : null];
@@ -108,7 +111,7 @@ const section = (b, rows, cols) => rows.length ? [h('h2', {}, h('i', { class: 's
 const day = s => s ? s.slice(0, 10) : '';
 const days = s => Math.max(0, Math.round((Date.parse(D.generated) - Date.parse(s)) / 864e5));
 
-const c = D.convoy, n = D.total, k = D.counts;
+const c = D.convoy, n = D.total, k = D.counts, cp = D.critical;
 // The board: every ticket in one column, in line order; an open ticket waiting on a blocker sits in
 // Blocked, out of its stage, so the five add up to Tickets. Proposed stands outside, faded.
 const BOARD = ['todo', 'progress', 'qa', 'blocked', 'done']
@@ -120,23 +123,38 @@ const byKey = (a, b) => (a.key ?? '').localeCompare(b.key ?? '', undefined, { nu
 const lane = Object.fromEntries(BOARD.map(b => [b.id, D.tickets.filter(t => column(t) === b.id).sort(byKey)]));
 document.title = `#${c.no ?? '?'} ${c.title ?? c.key} · convoy report`;
 
-const bar = h('div', { class: 'bar', role: 'img', 'aria-label': STAGES.map(s => `${s.label} ${k[s.id]}`).join(', ') },
+// The convoy by stage; each stage's critical-path count in brackets.
+const onPathAt = id => cp ? cp.counts[id] : 0;
+const counted = id => `${k[id]}${onPathAt(id) ? ` (${onPathAt(id)})` : ''}`;
+const bar = h('div', { class: 'bar', role: 'img',
+    'aria-label': STAGES.map(s => `${s.label} ${k[s.id]}, ${onPathAt(s.id)} on the critical path`).join('; ') },
   STAGES.filter(s => k[s.id]).map(s => h('div', {
     style: `flex:${k[s.id]};background:var(--${s.id});color:${s.ink}`,
-    'data-tip': `${s.label} · ${k[s.id]} of ${n} (${Math.round(100 * k[s.id] / n)}%)`,
-  }, 100 * k[s.id] / n >= 6 ? k[s.id] : '')));
+    'data-tip': `${s.label} · ${k[s.id]} of ${n} (${Math.round(100 * k[s.id] / n)}%)`
+      + (onPathAt(s.id) ? ` · ${onPathAt(s.id)} on the critical path` : ''),
+  }, 100 * k[s.id] / n >= 6 ? counted(s.id) : '')));
 
+// Each column's critical-path tickets sit at its foot, in red.
+const onPath = ts => ts.filter(t => t.critical).length;
 const cols = [
-  { id: 'total', label: 'Tickets', v: n, tip: `${n} tickets in the convoy` },
-  ...BOARD.map(b => ({ ...b, v: lane[b.id].length, tip: `${b.label} · ${lane[b.id].length} of ${n}` })),
-  { ...PROPOSED, v: k.proposed, tip: `${k.proposed} open proposals, outside the convoy until accepted` },
+  { id: 'total', label: 'Tickets', v: n, cp: cp?.total ?? 0, tip: `${n} tickets in the convoy` },
+  ...BOARD.map(b => ({ ...b, v: lane[b.id].length, cp: onPath(lane[b.id]), tip: `${b.label} · ${lane[b.id].length} of ${n}` })),
+  { ...PROPOSED, v: k.proposed, cp: 0, tip: `${k.proposed} open proposals, outside the convoy until accepted` },
 ];
 const peak = Math.max(1, ...cols.map(x => x.v)), PLOT = 160;
-const board = h('div', { class: 'card board', role: 'img', 'aria-label': cols.map(x => `${x.label} ${x.v}`).join(', ') },
-  h('div', { class: 'cols', style: `height:${PLOT + 26}px` }, cols.map(x => h('div', { class: 'col', 'data-tip': x.tip },
-    h('b', {}, x.v),
-    h('div', { class: x.faded ? 'faded' : '', style: `height:${Math.round(PLOT * x.v / peak)}px;background:var(--${x.fill ?? x.id})` })))),
+const px = v => Math.round(PLOT * v / peak);
+const board = h('div', { class: 'card board', role: 'img',
+    'aria-label': cols.map(x => `${x.label} ${x.v}${x.cp ? `, ${x.cp} on the critical path` : ''}`).join('; ') },
+  h('div', { class: 'cols', style: `height:${PLOT + 26}px` }, cols.map(x => h('div', { class: 'col',
+      'data-tip': x.cp ? `${x.tip} · ${x.cp} on the critical path` : x.tip },
+    // Its critical count inside the red, or in brackets when the red is too short to hold it.
+    h('b', {}, x.v, x.cp && px(x.cp) < 16 ? ` (${x.cp})` : ''),
+    h('div', { class: `stack${x.faded ? ' faded' : ''}`, style: `height:${px(x.v)}px` },
+      x.v > x.cp ? h('div', { style: `flex:${x.v - x.cp};background:var(--${x.fill ?? x.id})` }) : null,
+      x.cp ? h('div', { style: `flex:${x.cp};background:var(--critical)` }, px(x.cp) >= 16 ? x.cp : '') : null)))),
   h('div', { class: 'col-labels' }, cols.map(x => h('span', {}, x.label))),
+  cp ? h('div', { class: 'legend', style: 'margin-top:10px' },
+    h('span', {}, h('i', { style: 'background:var(--critical)' }), `Critical path ${cp.total}`)) : null,
   h('p', { class: 'note' }, `An open ticket waiting on a blocker counts as ${label('blocked')}, not under its stage, so`,
     ` ${BOARD.map(b => b.label).join(' · ')} add up to Tickets.`));
 
@@ -146,12 +164,18 @@ document.getElementById('app').append(...[
   h('p', { class: 'sub' }, `${D.project} · opened ${day(c.opened)} (${days(c.opened)} days)`,
     c.closed ? ` · closed ${day(c.closed)}` : '', ` · report ${D.generated.replace('T', ' ').slice(0, 16)} UTC`),
   h('div', { class: 'card hero' },
-    h('div', { class: 'hero-num' }, `${D.grade}%`, h('small', {}, `moved · ${k.done} of ${n} ${label('done')}`)),
+    h('div', { class: 'hero-num' }, `${D.grade}%`, h('small', {}, `moved · ${k.done} of ${n} ${label('done')}`,
+      cp ? [' · ', h('i', { class: 'sw', style: 'background:var(--critical)' }),
+        `${cp.grade}% critical path · ${cp.counts.done} of ${cp.total} ${label('done')}`] : '')),
     n ? bar : h('p', { class: 'note' }, 'No tickets.'),
-    h('div', { class: 'legend' }, STAGES.map(s => h('span', {}, h('i', { style: `background:var(--${s.id})` }), `${s.label} ${k[s.id]}`))),
+    h('div', { class: 'legend' }, STAGES.map(s => h('span', {}, h('i', { style: `background:var(--${s.id})` }),
+      `${s.label} ${counted(s.id)}`)),
+      cp ? h('span', {}, h('i', { style: 'background:var(--critical)' }), `Critical path ${cp.total}, in brackets`) : null),
     h('p', { class: 'note' }, `Moved: each ticket weighs by its stage (${[['todo', '0'], ['progress', '⅓'], ['qa', '⅔'], ['done', '1']]
       .map(([id, w]) => `${label(id)} ${w}`).join(' · ')}), averaged.`,
-      D.cancelled ? ` ${D.cancelled} cancelled left out.` : '')),
+      D.cancelled ? ` ${D.cancelled} cancelled left out.` : '',
+      cp ? ` Critical path: the plan's ${cp.named.join(' → ')}, and the convoy's tickets they wait on.`
+         : ' The plan names no critical path.')),
   board,
   c.plan ? h('details', {}, h('summary', {}, 'Convoy plan'), h('pre', {}, c.plan)) : null,
   BOARD.map(b => section(b, lane[b.id], b.id !== 'blocked' ? row : [

@@ -1,8 +1,8 @@
 ---
 description: >-
-  Report a convoy's progress as one self-contained HTML page: how far it has moved (a % grade), a
-  board of its tickets (To-Do, In-Progress, In-QA, Blocked, Done) and the proposals waiting to join
-  it, its plan (folded), then each column's tickets linked to the tracker: what the blocked ones wait
+  Report a convoy's progress as one self-contained HTML page: how far it has moved (a % grade, the
+  convoy's and its critical path's), a board of its tickets (To-Do, In-Progress, In-QA, Blocked,
+  Done; the critical path's in red) and the proposals waiting to join it, its plan (folded), then each column's tickets linked to the tracker: what the blocked ones wait
   on, why the anchored ones are held, which are worked by hand. Read-only. For the shipwright, on the
   operator's order.
 argument-hint: "<convoy KEY|#N> [projects/<p>]"
@@ -25,13 +25,17 @@ second run that day replaces it), then the summary as JSON. Open the page (`open
 
 - `scripts/report.sh` gathers: `fleetc context --convoy` (each ticket's status, open blockers, hold,
   live cog, MR state, as fleetd derives them), the ledger read-only (`scripts/ledger.sql`: titles,
-  each ticket's latest MR, the tickets worked by hand, the open proposals naming the convoy) and the
+  blockers, each ticket's latest MR, the tickets worked by hand, the open proposals naming the convoy) and the
   tracker's link (`fleetc ticket --where`).
 - `scripts/summary.jq` stages, flags and grades the tickets.
 - `template.html` renders them; the data rides in it as JSON.
 
 **The grade.** Each ticket weighs by its stage: To-Do 0, In-Progress ⅓, In-QA ⅔, Done 1, averaged
 over the convoy's tickets. Cancelled ones are left out.
+
+**The critical path.** The tickets on the plan's `**Critical path**` line, and every ticket of the
+convoy they wait on, done or not (`/fleet-groom-convoy` names the line). It gets its own grade, and
+its tickets sit in red at the foot of each column. A plan with no such line has none.
 
 **The board.** Each ticket sits in one column: To-Do, In-Progress, In-QA, Blocked, Done; they add up
 to Tickets. **Blocked** is an open ticket that waits on an open blocker or is Blocked on the tracker;
@@ -41,7 +45,7 @@ marked for a hand, dispatched to one, or worked by one.
 
 ## Hand off
 
-The path, then one line: `#N KEY: G% moved · D/T Done · Q In-QA · P In-Progress · B Blocked · H by
-hand · R proposed`. Add one more line naming what holds the convoy back most: the blocker the most tickets wait
+The path, then one line: `#N KEY: G% moved (C% critical path, d/c Done) · D/T Done · Q In-QA · P
+In-Progress · B Blocked · H by hand · R proposed`. Add one more line naming what holds the convoy back most: the blocker the most tickets wait
 on, or the hold that keeps the most tickets off the frontier. That line is your judgement; the page
 is measured.

@@ -2,7 +2,7 @@
 # report.sh — render a convoy's progress report: one self-contained HTML file.
 #   usage: report.sh <project-dir> <convoy KEY|#N> [<out.html>]
 # Reads only: `fleetc context` + the project's ledger, read-only. Prints the report's path, then
-# its summary (counts + grade) as JSON.
+# its summary (counts, grade, the critical path's) as JSON.
 set -euo pipefail
 
 die() { echo "report.sh: $*" >&2; exit 1; }
@@ -38,7 +38,7 @@ main() {
     "$here/../template.html" > "$out"
 
   echo "$out"
-  jq '{convoy: .convoy | {key, no, title}, total, cancelled, grade, counts}' <<<"$data"
+  jq '{convoy: .convoy | {key, no, title}, total, cancelled, grade, counts, critical: (.critical | del(.named))}' <<<"$data"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi

@@ -95,4 +95,6 @@ Then apply what the operator approves, all of it or the rows they pick, and say 
   description whole). Then weigh it back if it was anchored as not Ready: `fleetc weigh <KEY>`.
 - **A missing ticket**: `/fleet-commission`, into this convoy.
 - **The plan**: `fleetc convoy open <C> --plan -`, with the whole revised plan on stdin (its title
-  stays). The plan's history keeps the old one (`fleetc convoy plan <C> --history`).
+  stays). The plan's history keeps the old one (`fleetc convoy plan <C> --history`). Its Sequence
+  names the path on one line, `- **Critical path:** <K1> → <K2> → <K3>`, the proof last:
+  `/fleet-convoy-report` reads it.
