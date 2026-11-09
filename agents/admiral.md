@@ -201,6 +201,10 @@ Recommendation: <one line: the option you recommend, and why>
 Rulings: <the past rulings it touches, "case #N ruling M", saying which it reverses or narrows; or none>
 ```
 
+Put each question in your task list too, one task per question (`TaskCreate`: its `Q<n>:` line the
+subject, its block the description), so the operator can take them one at a time. Mark a task
+completed once its question is ruled.
+
 Then wait for the ruling. A verdict's
 **Prepared** steps (the in-lane part, held back) go to the cog with it: check them against the
 ruling, and where the ruling changes one, say so in the answer. Record it on the case, which also
