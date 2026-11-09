@@ -33,3 +33,17 @@
   assistant messages, tool calls named), instead of the path. Each lookout in /fleet-inspect
   reinvents the extraction from the raw JSONL (`tail -c`, `grep -o '"text"'`, `jq`, Python),
   and a byte tail cuts the cause off. One source of truth for reading a cog's reasoning.
+- [ ] **A convoy's critical path, built in.** `fleetc convoy open <C> --goal <KEY-N>…` names the
+  convoy's goal tickets (the proof its outcome is delivered); fleetd derives the critical path: the
+  goals and every convoy ticket they wait on, through the blocker edges it already syncs. A
+  `convoy_goals` table, `ConvoyRepo::{set_goals, goals}`, the closure a pure `domain` fn,
+  `ConvoyTicketView.critical` and `ConvoyView.goals` (so `fleetc context` and `convoy plan` carry
+  it). /fleet-convoy-report drops its plan regex and blockers SQL for them; /fleet-groom-convoy sets
+  the goal and flags a crucial ticket outside the path (a missing edge); /fleet-triage flags an
+  open convoy with none. Required by doctrine, not by the machine: no goal, no path.
+- [ ] **A re-review reviews the delta, not the whole MR.** Every new head on our MR gets a fresh
+  lookout that re-reviews everything, so verdicts flip (clean, changes, clean) and an MR costs ~9
+  full reviews. Hand the lookout `ship.reviewed` (the head last reviewed): a re-review judges the
+  diff since it and whether the open threads are fixed, and raises nothing new on code a prior
+  review passed (a correctness or security defect excepted). Measure cost per review for a day,
+  then try the cheaper re-review: Sonnet and/or `effort: medium` on re-reviews, Opus on the first.
