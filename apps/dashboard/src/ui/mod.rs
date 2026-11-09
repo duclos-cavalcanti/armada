@@ -219,8 +219,8 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
         ),
         Pane::Anchored => (
             format!(" Anchored · {} tickets {}", f.held.len(), peek(app, pane)),
-            Some(header(&[("Ticket", 12), ("Convoy", 12), ("Why", 0)])),
-            f.held.iter().map(|t| held_row(t, &f.held_reasons)).collect(),
+            Some(header(&[("Ticket", 12), ("Convoy", 16), ("Why", 0)])),
+            f.held.iter().map(|t| held_row(t, &f.held_reasons, f.convoy_no(t.convoy.as_ref()))).collect(),
         ),
         Pane::Log => (
             format!(
@@ -301,7 +301,7 @@ fn order_row(o: &OrderRow) -> Line<'static> {
     ])
 }
 
-fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>, convoy: String) -> Line<'static> {
+fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>, convoy: Option<i64>) -> Line<'static> {
     let s = &c.session;
     let state = c.state.clone().unwrap_or_else(|| "·".into());
     let anchor = if s.anchored_at.is_some() { "⚓ " } else { "" };
@@ -311,7 +311,7 @@ fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>, convoy: String) -> 
     };
     cells(vec![
         (s.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| "—".into()), 12, Style::default()),
-        (convoy, 7, Style::default()),
+        convoy_cell(convoy, None, 7),
         (s.kind.as_str().into(), 7, Style::default()),
         (state.clone(), 13, state_style(&state)),
         live_cell(c.liveness.as_deref(), up),
@@ -322,7 +322,7 @@ fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>, convoy: String) -> 
     ])
 }
 
-fn landing_row(r: &LandingRow, up: bool, convoy: String) -> Line<'static> {
+fn landing_row(r: &LandingRow, up: bool, convoy: Option<i64>) -> Line<'static> {
     let snap = r.snapshot.as_ref();
     // An ended sailor's last word stays visible, dimmed: the ship is at rest.
     let sailor = crate::source::sailor_label(r.sailor.as_ref());
@@ -355,7 +355,7 @@ fn landing_row(r: &LandingRow, up: bool, convoy: String) -> Line<'static> {
     };
     cells(vec![
         (r.ship.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_default(), 12, Style::default()),
-        (convoy, 7, Style::default()),
+        convoy_cell(convoy, None, 7),
         (sailor, 15, sailor_style),
         live,
         (format!("!{}", r.ship.iid), 7, Style::default()),
@@ -478,7 +478,7 @@ fn convoy_row(c: &Convoy, f: &crate::source::Fleet) -> Line<'static> {
     let anchor = if c.anchored_at.is_some() { "⚓ " } else { "" };
     let launched = fmt_age(f.captain_launched.get(&c.key.0).and_then(|at| age_of(at)));
     cells(vec![
-        (if c.no > 0 { format!("#{} {}", c.no, c.key.0) } else { c.key.0.clone() }, 16, Style::default()),
+        convoy_cell(Some(c.no).filter(|n| *n > 0), Some(&c.key.0), 16),
         (live.0, 10, live.2),
         (launched, 9, dim()),
         (format!("{open}/{}", members.len()), 6, Style::default()),
@@ -492,6 +492,28 @@ fn convoy_row(c: &Convoy, f: &crate::source::Fleet) -> Line<'static> {
 
 /// Proposals · a proposal: accept or drop it. A draft held before proposals were filed on propose
 /// has no ticket yet.
+/// A convoy's own color, by its number: the same on every pane and every refresh, distinct for the
+/// first eight, and clear of the status colors (green, yellow, red, cyan). No number: dimmed.
+fn convoy_style(no: Option<i64>) -> Style {
+    const HUES: [u8; 8] = [75, 216, 141, 115, 213, 67, 147, 139]; // 256-color: sky, peach, violet, seafoam, pink, steel, lavender, mauve
+    match no {
+        Some(n) if n > 0 => Style::default().fg(Color::Indexed(HUES[(n as usize - 1) % HUES.len()])),
+        _ => dim(),
+    }
+}
+
+/// A convoy cell, in its convoy's color: `#N`, then its key when given; the bare key (or `—`) for
+/// a convoy that isn't open.
+fn convoy_cell(no: Option<i64>, key: Option<&str>, width: usize) -> (String, usize, Style) {
+    let text = match (no, key) {
+        (Some(n), Some(k)) => format!("#{n} {k}"),
+        (Some(n), None) => format!("#{n}"),
+        (None, Some(k)) => k.to_string(),
+        (None, None) => "—".into(),
+    };
+    (text, width, convoy_style(no))
+}
+
 fn proposal_row(p: &Proposal, convoy_no: Option<i64>) -> Line<'static> {
     let key = |k: Option<&String>| k.cloned().unwrap_or_else(|| "—".into());
     let (ticket, detail) = match &p.proposed {
@@ -502,19 +524,18 @@ fn proposal_row(p: &Proposal, convoy_no: Option<i64>) -> Line<'static> {
         (format!("#{}", p.id.0), 5, Style::default()),
         (ticket, 12, Style::default()),
         (key(p.from_ticket.as_ref().map(|k| &k.0)), 12, Style::default()),
-        // `#N KEY`, as the convoys pane names it; the bare key once its convoy isn't open.
-        (convoy_no.map(|n| format!("#{n} ")).unwrap_or_default() + &key(p.proposed.convoy().map(|c| &c.0)), 16, Style::default()),
+        convoy_cell(convoy_no, p.proposed.convoy().map(|c| c.0.as_str()), 16),
         (fmt_age(age_of(&p.created_at)), 6, dim()),
         (detail, 0, Style::default()),
     ])
 }
 
 /// Proposals · a convoy ticket a captain anchored (not Ready): fix it, then weigh it.
-fn held_row(t: &Ticket, reasons: &HashMap<String, String>) -> Line<'static> {
+fn held_row(t: &Ticket, reasons: &HashMap<String, String>, convoy_no: Option<i64>) -> Line<'static> {
     let reason = reasons.get(&t.key.0).map(String::as_str).filter(|r| !r.is_empty()).unwrap_or("(no reason given)");
     cells(vec![
         (t.key.0.clone(), 12, Style::default()),
-        (t.convoy.as_ref().map(|c| c.0.clone()).unwrap_or_default(), 12, Style::default()),
+        convoy_cell(convoy_no, t.convoy.as_ref().map(|c| c.0.as_str()), 16),
         (format!("⚓ {reason}"), 0, yellow()),
     ])
 }

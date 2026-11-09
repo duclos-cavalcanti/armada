@@ -326,10 +326,9 @@ impl Fleet {
         self.armada.iter().find(|r| r.ship.ticket.as_ref() == Some(ticket))
     }
 
-    /// The open convoy a ticket sails in, as its `#N`; `—` outside every open convoy.
-    pub fn convoy_of(&self, ticket: Option<&TicketKey>) -> String {
-        let convoy = self.board.iter().find(|t| Some(&t.key) == ticket).and_then(|t| t.convoy.as_ref());
-        self.convoy_no(convoy).map_or_else(|| "—".into(), |no| format!("#{no}"))
+    /// The number of the open convoy a ticket sails in; `None` outside every open convoy.
+    pub fn convoy_of(&self, ticket: Option<&TicketKey>) -> Option<i64> {
+        self.convoy_no(self.board.iter().find(|t| Some(&t.key) == ticket).and_then(|t| t.convoy.as_ref()))
     }
 
     /// An open convoy's number; `None` for no convoy, or one no longer open.
