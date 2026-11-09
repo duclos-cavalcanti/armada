@@ -214,8 +214,8 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
         ),
         Pane::Proposals => (
             format!(" Proposals · {} open {}", f.proposals.len(), peek(app, pane)),
-            Some(header(&[("Id", 5), ("Ticket", 12), ("From", 12), ("Convoy", 12), ("Age", 6), ("Detail", 0)])),
-            f.proposals.iter().map(proposal_row).collect(),
+            Some(header(&[("Id", 5), ("Ticket", 12), ("From", 12), ("Convoy", 16), ("Age", 6), ("Detail", 0)])),
+            f.proposals.iter().map(|p| proposal_row(p, f.convoy_no(p.proposed.convoy()))).collect(),
         ),
         Pane::Anchored => (
             format!(" Anchored · {} tickets {}", f.held.len(), peek(app, pane)),
@@ -492,7 +492,7 @@ fn convoy_row(c: &Convoy, f: &crate::source::Fleet) -> Line<'static> {
 
 /// Proposals · a proposal: accept or drop it. A draft held before proposals were filed on propose
 /// has no ticket yet.
-fn proposal_row(p: &Proposal) -> Line<'static> {
+fn proposal_row(p: &Proposal, convoy_no: Option<i64>) -> Line<'static> {
     let key = |k: Option<&String>| k.cloned().unwrap_or_else(|| "—".into());
     let (ticket, detail) = match &p.proposed {
         Proposed::New(d) => ("—".to_string(), format!("{}: {}", d.kind, d.title)),
@@ -502,7 +502,8 @@ fn proposal_row(p: &Proposal) -> Line<'static> {
         (format!("#{}", p.id.0), 5, Style::default()),
         (ticket, 12, Style::default()),
         (key(p.from_ticket.as_ref().map(|k| &k.0)), 12, Style::default()),
-        (key(p.proposed.convoy().map(|c| &c.0)), 12, Style::default()),
+        // `#N KEY`, as the convoys pane names it; the bare key once its convoy isn't open.
+        (convoy_no.map(|n| format!("#{n} ")).unwrap_or_default() + &key(p.proposed.convoy().map(|c| &c.0)), 16, Style::default()),
         (fmt_age(age_of(&p.created_at)), 6, dim()),
         (detail, 0, Style::default()),
     ])

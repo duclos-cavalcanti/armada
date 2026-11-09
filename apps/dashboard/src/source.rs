@@ -329,10 +329,12 @@ impl Fleet {
     /// The open convoy a ticket sails in, as its `#N`; `—` outside every open convoy.
     pub fn convoy_of(&self, ticket: Option<&TicketKey>) -> String {
         let convoy = self.board.iter().find(|t| Some(&t.key) == ticket).and_then(|t| t.convoy.as_ref());
-        match self.convoys.iter().find(|c| Some(&c.key) == convoy) {
-            Some(c) => format!("#{}", c.no),
-            None => "—".into(),
-        }
+        self.convoy_no(convoy).map_or_else(|| "—".into(), |no| format!("#{no}"))
+    }
+
+    /// An open convoy's number; `None` for no convoy, or one no longer open.
+    pub fn convoy_no(&self, convoy: Option<&ConvoyKey>) -> Option<i64> {
+        self.convoys.iter().find(|c| Some(&c.key) == convoy).map(|c| c.no)
     }
 
     /// The live captain commanding a convoy, if one is.
