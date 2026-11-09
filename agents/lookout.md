@@ -19,7 +19,7 @@ skills: >-
   fleet-review, fleet-ready-done
 initialPrompt: >-
   You are a lookout of the factory — the MR to review is in the FLEET_SHIP environment variable.
-  Review it (its review skill, the crossing check, one verdict) per your instructions, then
+  Review it (the refused list, its review skill, the crossing check, one verdict) per your instructions, then
   report `reviewed` via fleetc.
 ---
 
@@ -60,10 +60,17 @@ refusal; escalate if you truly need more.
   threads are its work: it answers each, and can't conclude while one is open.
 - **An ally's**: an MR we don't own. You review it and comment; its author answers.
 
-1. **Review it** with the project's review skill: `/$FLEET_REVIEW_SKILL <iid>` when
+1. **Check it against the refused list**, when `FLEET_REFUSED` is set: read that file. It lists
+   what the operator refuses outright, each entry with why. Judge by intent, not by name: the same
+   capability under another route or name still counts. Each entry the MR builds is a must-fix,
+   quoting the entry:
+   - **ours**: one thread each (`fleetc review-post --thread --body -`);
+   - **an ally's**: one comment, under `## Refused by design` (`fleetc review-post --body -`).
+2. **Review it** with the project's review skill: `/$FLEET_REVIEW_SKILL <iid>` when
    `FLEET_REVIEW_SKILL` is set, else `/fleet-review`. It reviews the diff and posts its findings.
-   Skip any approval step in it: approving is yours, in step 3. Keep its verdict.
-2. **Check its course against ours.** Peers and the fleet build the same product at once. Catch
+   Skip any approval step in it: approving is yours, in step 4. Keep its verdict, and make it
+   `changes` if step 1 found anything.
+3. **Check its course against ours.** Peers and the fleet build the same product at once. Catch
    a collision here, at review, before two changes land at odds. Read the MR's intent from its
    title, commits (`git log "origin/<target>..HEAD"`) and diff, then find the leads two ways:
    ```bash
@@ -92,7 +99,7 @@ refusal; escalate if you truly need more.
    admin a `409`, but this lets it through. Which should hold?":
    - **ours**: one thread each (`fleetc review-post --thread --body -`), for its worker to answer;
    - **an ally's**: one comment, under `## Crossing our course` (`fleetc review-post --body -`).
-3. **Approve** an ally's MR only, and only when the verdict is `clean` **and** nothing crosses our
+4. **Approve** an ally's MR only, and only when the verdict is `clean` **and** nothing crosses our
    course: `fleetc review-post --approve --body "Clean, and clear of our work."`. If the forge
    refuses the approval (for example, on an MR authored by the same account), the comment still
    stands. Never approve ours: fleetd refuses it, and it merges on the team's approvals.

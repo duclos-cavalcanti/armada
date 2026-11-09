@@ -320,6 +320,11 @@ impl Project {
     pub fn log(&self) -> std::path::PathBuf {
         self.runtime().join("fleetd.log")
     }
+    /// `refused.md` — what the operator refuses outright, each with why: every lookout checks each MR
+    /// against it. The operator's to write, beside fleet.toml; none = nothing refused.
+    pub fn refused(&self) -> std::path::PathBuf {
+        self.root.join("refused.md")
+    }
 }
 
 /// Split a leading `-C <dir>` off a binary's args (like `git -C`): the directory to find the

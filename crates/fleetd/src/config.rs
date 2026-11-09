@@ -48,6 +48,9 @@ pub struct Config {
     /// before it's dispatched (the captain) and when it's groomed (`/fleet-groom-convoy`), so Ready
     /// means one thing in both. Unset = `/fleet-ready-done` alone.
     pub assess_skill: Option<String>,
+    /// The project's refused list (`wire::Project::refused`): a path, not a setting.
+    #[serde(skip)]
+    pub refused: std::path::PathBuf,
     /// Reconcile mode: false (default, post-cutover) = apply the plan through the ports — fleetd
     /// drives the line; true = compute + log only, execute nothing (the parity look, opt in via
     /// `FLEET_DRY_RUN=true`). Flip via config/env, no recompile.
@@ -143,6 +146,7 @@ impl Default for Config {
             review_skill: None,
             groom_skill: None,
             assess_skill: None,
+            refused: std::path::PathBuf::new(),
             dry_run: false,
             active_secs: domain::LIVENESS_ACTIVE_SECS,
             quiet_secs: domain::LIVENESS_QUIET_SECS,
@@ -193,6 +197,7 @@ impl Config {
             c.otel_addr = v;
         }
         c.project.path = resolve_project(&c.project.path, &project.root);
+        c.refused = project.refused();
         let tickets = c.tracker.path.as_deref().unwrap_or("tickets");
         c.tracker.path = Some(resolve_project(tickets, &project.root));
         c.validate()?;

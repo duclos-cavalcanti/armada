@@ -41,7 +41,10 @@ as you go.
    to clean and wait for the operator to merge (false)?
 6. **Review** — does the project have its own review skill, in the checkout's
    `.claude/skills/` (e.g. `mr-review`)? If so, `review_skill = "<name>"`: every lookout runs it
-   on every MR, ours and allies'. If not, leave it out: the kit's `/fleet-review` runs.
+   on every MR, ours and allies'. If not, leave it out: the kit's `/fleet-review` runs. Anything
+   every review must refuse outright, as the design forbids it? List it in
+   `projects/$NAME/refused.md`, one bullet each with why: every lookout checks each MR against it,
+   and you can add to it any time.
 7. **Grooming** — does it have its own grooming skill there too (e.g. `groom-ticket`)? If so,
    `groom_skill = "<name>"`: an admiral runs it on each ticket it grooms. And a
    read-only readiness check (e.g. `assess-ticket`)? If so, `assess_skill = "<name>"`: captains run

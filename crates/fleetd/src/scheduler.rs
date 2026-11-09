@@ -157,6 +157,7 @@ pub fn run(
                 review_skill: cfg.review_skill.clone(),
                 groom_skill: cfg.groom_skill.clone(),
                 assess_skill: cfg.assess_skill.clone(),
+                refused: Some(cfg.refused.clone()),
             };
             let cogs = snapshot.lock().unwrap().clone();
             match reconcile::tick(&ledger, tracker.as_ref(), &host, forge.as_ref(), &cogs, &cfg.project.path, &levers) {
@@ -1323,6 +1324,7 @@ mod tests {
         review_skill: None,
         groom_skill: None,
         assess_skill: None,
+        refused: None,
     };
     use domain::ports::EventLog;
     use domain::*;
