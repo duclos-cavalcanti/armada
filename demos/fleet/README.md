@@ -14,10 +14,11 @@ npm install
 npm run dev          # Vite dev server → http://localhost:5173
 ```
 
-- `graphs/fleet/architecture.json` — the fleet topology: nodes + `base` (the
-  standing edges, always drawn) + `flows` (selectable overlays — dispatch,
-  build→handoff, sail→merge, sync tick, convoy, lookout, anchor, telemetry).
-  Click `scheduler` / `reconcile` for their per-mode detail panes.
+- `graphs/fleet/overview.json` — the fleet at a glance (the default view):
+  nodes + `base` (the standing edges, always drawn).
+- `graphs/fleet/data.json` — the data model (`?graph=data`): the domain types
+  in `crates/domain` beside every table in `ledger.db` (+ `telemetry.db`).
+  Click a node for its Rust struct or SQL DDL.
 - `src/Topology.jsx` — React Flow renderer; colours `kind` per the fleet
   taxonomy (daemon · adapter · sqlite · cog · cli · socket · …). Drag nodes to
   tune layout, then "Copy layout" to export the x/y back into the JSON.

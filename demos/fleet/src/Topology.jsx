@@ -4,35 +4,31 @@ import {
   Handle, Position, BaseEdge, EdgeLabelRenderer, useNodesState,
   NodeResizer, useReactFlow,
 } from '@xyflow/react'
-import architecture from '../graphs/fleet/architecture.json'
 import overview from '../graphs/fleet/overview.json'
 import data from '../graphs/fleet/data.json'
 import { toPng } from 'html-to-image'
 import { routeOrthogonal, simplify, roundedPath, polylineMidpoint } from './obstacleRouter'
 
 // renderable graphs share one schema (groups + x/y nodes + base edges). Pick
-// which one to render via ?graph=<name>; defaults to the full architecture.
+// which one to render via ?graph=<name>; defaults to the overview.
 const GRAPHS = {
   overview,
-  architecture,
   data,
 }
 const GRAPH_LABELS = {
   overview: 'Overview',
-  architecture: 'Full architecture',
   data: 'Data model',
 }
 // two-level nav: the main dropdown picks a group; a multi-member group gets a
 // second dropdown for the aspect within it. The group is derived from ?graph,
-// so the URL stays graph-addressed. One graph today — the fleet topology —
-// with flow overlays; add more under graphs/fleet/ and register them here.
+// so the URL stays graph-addressed. Add more under graphs/fleet/ and register
+// them here.
 const GROUPS = [
   { id: 'overview', label: 'Overview', graphs: ['overview'] },
-  { id: 'architecture', label: 'Full architecture', graphs: ['architecture'] },
   { id: 'data', label: 'Data model', graphs: ['data'] },
 ]
-const graphName = new URLSearchParams(window.location.search).get('graph') || 'architecture'
-const arch = GRAPHS[graphName] ?? architecture
+const graphName = new URLSearchParams(window.location.search).get('graph') || 'overview'
+const arch = GRAPHS[graphName] ?? overview
 const activeGroup = GROUPS.find((g) => g.graphs.includes(graphName)) ?? GROUPS[0]
 
 const MONO = 'ui-monospace, Menlo, monospace'
@@ -74,7 +70,7 @@ const LEGEND = [
   ['skill', 'operator skill (/fleet-*)'],
 ]
 // only show legend rows for kinds actually present in the active graph, so each
-// graph's legend stays relevant (architecture/overview never show the data kinds).
+// graph's legend stays relevant (the overview never shows the data kinds).
 const PRESENT_KINDS = new Set(arch.nodes.map((n) => n.kind))
 const VISIBLE_LEGEND = LEGEND.filter(([k]) => PRESENT_KINDS.has(k))
 
@@ -542,7 +538,7 @@ export default function Topology() {
   }), [edges, selected])
 
   // dump the current (dragged) node positions merged back into the source
-  // node list, so a hand-tuned arrangement can be pasted into architecture.json
+  // node list, so a hand-tuned arrangement can be pasted into the graph's JSON
   const copyLayout = async () => {
     const pos = {}
     // positions are SPREAD-scaled at render; sizes (w/h) are native px, so only x/y divide back.
