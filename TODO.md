@@ -44,3 +44,9 @@
   health check parses it when it exists: a parse error, a duplicate id or an empty field fails it,
   which holds the lookouts, so a broken list never silently weakens a review. The lookout cites a
   match by its id. A `fleetc refused` verb waits for a second reader (workers, triage).
+- [ ] **Record a ship's lifecycle as events.** `ShipOpened`, `ShipSynced`, `ShipMerged` and
+  `ShipClosed` are event kinds nothing writes, so a merge leaves no history: counting merges per
+  day reads `ships.ended_at` against the snapshot's `merged`. Append `ShipOpened` when a ship is
+  recorded and `ShipMerged` / `ShipClosed` in the same txn that ends it (payload: iid, ticket,
+  pilot); drop `ShipSynced` unless a reader wants it (snapshots already hold the latest). Then the
+  cost and convoy reports, and the dashboard, can count merges from events.
