@@ -118,8 +118,8 @@ pub fn run(
     cfg: Config,
     cmds: Receiver<Command>,
 ) {
-    let (mut next_poll, mut next_sync, mut next_reconcile) =
-        (Instant::now(), Instant::now(), Instant::now());
+    let (mut next_poll, mut next_sync, mut next_reconcile, mut next_prune) =
+        (Instant::now(), Instant::now(), Instant::now(), Instant::now());
     // The last health check (`None`: not run yet). Boot passed it; each sync re-runs it.
     let mut health: Option<Vec<domain::HealthCheck>> = None;
 
@@ -140,6 +140,14 @@ pub fn run(
                 tracing::error!("health check error: {e:#}");
             }
             next_sync = now + Duration::from_secs(settings::sync_secs(&cfg, &ledger));
+        }
+        if now >= next_prune {
+            match &cfg.project.prune {
+                Some(_) if settings::dry_run(&cfg, &ledger) => tracing::info!("prune skipped (dry-run)"),
+                Some(cmd) => drop(prune(cmd, &cfg.project.path)),
+                None => {}
+            }
+            next_prune = now + PRUNE_EVERY;
         }
         if now >= next_reconcile {
             // Reconcile through the executor. dry_run (live) = plan + log, execute nothing; false =
@@ -1314,6 +1322,24 @@ pub fn tick_sync(ledger: &Ledger, forge: &dyn Forge, tracker: &dyn Tracker) -> R
         &serde_json::json!({ "before": before, "after": after, "tickets": tickets, "ships": ships }),
     )?;
     Ok(())
+}
+
+/// How often fleetd prunes the checkout's build caches (`[project] prune`): once a day, and at boot.
+const PRUNE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Run the project's prune command in its checkout, off the scheduler's thread: the line never
+/// waits on it. Its outcome is logged, its last line of output with it.
+fn prune(cmd: &str, checkout: &str) -> std::thread::JoinHandle<()> {
+    let (cmd, checkout) = (cmd.to_string(), checkout.to_string());
+    std::thread::spawn(move || {
+        let out = std::process::Command::new("sh").args(["-c", &cmd]).current_dir(&checkout).stdin(std::process::Stdio::null()).output();
+        let last = |b: &[u8]| String::from_utf8_lossy(b).lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
+        match out {
+            Ok(o) if o.status.success() => tracing::info!("prune: {cmd}: {}", last(&o.stdout).trim()),
+            Ok(o) => tracing::warn!("prune: {cmd} failed ({}): {}", o.status, last(&o.stderr).trim()),
+            Err(e) => tracing::warn!("prune: {cmd} didn't run: {e}"),
+        }
+    })
 }
 
 /// Re-run the health check after a sync. A change (or the first run) is recorded as a
@@ -3020,6 +3046,17 @@ mod tests {
         path.sort();
         assert_eq!(path, ["PROJ-1", "PROJ-2"]);
         assert_eq!(build_convoy_view(&db, &convoy, true).unwrap().goal, Some(TicketKey("PROJ-2".into())));
+    }
+
+    #[test]
+    fn prune_runs_the_projects_command_in_its_checkout() {
+        let dir = std::env::temp_dir().join(format!("fleetd-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        prune("touch pruned", &dir.to_string_lossy()).join().unwrap();
+        assert!(dir.join("pruned").exists(), "run in the checkout");
+        prune("exit 3", &dir.to_string_lossy()).join().unwrap(); // a failure is logged, never fatal
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

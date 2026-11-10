@@ -75,11 +75,14 @@ pub struct Config {
 #[serde(default)]
 pub struct ProjectConfig {
     pub path: String,
+    /// The command that prunes the checkout's build caches, which every worktree shares (e.g.
+    /// `cargo sweep --time 7 .`): fleetd runs it there once a day. `None` = nothing is pruned.
+    pub prune: Option<String>,
 }
 
 impl Default for ProjectConfig {
     fn default() -> Self {
-        Self { path: "main".into() }
+        Self { path: "main".into(), prune: None }
     }
 }
 

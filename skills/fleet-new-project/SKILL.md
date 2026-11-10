@@ -36,7 +36,11 @@ as you go.
    - `jira`: the Jira project key (the prefix), an optional claim label, and `jira init` done
      (`jira me` answers).
 4. **Checkout** — the folder name for the clone (default: the repo's default branch, e.g.
-   `main`), and the clone URL (`git@github.com:<owner/repo>.git`, or the GitLab SSH URL).
+   `main`), and the clone URL (`git@github.com:<owner/repo>.git`, or the GitLab SSH URL). Does
+   the repo share build caches across worktrees (`worktree.symlinkDirectories` in its
+   `.claude/settings.json`, e.g. `target/`)? Then every ticket's builds pile up in the checkout's:
+   ask for the command that prunes them (a Rust repo: `cargo sweep --time 7 .`), as
+   `[project] prune`. fleetd runs it there once a day.
 5. **Merge policy** — `auto_merge`: should the sailor arm auto-merge (true), or land each MR
    to clean and wait for the operator to merge (false)?
 6. **Review** — does the project have its own review skill, in the checkout's
@@ -93,6 +97,7 @@ dry_run            = false
 
 [project]
 path = "<checkout>"            # relative to this folder
+# prune = "<command>"          # prunes the build caches its worktrees share, once a day (e.g. cargo sweep --time 7 .)
 
 [forge]
 kind       = "<github|gitlab>"
