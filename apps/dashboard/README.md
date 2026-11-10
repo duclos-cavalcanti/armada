@@ -24,8 +24,8 @@ Cycle with `Tab` / `S-Tab`:
     hands' orders (operator-driven);
   - **Implementation** — builders at work (workers + hands): state, liveness, MR + pipeline, last
     action. A worker in **review** has put its MR up for a lookout and waits for its review;
-  - **Merge** — our ships being landed: the sailor's state (dimmed once it's stood down),
-    pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status;
+  - **Merge** — our ships being landed: the sailor's state (dimmed once it's stood down), whether
+    an admiral sits on its escalation (`Adm`: `up`; `e` switches to it), pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status;
   - an escalation reads by who holds it: **flagged** (no captain has looked), **triage** (a
     captain is inspecting it, or sent its way out), **escalated** (confirmed: yours), **ruled**
     (your ruling went to the cog, `fleetc ruling`; it clears when the cog moves on). `v` reads

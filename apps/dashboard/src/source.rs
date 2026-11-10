@@ -125,6 +125,8 @@ pub struct Fleet {
     pub landing: Vec<LandingRow>,
     /// The ticketless cogs: captains (by convoy) + the lookouts (by ship).
     pub crew: Vec<CogRow>,
+    /// The tickets a live admiral sits on (convened on a confirmed escalation).
+    pub admirals: HashSet<TicketKey>,
     pub board: Vec<Ticket>,
     /// Why each held ticket is held (its key → the hold's reason, `""` when none was given).
     pub held_reasons: HashMap<String, String>,
@@ -196,13 +198,14 @@ impl Fleet {
         };
 
         let (mut workers, mut hands, mut crew) = (Vec::new(), Vec::new(), Vec::new());
+        let mut admirals = HashSet::new();
         for session in live {
             match session.kind {
                 CrewKind::Worker => workers.push(cog(session)?),
                 CrewKind::Hand => hands.push(cog(session)?),
                 CrewKind::Captain | CrewKind::Lookout => crew.push(cog(session)?),
                 CrewKind::Sailor => {}  // a sailor shows with its ship, in `landing`
-                CrewKind::Admiral => {} // reached from its cog's row (`e`)
+                CrewKind::Admiral => admirals.extend(session.ticket), // shown on its cog's row; `e` reaches it
             }
         }
         let building: HashSet<&TicketKey> = workers.iter().chain(&hands).filter_map(|c| c.session.ticket.as_ref()).collect();
@@ -304,6 +307,7 @@ impl Fleet {
             hands,
             landing,
             crew,
+            admirals,
             board,
             held_reasons,
             armada,

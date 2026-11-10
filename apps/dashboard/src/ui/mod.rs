@@ -179,6 +179,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 ("Ticket", 12),
                 ("Convoy", 7),
                 ("Sailor", 15),
+                ("Adm", 5),
                 ("Live", 7),
                 ("MR", 7),
                 ("Pipeline", 9),
@@ -191,7 +192,10 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             ])),
             f.landing
                 .iter()
-                .map(|r| landing_row(r, r.sailor.as_ref().is_some_and(|s| f.is_up(s)), f.convoy_of(r.ship.ticket.as_ref())))
+                .map(|r| {
+                    let admiral = r.ship.ticket.as_ref().is_some_and(|t| f.admirals.contains(t));
+                    landing_row(r, r.sailor.as_ref().is_some_and(|s| f.is_up(s)), f.convoy_of(r.ship.ticket.as_ref()), admiral)
+                })
                 .collect(),
         ),
         Pane::Reviews => (
@@ -321,7 +325,7 @@ fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>, convoy: Option<i64>
     ])
 }
 
-fn landing_row(r: &LandingRow, up: bool, convoy: Option<i64>) -> Line<'static> {
+fn landing_row(r: &LandingRow, up: bool, convoy: Option<i64>, admiral: bool) -> Line<'static> {
     let snap = r.snapshot.as_ref();
     // An ended sailor's last word stays visible, dimmed: the ship is at rest.
     let sailor = crate::source::sailor_label(r.sailor.as_ref());
@@ -356,6 +360,8 @@ fn landing_row(r: &LandingRow, up: bool, convoy: Option<i64>) -> Line<'static> {
         (r.ship.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_default(), 12, Style::default()),
         convoy_cell(convoy, None, 7),
         (sailor, 15, sailor_style),
+        // An admiral convened on its confirmed escalation: `e` switches to it.
+        if admiral { ("up".into(), 5, Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)) } else { ("—".into(), 5, dim()) },
         live,
         (format!("!{}", r.ship.iid), 7, Style::default()),
         (pipe.0, 9, pipe.1),
