@@ -169,6 +169,11 @@ const board = h('div', { class: 'card board', role: 'img',
     ` ${BOARD.map(b => b.label).join(' · ')} add up to Tickets.`));
 
 const row = [['Ticket', ticket], ['Title', titleCell], ['MR', mrCell], ['Cog', t => t.cog ?? '—'], ['Flags', flags]];
+// What the convoy has cost so far: every request of its cogs and their subagents, by role.
+const usd = v => `$${v >= 100 ? Math.round(v).toLocaleString('en-US') : v.toFixed(2)}`;
+const spendLine = s => h('p', { class: 'sub esc', 'data-tip': 'From the fleet\'s telemetry: every request its captain and its tickets\' cogs made, their subagents included, as the cost report counts it.' },
+  s.usd ? `${usd(s.usd)} spent · ${s.by_role.map(r => `${r.role} ${usd(r.usd)}`).join(' · ')}` : 'No spend recorded.');
+
 document.getElementById('app').append(...[
   h('h1', {}, `#${c.no ?? '?'} ${c.key} · ${c.title ?? ''}`),
   h('p', { class: 'sub' }, `${D.project} · opened ${day(c.opened)} (${days(c.opened)} days)`,
@@ -182,6 +187,7 @@ document.getElementById('app').append(...[
       `${s.label} ${counted(s.id)}`)),
       cp ? h('span', {}, h('i', { style: 'background:var(--critical)' }), `Critical path ${cp.total}, in brackets`) : null),
     escalationsLine(D.escalations),
+    spendLine(D.spend),
     h('p', { class: 'note' }, `Moved: each ticket weighs by its stage (${[['todo', '0'], ['progress', '⅓'], ['qa', '⅔'], ['done', '1']]
       .map(([id, w]) => `${label(id)} ${w}`).join(' · ')}), averaged.`,
       D.cancelled ? ` ${D.cancelled} cancelled left out.` : '',

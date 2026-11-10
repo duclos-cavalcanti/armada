@@ -1,6 +1,7 @@
 # The report's data: `fleetc context --convoy` (each ticket's derived facts) joined with the
-# ledger's (ledger.sql), staged, flagged and graded. Inputs: $ctx, $led, $url (the tracker's link
-# with `{key}` for the ticket's key; "" for none), $now, $project.
+# ledger's (ledger.sql), staged, flagged and graded. Inputs: $ctx, $led, $spend (the convoy's USD by
+# role, from /fleet-cost-report's cost.sql), $url (the tracker's link with `{key}` for the ticket's
+# key; "" for none), $now, $project.
 
 # A ticket's stage on the line; cancelled leaves the count.
 def stage: {done: "done", in_qa: "qa", in_progress: "progress"}[.status // ""] // "todo";
@@ -55,6 +56,7 @@ def grade: if length == 0 then 0 else (map(.stage | weight) | add) * 100 / (3 * 
       counts: ($cp | reduce .[].stage as $s ({done: 0, qa: 0, progress: 0, todo: 0}; .[$s] += 1))
     } end),
     escalations: $led.escalations,
+    spend: {usd: ($spend | map(.usd) | add // 0), by_role: ($spend | sort_by(-.usd))},
     tickets: $tickets,
     proposals: $led.proposals
   }

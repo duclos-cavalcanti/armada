@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # report.sh — render a convoy's progress report: one self-contained HTML file.
 #   usage: report.sh <project-dir> <convoy KEY|#N> [<out.html>]
-# Reads only: `fleetc context` + the project's ledger, read-only. Prints the report's path, then
-# its summary (counts, grade, the critical path's) as JSON.
+# Reads only: `fleetc context` + the project's ledger and telemetry, read-only. Prints the report's
+# path, then its summary (counts, grade, the critical path's, the spend) as JSON.
 set -euo pipefail
 
 die() { echo "report.sh: $*" >&2; exit 1; }
@@ -10,7 +10,7 @@ die() { echo "report.sh: $*" >&2; exit 1; }
 main() {
   [[ $# -ge 2 ]] || die "usage: report.sh <project-dir> <convoy KEY|#N> [<out.html>]"
   local proj=$1 convoy=$2 out=${3:-}
-  local here ledger ctx key first led url now data
+  local here ledger ctx key first led url now spend data
   here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   ledger="$proj/.fleet/ledger.db"
   [[ -f $ledger ]] || die "no ledger at $ledger (is $proj a fleet project?)"
@@ -23,8 +23,15 @@ main() {
   url=$( { [[ -n $first ]] && fleetc -C "$proj" ticket "$first" --where 2>/dev/null; } \
          | sed "s/$first/{key}/" || true)
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  # The convoy's spend, as /fleet-cost-report attributes it (its by_convoy rows); [] with no telemetry.
+  spend='[]'
+  if [[ -f $proj/.fleet/telemetry.db ]]; then
+    spend=$(sqlite3 -readonly "$proj/.fleet/telemetry.db" "ATTACH 'file:$ledger?mode=ro' AS l" \
+              ".parameter set :since \"''\"" ".read $here/../../fleet-cost-report/scripts/cost.sql" \
+            | jq --arg key "$key" '[.by_convoy[] | select(.convoy == $key) | {role, usd}]')
+  fi
 
-  data=$(jq -n --argjson ctx "$ctx" --argjson led "$led" --arg url "$url" --arg now "$now" \
+  data=$(jq -n --argjson ctx "$ctx" --argjson led "$led" --argjson spend "$spend" --arg url "$url" --arg now "$now" \
            --arg project "$(basename "$(cd "$proj" && pwd)")" -f "$here/summary.jq")
 
   if [[ -z $out ]]; then
@@ -38,7 +45,7 @@ main() {
     "$here/../template.html" > "$out"
 
   echo "$out"
-  jq '{convoy: .convoy | {key, no, title}, total, cancelled, grade, counts, critical, escalations}' <<<"$data"
+  jq '{convoy: .convoy | {key, no, title}, total, cancelled, grade, counts, critical, escalations, spend: {usd: (.spend.usd * 100 | round / 100)}}' <<<"$data"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi
