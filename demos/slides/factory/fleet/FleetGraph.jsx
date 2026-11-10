@@ -3,7 +3,7 @@
 // node/group/edge look, with all the editing UI (dropdowns, layout/PNG,
 // resizer, detail pane) stripped. Takes a graph ({ groups, nodes, base }) and
 // renders it static inside a slide. Theme vars are set locally so it carries
-// the mady-dark palette wherever it's embedded.
+// the dark palette wherever it's embedded.
 import { useMemo } from 'react';
 import {
   ReactFlow, Background, Controls, MarkerType, Handle, Position, BaseEdge, EdgeLabelRenderer,

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 820"
      preserveAspectRatio="xMidYMid meet" role="img"
-     aria-label="MADY factory work lifecycle state machine">
+     aria-label="factory work lifecycle state machine">
   <defs>
     <marker id="arr"        viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9DA7B3"/></marker>
     <marker id="arr-blue"   viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#58A6FF"/></marker>
@@ -64,7 +64,7 @@
   <rect class="node agent agent-worker" x="440" y="130" width="130" height="80"/>
   <text class="label" x="505" y="158">IMPLEMENTING</text>
   <text class="sub"   x="505" y="176">Jira In Progress</text>
-  <text class="sub"   x="505" y="192">worker · /mady-implement</text>
+  <text class="sub"   x="505" y="192">worker · /fleet-implement</text>
 
   <!-- CONCLUDED -->
   <rect class="node atom" x="635" y="130" width="130" height="80"/>

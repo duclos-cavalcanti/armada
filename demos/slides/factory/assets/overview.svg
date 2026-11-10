@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1480 1140" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="MADY Dark Factory overview — the foreman writes dispatch intent, converge.sh (cron) actuates it (claims Jira, spawns workers and finishers, concludes merged dispatches), agents write filesystem state, the dashboard reads it, GitLab and Jira on the side">
+<svg viewBox="0 0 1480 1140" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Dark Factory overview — the foreman writes dispatch intent, converge.sh (cron) actuates it (claims Jira, spawns workers and finishers, concludes merged dispatches), agents write filesystem state, the dashboard reads it, GitLab and Jira on the side">
   <defs>
     <marker id="arr"        viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9DA7B3"/></marker>
     <marker id="arr-red"    viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#F85149"/></marker>
@@ -63,7 +63,7 @@
   <text class="band-label" x="1200" y="50">External</text>
   <text class="band-sub"   x="1200" y="68">reached via glab + jira-cli / MCP</text>
 
-  <text class="band-label" x="40" y="630">② Filesystem · ~/.mady/state/</text>
+  <text class="band-label" x="40" y="630">② Filesystem · ~/.fleet/state/</text>
   <text class="band-sub"   x="40" y="648">atomic schema-validated JSON snapshots — agents write, the dashboard reads</text>
 
   <text class="band-label" x="40" y="950">③ Dashboard</text>
@@ -73,7 +73,7 @@
   <!-- ① AGENTS                                                          -->
   <!-- ================================================================ -->
 
-  <!-- Queue — the foreman's input board (~/.mady/state/queue/); the foreman works only from this -->
+  <!-- Queue — the foreman's input board (~/.fleet/state/queue/); the foreman works only from this -->
   <rect class="node state" x="315" y="84" width="200" height="64"/>
   <text class="label" x="415" y="108">📋 queue/</text>
   <text class="sub"   x="415" y="126">state/queue · the board</text>
@@ -167,7 +167,7 @@
 
   <rect class="node ext" x="1210" y="280" width="220" height="64"/>
   <text class="label" x="1320" y="308">Jira</text>
-  <text class="sub"   x="1320" y="326">MADY tickets · status lanes</text>
+  <text class="sub"   x="1320" y="326">tickets · status lanes</text>
   <text class="sub"   x="1320" y="338" style="fill:#6E7681">via jira-cli / MCP</text>
 
   <!-- converge.sh ↔ Jira : claims + concludes -->
@@ -183,7 +183,7 @@
   <text class="edge-label" x="900" y="360" style="fill:#3FB950">draft MR</text>
 
   <!-- ================================================================ -->
-  <!-- ② FILESYSTEM — ~/.mady/state/                                     -->
+  <!-- ② FILESYSTEM — ~/.fleet/state/                                     -->
   <!-- ================================================================ -->
 
   <!-- foreman dispatch record (packets only; resolutions live on the drain surface, no status drop of its own) -->
@@ -244,7 +244,7 @@
 
   <rect class="node dashboard" x="360" y="980" width="760" height="120"/>
   <text class="dash-label" x="740" y="1032">DASHBOARD</text>
-  <text class="dash-sub"   x="740" y="1058">ratatui TUI · reads ~/.mady/state/* + tmux ls + crontab</text>
+  <text class="dash-sub"   x="740" y="1058">ratatui TUI · reads ~/.fleet/state/* + tmux ls + crontab</text>
   <text class="dash-sub"   x="740" y="1076">live cross-section, never writes — details in dashboard/README.md</text>
 
   <!-- State → dashboard (reads) -->

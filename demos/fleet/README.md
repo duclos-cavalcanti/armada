@@ -2,8 +2,8 @@
 
 Interactive architecture / call-flow viewer for the **fleet itself** — the
 factory's own machinery (`fleetd` / `fleetc` / the `ledger` / the crew of cogs),
-*not* the b2b-api product. Same React Flow + crossing-aware orthogonal edge
-router as `../architecture`, in the mady-style dark palette. The renderer
+*not* the product it builds. Same React Flow + crossing-aware orthogonal edge
+router as `../architecture`, in the dark palette. The renderer
 (`src/Topology.jsx`, `src/obstacleRouter.js`, `src/theme.css`) is a byte-identical
 copy of the `architecture` viewer — only the graph data and the `kind` taxonomy
 differ. Tracked app (source only; `node_modules/` + `dist/` are gitignored).

@@ -28,7 +28,7 @@
 
   <!-- ===== entry: cron fires the tick ===== -->
   <rect class="node entry" x="50" y="28" width="288" height="70"/>
-  <text class="label" x="194" y="58">🎻 cron · mady-converge · */5</text>
+  <text class="label" x="194" y="58">🎻 cron · fleet-converge · */5</text>
   <text class="sub"   x="194" y="80">converge.sh main() — one tick</text>
 
   <!-- footer messages (top-right empty region) -->

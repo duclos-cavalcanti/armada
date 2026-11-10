@@ -52,7 +52,7 @@
   <rect class="node panel" x="415" y="150" width="370" height="250"/>
 
   <text class="group-h" x="510" y="180">skills · smart</text>
-  <rect class="node skill" x="430" y="190" width="160" height="30"/><text class="label sm" x="510" y="210">/mady-implement</text>
+  <rect class="node skill" x="430" y="190" width="160" height="30"/><text class="label sm" x="510" y="210">/fleet-implement</text>
   <rect class="node skill" x="430" y="226" width="160" height="30"/><text class="label sm" x="510" y="246">/mr-review</text>
   <rect class="node skill" x="430" y="262" width="160" height="30"/><text class="label sm" x="510" y="282">/create-mr</text>
 

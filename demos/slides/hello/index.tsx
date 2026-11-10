@@ -14,7 +14,7 @@ import type { CSSProperties } from 'react';
 import domainsBirdseye from './assets/domains-birdseye.svg';
 
 // Per-slide design system (open-slide's theming hook). A calm dark palette so
-// the hello deck feels on-brand next to the factory's mady-style surfaces.
+// the hello deck feels on-brand next to the factory's dark-palette surfaces.
 export const design: DesignSystem = {
   palette: { bg: '#0D1117', text: '#E6EDF3', accent: '#58A6FF' },
   fonts: {
@@ -48,7 +48,7 @@ const morph: SlideTransition = {
 const Cover: Page = () => (
   <div style={stage}>
     <div style={{ position: 'absolute', left: 160, top: 360 }}>
-      <div style={{ fontSize: 120, fontWeight: 700, fontFamily: 'var(--osd-font-display)' }}>Hello, MADY</div>
+      <div style={{ fontSize: 120, fontWeight: 700, fontFamily: 'var(--osd-font-display)' }}>Hello, Armada</div>
       <div style={{ fontSize: 30, color: '#9DA7B3', marginTop: 16 }}>open-slide · factory demo workspace</div>
     </div>
     <MorphElement id="chip">
@@ -114,12 +114,12 @@ const Graph: Page = () => (
   </div>
 );
 
-// ── Page 4 — embed an existing factory SVG (mady-diagram/flowchart output). ──
+// ── Page 4 — embed an existing factory SVG (diagram/flowchart output). ──
 const Svg: Page = () => (
   <div style={stage}>
     <div style={{ position: 'absolute', left: 160, top: 96, fontSize: 44, fontWeight: 600 }}>SVGs</div>
     <div style={{ position: 'absolute', left: 160, top: 156, fontSize: 24, color: '#9DA7B3' }}>
-      import the .svg asset → render as &lt;img&gt; (any mady-diagram / mady-flowchart output drops straight in)
+      import the .svg asset → render as &lt;img&gt; (any diagram / flowchart output drops straight in)
     </div>
     <img
       src={domainsBirdseye}
@@ -135,5 +135,5 @@ Reveal.transition = morph;
 Graph.transition = morph;
 Svg.transition = morph;
 
-export const meta: SlideMeta = { title: 'Hello, MADY' };
+export const meta: SlideMeta = { title: 'Hello, Armada' };
 export default [Cover, Reveal, Graph, Svg] satisfies Page[];

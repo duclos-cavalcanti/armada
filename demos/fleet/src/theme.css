@@ -1,6 +1,5 @@
-/* mady-style dark palette (copied from docs/src/demos/mady-reveal.css :root) so
-   the interactive viewer matches the static SVG/reveal surfaces — one product,
-   one palette. */
+/* The dark palette, so the interactive viewer matches the static SVG/reveal
+   surfaces — one product, one palette. */
 :root {
   --bg:#0D1117; --panel:#161B22; --border:#30363D; --text:#E6EDF3;
   --muted:#9DA7B3; --dim:#6E7681; --green:#3FB950; --blue:#58A6FF;

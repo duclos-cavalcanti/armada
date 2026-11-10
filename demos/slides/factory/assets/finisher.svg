@@ -68,22 +68,22 @@
   <text class="agent-sub"   x="400" y="215">.claude/agents/finisher.md</text>
   <text class="agent-sub"   x="400" y="229">persistent Opus · one per MR</text>
 
-  <!-- /mady-finish (orchestrator) -->
+  <!-- /fleet-finish (orchestrator) -->
   <rect class="node orch" x="600" y="100" width="220" height="56"/>
-  <text class="label" x="710" y="124">/mady-finish</text>
+  <text class="label" x="710" y="124">/fleet-finish</text>
   <text class="sub"   x="710" y="140">punch-list orchestrator</text>
 
   <!-- atomic primitives -->
   <rect class="node atom" x="850" y="90" width="200" height="40"/>
-  <text class="label" x="950" y="106">/mady-mr-rebase</text>
+  <text class="label" x="950" y="106">/fleet-mr-rebase</text>
   <text class="sub"   x="950" y="121">server-side UI rebase</text>
 
   <rect class="node atom" x="850" y="136" width="200" height="40"/>
-  <text class="label" x="950" y="152">/mady-mr-reply</text>
+  <text class="label" x="950" y="152">/fleet-mr-reply</text>
   <text class="sub"   x="950" y="167">count-gated reply</text>
 
   <rect class="node atom" x="850" y="182" width="200" height="40"/>
-  <text class="label" x="950" y="198">/mady-ci-fix</text>
+  <text class="label" x="950" y="198">/fleet-ci-fix</text>
   <text class="sub"   x="950" y="213">classify + fix</text>
 
   <rect class="node team" x="1080" y="136" width="140" height="40"/>
@@ -110,7 +110,7 @@
   <path class="edge uses-fn" d="M540,206 C570,270 580,270 600,270" marker-end="url(#arr-yellow)"/>
   <text class="edge-label yellow" x="556" y="164">uses</text>
 
-  <!-- /mady-finish fans out -->
+  <!-- /fleet-finish fans out -->
   <path class="edge blue" d="M820,118 L850,108" marker-end="url(#arr-blue)"/>
   <path class="edge blue" d="M820,126 L850,154" marker-end="url(#arr-blue)"/>
   <path class="edge blue" d="M820,134 L850,200" marker-end="url(#arr-blue)"/>
