@@ -49,8 +49,13 @@ def grade: if length == 0 then 0 else (map(.stage | weight) | add) * 100 / (3 * 
       escalated: ($tickets | map(select(.escalated)) | length),
       proposed: ($led.proposals | length)
     },
-    critical: (if $ctx.goal == null then null else ($tickets | map(select(.critical))) as $cp | {
+    critical: (if $ctx.goal == null then null else ($tickets | map(select(.critical))) as $cp
+    | ($cp | map(.key)) as $path | ($tickets | map(.key)) as $keys | {
       goal: $ctx.goal,
+      # The path's diagram: each edge among its tickets, and each open blocker outside the convoy
+      # (with its own convoy's number, null for none).
+      edges: [$cp[] | .key as $t | ($led.blockers[$t] // [])[] | select(IN($path[])) | [., $t]],
+      outside: [$cp[] | .key as $t | .blocked_by[] | select(IN($keys[]) | not) | [., $t, $led.convoy_nos[.]]],
       total: ($cp | length),
       grade: ($cp | grade),
       counts: ($cp | reduce .[].stage as $s ({done: 0, qa: 0, progress: 0, todo: 0}; .[$s] += 1))

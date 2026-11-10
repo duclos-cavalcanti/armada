@@ -169,6 +169,61 @@ const board = h('div', { class: 'card board', role: 'img',
     ` ${BOARD.map(b => b.label).join(' · ')} add up to Tickets.`));
 
 const row = [['Ticket', ticket], ['Title', titleCell], ['MR', mrCell], ['Cog', t => t.cog ?? '—'], ['Flags', flags]];
+// The critical path as a diagram, drawn the first time it's opened: each ticket in its column's
+// color, the goal ringed in red, an open blocker outside the convoy dashed. An edge a longer chain
+// already implies is left out. Mermaid comes from the CDN, pinned; offline, its source shows.
+const MERMAID = 'https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs';
+const FILL = { todo: ['#86b6ef', '#0b0b0b'], progress: ['#5598e7', '#0b0b0b'], qa: ['#256abf', '#fff'],
+  done: ['#184f95', '#fff'], blocked: ['#fab219', '#0b0b0b'] };
+const pathChart = cp => {
+  const ticketOf = Object.fromEntries(D.tickets.map(t => [t.key, t]));
+  const keys = [...new Set([...D.tickets.filter(t => t.critical).map(t => t.key), ...cp.outside.map(([a]) => a)])];
+  const id = Object.fromEntries(keys.map((k, i) => [k, `n${i}`]));
+  const next = {};
+  for (const [a, b] of cp.edges) (next[a] ??= []).push(b);
+  const implied = (a, b) => { // b reached from a through some other ticket
+    const seen = new Set(), todo = next[a].filter(x => x !== b);
+    while (todo.length) {
+      const x = todo.pop();
+      if (x === b) return true;
+      if (!seen.has(x)) { seen.add(x); todo.push(...(next[x] ?? [])); }
+    }
+    return false;
+  };
+  const text = s => { const t = (s ?? '').replace(/[`"<>]/g, ''); return t.length > 42 ? `${t.slice(0, 41)}…` : t; };
+  return ['flowchart TB',
+    ...Object.entries(FILL).map(([c, [fill, ink]]) => `classDef ${c} fill:${fill},color:${ink},stroke:${fill}`),
+    'classDef outside fill:none,color:#898781,stroke:#898781,stroke-dasharray:4 3',
+    ...keys.map(k => ticketOf[k]
+      ? `${id[k]}["${k}${ticketOf[k].held != null && ticketOf[k].stage !== 'done' ? ' ⚓' : ''}<br/>${text(ticketOf[k].title)}"]:::${column(ticketOf[k])}`
+      : `${id[k]}["${k}<br/>${(n => n ? `convoy #${n}` : 'in no convoy')(cp.outside.find(([a]) => a === k)[2])}"]:::outside`),
+    ...cp.edges.filter(([a, b]) => !implied(a, b)).map(([a, b]) => `${id[a]} --> ${id[b]}`),
+    ...cp.outside.map(([a, b]) => `${id[a]} -.-> ${id[b]}`),
+    `style ${id[cp.goal]} stroke:#d03b3b,stroke-width:3px`].join('\n');
+};
+const pathDiagram = cp => {
+  if (!cp) return null;
+  const src = pathChart(cp);
+  const box = h('div', { class: 'card', style: 'margin-top:8px' }, h('p', { class: 'note' }, 'Drawing…'));
+  const d = h('details', {}, h('summary', {}, `Critical path (${cp.total})`), box,
+    h('p', { class: 'note' }, `The goal, ${cp.goal}, ringed in red; each ticket in its column's color, ⚓ anchored; `,
+      'a dashed blocker sails in another convoy. An edge a longer chain implies is left out.'));
+  d.addEventListener('toggle', async () => {
+    if (!d.open || d.dataset.drawn) return;
+    d.dataset.drawn = '1';
+    try {
+      const { default: mermaid } = await import(MERMAID);
+      mermaid.initialize({ startOnLoad: false, securityLevel: 'strict',
+        theme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default' });
+      box.innerHTML = (await mermaid.render('critical-path', src)).svg;
+    } catch (e) {
+      box.replaceChildren(h('p', { class: 'note' }, `The diagram needs mermaid from ${new URL(MERMAID).host}, which didn't load (${e.message}). Its source:`),
+        h('pre', {}, src));
+    }
+  });
+  return d;
+};
+
 // What the convoy has cost so far: every request of its cogs and their subagents, by role.
 const usd = v => `$${v >= 100 ? Math.round(v).toLocaleString('en-US') : v.toFixed(2)}`;
 const spendLine = s => h('p', { class: 'sub esc', 'data-tip': 'From the fleet\'s telemetry: every request its captain and its tickets\' cogs made, their subagents included, as the cost report counts it.' },
@@ -195,6 +250,7 @@ document.getElementById('app').append(...[
          : ' The convoy names no goal, so no critical path.')),
   board,
   c.plan ? h('details', {}, h('summary', {}, 'Convoy plan'), h('pre', {}, c.plan)) : null,
+  pathDiagram(cp),
   BOARD.map(b => section(b, lane[b.id], b.id !== 'blocked' ? row : [
     ['Ticket', ticket], ['Title', titleCell], ['Stage', stageCell],
     ['Waiting on', t => t.blocked_by.length ? t.blocked_by.map(x => [pill(ticketLink(x)), ' ']) : t.status], ['Flags', flags],

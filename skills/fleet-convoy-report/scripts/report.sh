@@ -45,7 +45,7 @@ main() {
     "$here/../template.html" > "$out"
 
   echo "$out"
-  jq '{convoy: .convoy | {key, no, title}, total, cancelled, grade, counts, critical, escalations, spend: {usd: (.spend.usd * 100 | round / 100)}}' <<<"$data"
+  jq '{convoy: .convoy | {key, no, title}, total, cancelled, grade, counts, critical: (.critical | if . then del(.edges, .outside) else . end), escalations, spend: {usd: (.spend.usd * 100 | round / 100)}}' <<<"$data"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi

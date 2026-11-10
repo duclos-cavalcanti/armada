@@ -1,10 +1,15 @@
 -- The ledger facts `fleetc context` leaves out, as one JSON object: the convoy's header, every
--- ticket's title, each ticket's latest MR, the tickets worked by hand,
+-- ticket's title and blockers (done ones too, for the critical path's diagram), each ticket's latest MR, the tickets worked by hand,
 -- the open proposals naming the convoy, and how its escalations were judged. `:convoy` is its key.
 SELECT json_object(
   'convoy', (SELECT json_object('key', key, 'no', no, 'title', title, 'opened', created_at, 'closed', ended_at)
              FROM convoys WHERE key = :convoy),
   'titles', (SELECT json_group_object(key, title) FROM tickets),
+  'blockers', (SELECT json_group_object(ticket, json(keys))
+               FROM (SELECT ticket, json_group_array(blocked_by) AS keys FROM ticket_blocks GROUP BY ticket)),
+  -- Each ticket's convoy number (#N), so the diagram names where an outside blocker sails.
+  'convoy_nos', (SELECT json_group_object(t.key, c.no) FROM tickets t LEFT JOIN convoy_members m ON m.ticket = t.key
+                 JOIN convoys c ON c.key = coalesce(m.convoy, t.convoy)),
   -- A ship that ended without a merge snapshot was closed (its snapshot froze at draft/open).
   'mrs', (SELECT json_group_object(s.ticket, json_object('iid', s.iid, 'url', s.url, 'state',
                    CASE WHEN s.ended_at IS NOT NULL AND coalesce(ss.state, 'open') IN ('draft', 'open')

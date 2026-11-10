@@ -2,7 +2,7 @@
 description: >-
   Report a convoy's progress as one self-contained HTML page: how far it has moved (a % grade, the
   convoy's and its critical path's), what it has cost so far (USD by role), a board of its tickets (To-Do, In-Progress, In-QA, Blocked,
-  Done; the critical path's in red) and the proposals waiting to join it, its plan (folded), then each column's tickets linked to the tracker: what the blocked ones wait
+  Done; the critical path's in red, and a diagram of it) and the proposals waiting to join it, its plan (folded), then each column's tickets linked to the tracker: what the blocked ones wait
   on, why the anchored ones are held, which are worked by hand. Read-only. For the shipwright, on the
   operator's order.
 argument-hint: "<convoy KEY|#N> [projects/<p>]"
@@ -37,7 +37,10 @@ over the convoy's tickets. Cancelled ones are left out.
 **The critical path.** The convoy's goal (`fleetc convoy open --goal`, the ticket whose Done proves
 its outcome) and every ticket of the convoy it waits on, done or not, as fleetd derives it
 (`critical` in `fleetc context`). It gets its own grade, and its tickets sit in red at the foot of
-each column. A convoy with no goal has none.
+each column, and a diagram of it (folded): the path's tickets and their edges, the goal ringed in
+red, each blocker in another convoy dashed with its number. The page is self-contained but for that
+diagram: opening it loads mermaid (pinned) from jsDelivr; offline, it shows the diagram's source. A
+convoy with no goal has none.
 
 **Escalations.** Each escalation of a convoy ticket's cog, as its inspection judged it: refuted (an
 option cleared it, sent back to the cog) or confirmed (it went to the operator), with their shares,
