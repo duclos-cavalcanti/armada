@@ -66,7 +66,7 @@ pub enum Command {
     RecordStatus { target: ControlTarget, state: CogState, last_action: Option<String>, reply: UrlReply }, // → "ok", or its case's note
     Dispatch { order: Order, reply: Reply },
     LaunchHand { worktree_path: String, reply: Reply }, // ticketless operator-driven hand, no order
-    OpenConvoy { key: ConvoyKey, title: Option<String>, plan: Option<String>, reply: Reply },
+    OpenConvoy { key: ConvoyKey, title: Option<String>, plan: Option<String>, goal: Option<TicketKey>, reply: Reply },
     CloseConvoy { key: ConvoyKey, reply: Reply },
     Anchor { target: ControlTarget, reply: Reply },
     Weigh { target: ControlTarget, reply: Reply },
@@ -228,8 +228,8 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
                 .map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
-        Command::OpenConvoy { key, title, plan, reply } => {
-            let res = open_convoy(ledger, tracker, &key, title.as_deref(), plan.as_deref()).map_err(|e| e.to_string());
+        Command::OpenConvoy { key, title, plan, goal, reply } => {
+            let res = open_convoy(ledger, tracker, &key, title.as_deref(), plan.as_deref(), goal.as_ref()).map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
         Command::CloseConvoy { key, reply } => {
@@ -662,12 +662,22 @@ fn read_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey) -> Resul
 /// Open a convoy, or re-open one: its tickets synced, then its title and plan set. On a convoy that
 /// already exists, an omitted title or plan keeps its own, so re-opening to change one never
 /// blanks the other.
-fn open_convoy(ledger: &Ledger, tracker: &dyn Tracker, key: &ConvoyKey, title: Option<&str>, plan: Option<&str>) -> Result<()> {
+fn open_convoy(
+    ledger: &Ledger,
+    tracker: &dyn Tracker,
+    key: &ConvoyKey,
+    title: Option<&str>,
+    plan: Option<&str>,
+    goal: Option<&TicketKey>,
+) -> Result<()> {
     let now = now_rfc3339();
     sync::sync_convoy(ledger, tracker, key, &now)?;
     ledger.open(key, title, &now)?;
-    match plan {
-        Some(plan) => ledger.set_plan(key, Some(plan), &now),
+    if let Some(plan) = plan {
+        ledger.set_plan(key, Some(plan), &now)?;
+    }
+    match goal {
+        Some(goal) => ledger.set_goal(key, goal, &now),
         None => Ok(()),
     }
 }
@@ -922,8 +932,11 @@ fn anchor_ticket<H: SessionHost>(
 /// captain dispatches `ready && !dispatched` and closes the convoy once every ticket is terminal.
 fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Result<ConvoyView> {
     let armada = ShipRepo::armada(ledger)?;
+    let board = TicketRepo::board(ledger)?;
+    let goal = ConvoyRepo::goal(ledger, convoy)?;
+    let path = goal.as_ref().map(|g| domain::upstream(g, &board)).unwrap_or_default();
     let mut tickets = Vec::new();
-    for t in TicketRepo::board(ledger)? {
+    for t in board {
         if t.convoy.as_ref() != Some(convoy) {
             continue;
         }
@@ -950,6 +963,7 @@ fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Resul
             None => false,
         };
         tickets.push(ConvoyTicketView {
+            critical: path.contains(&t.key),
             key: t.key,
             status: t.status,
             classification,
@@ -963,7 +977,7 @@ fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Resul
             inspect,
         });
     }
-    Ok(ConvoyView { convoy: convoy.clone(), plan: ConvoyRepo::plan(ledger, convoy)?, tickets })
+    Ok(ConvoyView { convoy: convoy.clone(), plan: ConvoyRepo::plan(ledger, convoy)?, goal, tickets })
 }
 
 /// Compose a cog's work-packet from the ledger: its dispatch order, its open ship + the ship's
@@ -1552,17 +1566,22 @@ mod tests {
     }
 
     #[test]
-    fn re_opening_a_convoy_keeps_the_title_or_plan_it_leaves_out() {
+    fn re_opening_a_convoy_keeps_the_title_plan_or_goal_it_leaves_out() {
         let db = Ledger::in_memory().unwrap();
-        let tracker = FakeTracker::new(vec![]);
         let c9 = ConvoyKey("PROJ-9".into());
+        let mut proof = tt("PROJ-1", TicketStatus::Todo);
+        proof.convoy = Some(c9.clone());
+        let tracker = FakeTracker::new(vec![proof]);
+        let goal = TicketKey("PROJ-1".into());
         let title = |db: &Ledger| ConvoyRepo::active(db).unwrap()[0].title.clone();
-        open_convoy(&db, &tracker, &c9, Some("Seed"), Some("ship the seed")).unwrap();
-        open_convoy(&db, &tracker, &c9, None, Some("ship the seed, then the gate")).unwrap();
+        open_convoy(&db, &tracker, &c9, Some("Seed"), Some("ship the seed"), Some(&goal)).unwrap();
+        open_convoy(&db, &tracker, &c9, None, Some("ship the seed, then the gate"), None).unwrap();
         assert_eq!(title(&db).as_deref(), Some("Seed"), "a new plan keeps the title");
-        open_convoy(&db, &tracker, &c9, Some("Seed, gated"), None).unwrap();
+        open_convoy(&db, &tracker, &c9, Some("Seed, gated"), None, None).unwrap();
         assert_eq!(ConvoyRepo::plan(&db, &c9).unwrap().as_deref(), Some("ship the seed, then the gate"), "a new title keeps the plan");
         assert_eq!(title(&db).as_deref(), Some("Seed, gated"));
+        assert_eq!(ConvoyRepo::goal(&db, &c9).unwrap(), Some(goal), "and the goal");
+        assert!(open_convoy(&db, &tracker, &c9, None, None, Some(&TicketKey("PROJ-404".into()))).is_err(), "a goal off the convoy");
     }
 
     #[test]
@@ -2968,6 +2987,39 @@ mod tests {
         let b = view.tickets.iter().find(|x| x.key == TicketKey("PROJ-2".into())).unwrap();
         assert_eq!(b.classification, None, "Done is past the frontier");
         assert_eq!(b.status, Some(TicketStatus::Done));
+    }
+
+    #[test]
+    fn the_convoy_view_marks_the_goal_and_what_it_waits_on_as_critical() {
+        use domain::ports::TicketRepo;
+        let db = Ledger::in_memory().unwrap();
+        let t = |key: &str, blocked_by: &[&str]| Ticket {
+            key: TicketKey(key.into()),
+            convoy: Some(ConvoyKey("PROJ-100".into())),
+            held: false,
+            created_at: "t".into(),
+            blocked_by: blocked_by.iter().map(|k| TicketKey((*k).into())).collect(),
+            title: None,
+            assignee: None,
+            status: Some(TicketStatus::Todo),
+            synced_at: None,
+        };
+        // PROJ-1 → PROJ-2 (the goal); PROJ-3 is a parallel stream.
+        for ticket in [t("PROJ-1", &[]), t("PROJ-2", &["PROJ-1"]), t("PROJ-3", &[])] {
+            TicketRepo::upsert(&db, &ticket).unwrap();
+            TicketRepo::set_blocked_by(&db, &ticket.key, &ticket.blocked_by).unwrap();
+        }
+        let convoy = ConvoyKey("PROJ-100".into());
+        let critical = |db: &Ledger| -> Vec<String> {
+            build_convoy_view(db, &convoy, true).unwrap().tickets.into_iter().filter(|t| t.critical).map(|t| t.key.0).collect()
+        };
+        db.open(&convoy, None, "t").unwrap();
+        assert!(critical(&db).is_empty(), "no goal, no path");
+        db.set_goal(&convoy, &TicketKey("PROJ-2".into()), "t").unwrap();
+        let mut path = critical(&db);
+        path.sort();
+        assert_eq!(path, ["PROJ-1", "PROJ-2"]);
+        assert_eq!(build_convoy_view(&db, &convoy, true).unwrap().goal, Some(TicketKey("PROJ-2".into())));
     }
 
     #[test]

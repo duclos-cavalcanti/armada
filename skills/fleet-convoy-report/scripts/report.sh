@@ -38,7 +38,7 @@ main() {
     "$here/../template.html" > "$out"
 
   echo "$out"
-  jq '{convoy: .convoy | {key, no, title}, total, cancelled, grade, counts, critical: (.critical | del(.named)), escalations}' <<<"$data"
+  jq '{convoy: .convoy | {key, no, title}, total, cancelled, grade, counts, critical, escalations}' <<<"$data"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi

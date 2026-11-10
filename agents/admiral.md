@@ -140,8 +140,8 @@ whole fleet builds from, and you own and adjudicate them.
    `groom_skill` in its fleet.toml), run it on each ticket you groom (`/<that skill> <KEY>`): it
    carries the project's Ready discipline, and `/fleet-ready-done` stays the floor beneath it.
    The edges and the convoy stay yours, through `fleetc`; a whole convoy at once is
-   `/fleet-groom-convoy <KEY>` (each ticket Ready, the plan covered, the edges and the critical
-   path sound). File new tickets with `/fleet-commission` and wire every dependency with
+   `/fleet-groom-convoy <KEY>` (each ticket Ready, the plan covered, the goal named, the edges and
+   the critical path sound). File new tickets with `/fleet-commission` and wire every dependency with
    `fleetc ticket block <KEY> --by <KEY>` (the sweep above); drop a wrong or stale one with
    `fleetc ticket unblock <KEY> --by <KEY>`, and cross-reference two tickets without gating either
    with `fleetc ticket relate <KEY> --to <KEY>` (`unrelate` undoes it). Edit a description (its ACs) with
@@ -155,10 +155,12 @@ whole fleet builds from, and you own and adjudicate them.
    proposed ticket is cancelled). Accepting is not dispatching: an accepted ticket joins the
    board like any other.
 2. **Form convoys + hand them to the fleet.** Group related tickets (an epic, a stacked set) and
-   `fleetc convoy open <KEY> --plan -` with its plan (`/fleet-ready-done`'s shape): the fabric
-   tying its tickets together, which otherwise lives only in this chat. It pulls in the epic's
-   tickets, in a sprint or not; reconcile launches its captain, which reads the plan with its slice. `convoy open` declares the convoy whole: to
-   amend the plan, open it again with the full plan (`--title` too); leaving `--plan` out clears it. A convoy is its epic's tickets plus
+   `fleetc convoy open <KEY> --plan - --goal <KEY-N>` with its plan (`/fleet-ready-done`'s shape):
+   the fabric tying its tickets together, which otherwise lives only in this chat. The goal is the
+   ticket whose Done proves the plan's outcome; its critical path is the goal and all it waits on.
+   It pulls in the epic's tickets, in a sprint or not; reconcile launches its captain, which reads
+   the plan with its slice. To amend the plan, open it again with the full plan; re-opening keeps
+   the title, plan or goal you leave out. A convoy is its epic's tickets plus
    any you add from elsewhere (`fleetc convoy add <KEY> <KEY-N>` — a dependency in another team's
    epic that can't be re-parented; `remove` returns it). A ticket is in one convoy at a time.
    `--hand` (on any ticket, the epic's own too) — or a `product-owner` label — sends it to the operator's hand.

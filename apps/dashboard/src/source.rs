@@ -132,6 +132,8 @@ pub struct Fleet {
     pub held_reasons: HashMap<String, String>,
     pub armada: Vec<ShipRow>,
     pub convoys: Vec<Convoy>,
+    /// The open convoys' critical paths: each goal and every ticket of its convoy it waits on.
+    pub critical: HashSet<TicketKey>,
     /// Each open convoy's latest captain launch (its key → when), if it ever had one.
     pub captain_launched: HashMap<String, String>,
     /// Each convoy's inspection verdicts: `(refuted, confirmed)`.
@@ -284,6 +286,12 @@ impl Fleet {
         }
 
         let convoys = ConvoyRepo::active(&db)?;
+        let critical = convoys
+            .iter()
+            .filter_map(|c| c.goal.as_ref().map(|g| (c, domain::upstream(g, &board))))
+            .flat_map(|(c, path)| board.iter().filter(move |t| t.convoy.as_ref() == Some(&c.key) && path.contains(&t.key)))
+            .map(|t| t.key.clone())
+            .collect();
         let mut captain_launched = HashMap::new();
         for c in &convoys {
             if let Some(at) = db.last_captain_launch(&c.key)? {
@@ -312,6 +320,7 @@ impl Fleet {
             held_reasons,
             armada,
             convoys,
+            critical,
             captain_launched,
             verdicts: db.verdicts()?.into_iter().map(|(c, r, k)| (c.0, (r, k))).collect(),
             held,
@@ -340,6 +349,11 @@ impl Fleet {
     /// The number of the open convoy a ticket sails in; `None` outside every open convoy.
     pub fn convoy_of(&self, ticket: Option<&TicketKey>) -> Option<i64> {
         self.convoy_no(self.board.iter().find(|t| Some(&t.key) == ticket).and_then(|t| t.convoy.as_ref()))
+    }
+
+    /// On an open convoy's critical path.
+    pub fn on_path(&self, ticket: Option<&TicketKey>) -> bool {
+        ticket.is_some_and(|t| self.critical.contains(t))
     }
 
     /// An open convoy's number; `None` for no convoy, or one no longer open.

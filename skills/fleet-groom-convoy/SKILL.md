@@ -2,10 +2,10 @@
 description: >-
   Groom a whole convoy to Ready, as one: each open ticket meets the Definition of Ready (through the
   project's grooming skill, when it names one); together they cover the convoy plan's outcome and
-  lead into each other; every blocker edge is needed and none is missing; and the critical path to
-  the outcome is never held up by deferrable work (hardening, backfills, guard tests), which runs as
-  a parallel stream after it. Reports first, then applies what the operator approves. For the
-  admiral.
+  lead into each other; every blocker edge is needed and none is missing; and the critical path (its
+  goal, the ticket that proves the outcome, and all it waits on) holds no deferrable work
+  (hardening, backfills, guard tests), which runs as a parallel stream. Reports first, then applies
+  what the operator approves. For the admiral.
 argument-hint: <KEY|#N> (the convoy)
 ---
 
@@ -21,7 +21,7 @@ groomed.
 
 ```bash
 fleetc convoy plan <C>                        # the outcome, the sequencing, the rulings
-fleetc context --convoy <C> --format table    # each ticket: status, dispatch verdict, held, live cog
+fleetc context --convoy <C> --format table    # its goal; each ticket: status, dispatch verdict, held, live cog; * on the critical path
 fleetc ticket <KEY>                           # each open ticket in full: goal, ACs, blockers, links
 fleetc escalations --key <KEY>                # the convoy's cases: rulings that bind its tickets
 ```
@@ -50,16 +50,23 @@ one held by a convoy anchor ("convoy <C> anchored") is not yours to weigh.
   says the same as the edges.
 - **Rulings.** A ruling on one of the convoy's cases that binds a ticket is in its ACs.
 
-## Step 3 — Edges and the critical path
+## Step 3 — The goal, the edges and the critical path
+
+The convoy's **goal** is the one ticket whose Done proves its outcome, often a live end-to-end test.
+Its **critical path** is the goal and every ticket of the convoy it waits on, through the blocker
+edges, as fleetd derives it (the `*` in the context table): the bare minimum to ship the outcome.
+Every other ticket is a parallel stream. A convoy with no goal: name the ticket that proves the
+outcome, or file it (Step 4).
 
 Name each open ticket's role:
 
-- **Crucial**: on the path to the outcome. The plan's proof that the feature works, often a live
-  end-to-end ticket, needs it.
+- **Crucial**: the goal needs it to prove the outcome.
 - **Deferrable**: needed, but not to prove the outcome: a backfill, a guard test against a past
   issue, a doc, a follow-up hardening.
 
-Then weigh every `is blocked by` edge among the convoy's tickets (and each one into another convoy):
+The path holds the crucial tickets and nothing else: a deferrable ticket on it has an edge to drop,
+a crucial one off it an edge missing. Weigh every `is blocked by` edge among the convoy's tickets
+(and each one into another convoy):
 
 - **Needed**: the blocked ticket's ACs consume what the blocker delivers. Keep it.
 - **Missing**: a ticket consumes what another delivers, with no edge. Add it.
@@ -71,16 +78,15 @@ Then weigh every `is blocked by` edge among the convoy's tickets (and each one i
   only where it truly consumes that work.
 - **Cycles**: report them, and break each at its unneeded edge.
 
-For example: A (a backfill) blocks B, and B is needed by C (the live end-to-end test). B and C are
-crucial, A is deferrable. Drop A → B; A runs in parallel, and the plan lists it after the critical
-path.
+For example: A (a backfill) blocks B, and B is needed by C (the live end-to-end test, the goal). B
+and C are crucial, A is deferrable. Drop A → B: A leaves the path and runs in parallel.
 
 ## Step 4 — Report, then apply
 
 Report first, nothing written yet:
 
 ```
-Convoy <C> — <title> · <n> open · critical path: <K1> → <K2> → <K3>
+Convoy <C> — <title> · <n> open · goal: <K> · critical path: <n> tickets (<m> after the edges below)
 | Ticket | Ready         | Role       | Edges           | Notes |
 | <KEY>  | ✓ | gap: <…>  | crucial | deferrable | +by <K> −by <K> | <…>   |
 Coverage: <parts with no ticket · tickets outside the plan · overlaps>
@@ -89,12 +95,12 @@ Plan: <the revised sequencing: the critical path, then the parallel hardening st
 
 Then apply what the operator approves, all of it or the rows they pick, and say what you ran:
 
+- **The goal**: `fleetc convoy open <C> --goal <KEY>`.
 - **Edges**: `fleetc ticket block <KEY> --by <KEY>`, `fleetc ticket unblock <KEY> --by <KEY>`.
 - **A ticket's gaps**: the project's grooming skill on it (`/<groom_skill> <KEY>`), else
   `fleetc ticket edit <KEY> --body -`, starting from `fleetc ticket <KEY>` (it replaces the
   description whole). Then weigh it back if it was anchored as not Ready: `fleetc weigh <KEY>`.
 - **A missing ticket**: `/fleet-commission`, into this convoy.
 - **The plan**: `fleetc convoy open <C> --plan -`, with the whole revised plan on stdin (its title
-  stays). The plan's history keeps the old one (`fleetc convoy plan <C> --history`). Its Sequence
-  names the path on one line, `- **Critical path:** <K1> → <K2> → <K3>`, the proof last:
-  `/fleet-convoy-report` reads it.
+  stays). The plan's history keeps the old one (`fleetc convoy plan <C> --history`). It doesn't
+  restate the critical path: the goal and the edges are its one source.

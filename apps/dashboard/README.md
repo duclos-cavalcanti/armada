@@ -14,7 +14,9 @@ Cycle with `Tab` / `S-Tab`:
 - **Fleet** — the line, top-down: the open convoys, what waits to enter the line, every order,
   then the builders and the ships being landed:
   - **Convoys** — the open convoys: the captain's liveness (or off), how many tickets are still
-    open; `enter` switches to the captain;
+    open, and of its critical path (`Path`: its goal and all it waits on; `—` with no goal);
+    `enter` switches to the captain. On every other pane, a ticket on its convoy's critical path
+    is starred beside the convoy (`#2*`);
   - **Proposals** — what waits on you before it can enter the line: the open proposals (`enter`
     reads one, `a` accepts, `d` drops). `h`/`l` swaps in **Anchored**: tickets held before they were
     dispatched, a captain's not-Ready ones among them (`⚓ <reason>`; `t` opens one; fix it, then `w`

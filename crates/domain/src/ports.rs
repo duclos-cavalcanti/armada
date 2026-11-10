@@ -94,6 +94,10 @@ pub trait ConvoyRepo {
     /// (`null`: cleared) — the plan's history. No-op (no event) if unchanged.
     fn set_plan(&self, key: &ConvoyKey, plan: Option<&str>, at: &str) -> Result<()>;
     fn plan(&self, key: &ConvoyKey) -> Result<Option<String>>;
+    /// Set the convoy's goal: the ticket whose Done proves its outcome. Errs unless the goal is a
+    /// ticket of the convoy, not Cancelled. Appends `ConvoyGoalSet`; no-op (no event) if unchanged.
+    fn set_goal(&self, key: &ConvoyKey, goal: &TicketKey, at: &str) -> Result<()>;
+    fn goal(&self, key: &ConvoyKey) -> Result<Option<TicketKey>>;
     /// Close a convoy (the captain's "all delivered" judgment) — sets `ended_at`, which
     /// reconcile reads to reap the captain. Appends `ConvoyClosed`.
     fn close(&self, key: &ConvoyKey, at: &str) -> Result<()>;
@@ -109,7 +113,8 @@ pub trait ConvoyRepo {
     /// the fleet; returned, so the caller can say so). A no-op if it's already a member. Errs if it was
     /// added to another convoy (remove it there first) or isn't on the board.
     fn add_member(&self, convoy: &ConvoyKey, ticket: &TicketKey, at: &str) -> Result<Option<ConvoyKey>>;
-    /// Take an added ticket out of `convoy` (it returns to its epic's). Errs if it wasn't added there.
+    /// Take an added ticket out of `convoy` (it returns to its epic's). Errs if it wasn't added there,
+    /// or is the convoy's goal (set another first).
     fn remove_member(&self, convoy: &ConvoyKey, ticket: &TicketKey) -> Result<()>;
     /// Every ticket added to a convoy — sync keeps the off-board ones fresh.
     fn added_members(&self) -> Result<Vec<TicketKey>>;

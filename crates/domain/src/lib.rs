@@ -191,7 +191,7 @@ pub enum EventKind {
     TicketHeld, TicketReleased, TicketDecommissioned, TicketRecalled, TicketAmended,
     ShipOpened, ShipSynced, ShipMerged, ShipClosed, ShipRoundsReset,
     EscalationInspected, EscalationRuled,
-    ConvoyOpened, ConvoyClosed, ConvoyPlanned,
+    ConvoyOpened, ConvoyClosed, ConvoyPlanned, ConvoyGoalSet,
     SessionAnchored, SessionWeighed,
     ConvoyAnchored, ConvoyWeighed,
     LookoutAnchored, LookoutWeighed,
@@ -287,6 +287,25 @@ pub struct Convoy {
     pub created_at: Timestamp,
     pub ended_at: Option<Timestamp>,    // None = active
     pub anchored_at: Option<Timestamp>, // Some = operator-anchored (captain held off relaunch)
+    /// The ticket whose Done proves the convoy's outcome (`convoy open --goal`). Its critical path
+    /// is the goal and every ticket of the convoy it waits on ([`upstream`]); `None`: no path.
+    #[serde(default)]
+    pub goal: Option<TicketKey>,
+}
+
+/// The goal and every ticket it waits on, through the `board`'s blocker edges, whatever their
+/// convoy: a convoy's own tickets among them are its critical path.
+pub fn upstream(goal: &TicketKey, board: &[Ticket]) -> std::collections::HashSet<TicketKey> {
+    let mut seen = std::collections::HashSet::from([goal.clone()]);
+    let mut todo = vec![goal.clone()];
+    while let Some(key) = todo.pop() {
+        for b in board.iter().filter(|t| t.key == key).flat_map(|t| &t.blocked_by) {
+            if seen.insert(b.clone()) {
+                todo.push(b.clone());
+            }
+        }
+    }
+    seen
 }
 
 /// A cog's work-packet — the composed read `fleetc packet` serves: the dispatch order, the
@@ -325,6 +344,9 @@ pub struct ConvoyView {
     /// The convoy's plan — what ties its tickets together (`convoy open --plan`); `None`: no plan.
     #[serde(default)]
     pub plan: Option<String>,
+    /// The ticket whose Done proves the outcome; `None`: no goal, so no critical path.
+    #[serde(default)]
+    pub goal: Option<TicketKey>,
     pub tickets: Vec<ConvoyTicketView>,
 }
 
@@ -348,6 +370,9 @@ pub struct ConvoyTicketView {
     /// Its worker or sailor escalated, and no verdict judges that escalation yet: /fleet-inspect it.
     #[serde(default)]
     pub inspect: bool,
+    /// On the convoy's critical path: the goal, or a ticket it waits on.
+    #[serde(default)]
+    pub critical: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1186,6 +1211,7 @@ impl EventKind {
             EventKind::ConvoyOpened => "convoy_opened",
             EventKind::ConvoyClosed => "convoy_closed",
             EventKind::ConvoyPlanned => "convoy_planned",
+            EventKind::ConvoyGoalSet => "convoy_goal_set",
             EventKind::SessionAnchored => "session_anchored",
             EventKind::SessionWeighed => "session_weighed",
             EventKind::ConvoyAnchored => "convoy_anchored",
@@ -1221,6 +1247,7 @@ impl EventKind {
             "convoy_opened" => Some(Self::ConvoyOpened),
             "convoy_closed" => Some(Self::ConvoyClosed),
             "convoy_planned" => Some(Self::ConvoyPlanned),
+            "convoy_goal_set" => Some(Self::ConvoyGoalSet),
             "session_anchored" => Some(Self::SessionAnchored),
             "session_weighed" => Some(Self::SessionWeighed),
             "convoy_anchored" => Some(Self::ConvoyAnchored),
@@ -1355,5 +1382,42 @@ mod inspection_tests {
         assert_eq!(v.prepared().as_deref(), Some("answer threads 4 and 7\nas the canon says (§5)"), "with its indented continuation");
         assert_eq!(verdict("- **Prepared:** none").prepared(), None);
         assert_eq!(verdict("**Verdict:** CONFIRM — no prepared line").prepared(), None);
+    }
+}
+
+#[cfg(test)]
+mod upstream_tests {
+    use super::*;
+
+    fn ticket(key: &str, convoy: &str, blocked_by: &[&str]) -> Ticket {
+        Ticket {
+            key: TicketKey(key.into()),
+            convoy: Some(ConvoyKey(convoy.into())),
+            held: false,
+            created_at: "t".into(),
+            blocked_by: blocked_by.iter().map(|k| TicketKey((*k).into())).collect(),
+            title: None,
+            assignee: None,
+            status: None,
+            synced_at: None,
+        }
+    }
+
+    #[test]
+    fn the_goal_reaches_back_through_every_blocker_and_nothing_after_it() {
+        // P-1 → P-2 → P-4 (the goal) ← P-3, which waits on Q-1 (another convoy) ← P-5; P-6 follows the goal.
+        let board = [
+            ticket("P-1", "C-1", &[]),
+            ticket("P-2", "C-1", &["P-1"]),
+            ticket("P-3", "C-1", &["Q-1"]),
+            ticket("P-4", "C-1", &["P-2", "P-3"]),
+            ticket("Q-1", "C-2", &["P-5"]),
+            ticket("P-5", "C-1", &[]),
+            ticket("P-6", "C-1", &["P-4"]),
+            ticket("P-7", "C-1", &[]),
+        ];
+        let mut path: Vec<String> = upstream(&TicketKey("P-4".into()), &board).into_iter().map(|k| k.0).collect();
+        path.sort();
+        assert_eq!(path, ["P-1", "P-2", "P-3", "P-4", "P-5", "Q-1"], "through another convoy, never past the goal");
     }
 }

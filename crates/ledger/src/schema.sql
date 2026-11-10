@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS convoys (
     created_at  TEXT NOT NULL,
     ended_at    TEXT,                                 -- NULL = active
     anchored_at TEXT,                                 -- operator anchor (hold the captain); NULL = under way
-    no          INTEGER                               -- its short number (#N): in opening order, never reused
+    no          INTEGER,                              -- its short number (#N): in opening order, never reused
+    goal        TEXT REFERENCES tickets(key)          -- the ticket whose Done proves its outcome; NULL = no critical path
 );
 CREATE UNIQUE INDEX IF NOT EXISTS convoy_no ON convoys(no);
 

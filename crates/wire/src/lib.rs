@@ -37,9 +37,9 @@ pub struct DispatchOrder {
     pub worktree_path: Option<String>,
 }
 
-/// A convoy open/close command as it travels the wire. `open` carries an optional `title` and
-/// `plan` (its text; none = no plan); `close` ignores both. The verb is the route (`/convoy-open`
-/// vs `/convoy-close`).
+/// A convoy open/close command as it travels the wire. `open` carries an optional `title`, `plan`
+/// (its text; none = no plan) and `goal` (a ticket key; none = unchanged); `close` ignores them.
+/// The verb is the route (`/convoy-open` vs `/convoy-close`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConvoyCmd {
     pub key: String,
@@ -47,6 +47,8 @@ pub struct ConvoyCmd {
     pub title: Option<String>,
     #[serde(default)]
     pub plan: Option<String>,
+    #[serde(default)]
+    pub goal: Option<String>,
 }
 
 /// Add a ticket to a convoy, or take an added one out (`POST /convoy-add`, `/convoy-remove`;

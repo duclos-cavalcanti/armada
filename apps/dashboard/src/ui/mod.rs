@@ -170,7 +170,10 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             ])),
             (if pane == Pane::Impl { &f.workers } else { &f.hands })
                 .iter()
-                .map(|c| builder_row(c, f.is_up(c), f.ship_of(c.session.ticket.as_ref()), f.convoy_of(c.session.ticket.as_ref())))
+                .map(|c| {
+                    let t = c.session.ticket.as_ref();
+                    builder_row(c, f.is_up(c), f.ship_of(t), ticket_convoy_cell(f.convoy_of(t), f.on_path(t)))
+                })
                 .collect(),
         ),
         Pane::Merge => (
@@ -194,7 +197,8 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 .iter()
                 .map(|r| {
                     let admiral = r.ship.ticket.as_ref().is_some_and(|t| f.admirals.contains(t));
-                    landing_row(r, r.sailor.as_ref().is_some_and(|s| f.is_up(s)), f.convoy_of(r.ship.ticket.as_ref()), admiral)
+                    let t = r.ship.ticket.as_ref();
+                    landing_row(r, r.sailor.as_ref().is_some_and(|s| f.is_up(s)), ticket_convoy_cell(f.convoy_of(t), f.on_path(t)), admiral)
                 })
                 .collect(),
         ),
@@ -211,7 +215,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
         ),
         Pane::Convoys => (
             format!(" Convoys · {} open ", f.convoys.len()),
-            Some(header(&[("Convoy", 16), ("Captain", 10), ("Launched", 9), ("Open", 6), ("Ref/Conf", 9), ("Title", 0)])),
+            Some(header(&[("Convoy", 16), ("Captain", 10), ("Launched", 9), ("Open", 6), ("Path", 6), ("Ref/Conf", 9), ("Title", 0)])),
             f.convoys.iter().map(|c| convoy_row(c, f)).collect(),
         ),
         Pane::Proposals => (
@@ -304,7 +308,7 @@ fn order_row(o: &OrderRow) -> Line<'static> {
     ])
 }
 
-fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>, convoy: Option<i64>) -> Line<'static> {
+fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>, convoy: (String, usize, Style)) -> Line<'static> {
     let s = &c.session;
     let state = c.state.clone().unwrap_or_else(|| "·".into());
     let anchor = if s.anchored_at.is_some() { "⚓ " } else { "" };
@@ -314,7 +318,7 @@ fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>, convoy: Option<i64>
     };
     cells(vec![
         (s.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| "—".into()), 12, Style::default()),
-        convoy_cell(convoy, None, 7),
+        convoy,
         (s.kind.as_str().into(), 7, Style::default()),
         (state.clone(), 13, state_style(&state)),
         live_cell(c.liveness.as_deref(), up),
@@ -325,7 +329,7 @@ fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>, convoy: Option<i64>
     ])
 }
 
-fn landing_row(r: &LandingRow, up: bool, convoy: Option<i64>, admiral: bool) -> Line<'static> {
+fn landing_row(r: &LandingRow, up: bool, convoy: (String, usize, Style), admiral: bool) -> Line<'static> {
     let snap = r.snapshot.as_ref();
     // An ended sailor's last word stays visible, dimmed: the ship is at rest.
     let sailor = crate::source::sailor_label(r.sailor.as_ref());
@@ -358,7 +362,7 @@ fn landing_row(r: &LandingRow, up: bool, convoy: Option<i64>, admiral: bool) -> 
     };
     cells(vec![
         (r.ship.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_default(), 12, Style::default()),
-        convoy_cell(convoy, None, 7),
+        convoy,
         (sailor, 15, sailor_style),
         // An admiral convened on its confirmed escalation: `e` switches to it.
         if admiral { ("up".into(), 5, Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)) } else { ("—".into(), 5, dim()) },
@@ -471,10 +475,14 @@ fn ticket_rows(board: &[Ticket], held_reasons: &HashMap<String, String>) -> Vec<
 /// to it — and how many of its tickets are still open (not done / cancelled).
 fn convoy_row(c: &Convoy, f: &crate::source::Fleet) -> Line<'static> {
     let members: Vec<&Ticket> = f.board.iter().filter(|t| t.convoy.as_ref() == Some(&c.key)).collect();
-    let open = members
+    let is_open = |t: &Ticket| !matches!(t.status, Some(domain::TicketStatus::Done) | Some(domain::TicketStatus::Cancelled));
+    let open = members.iter().filter(|t| is_open(t)).count();
+    // The critical path, as `open/total` like Open; Cancelled ones prove nothing and aren't counted.
+    let path: Vec<&Ticket> = members
         .iter()
-        .filter(|t| !matches!(t.status, Some(domain::TicketStatus::Done) | Some(domain::TicketStatus::Cancelled)))
-        .count();
+        .copied()
+        .filter(|t| f.critical.contains(&t.key) && t.status != Some(domain::TicketStatus::Cancelled))
+        .collect();
     let live = match f.captain_of(&c.key) {
         Some(cap) if cap.state.as_deref() == Some("escalated") => ("escalated".into(), 10, state_style("escalated")),
         Some(cap) => live_cell(cap.liveness.as_deref(), f.is_up(cap)),
@@ -487,6 +495,10 @@ fn convoy_row(c: &Convoy, f: &crate::source::Fleet) -> Line<'static> {
         (live.0, 10, live.2),
         (launched, 9, dim()),
         (format!("{open}/{}", members.len()), 6, Style::default()),
+        match c.goal {
+            Some(_) => (format!("{}/{}", path.iter().filter(|t| is_open(t)).count(), path.len()), 6, Style::default()),
+            None => ("—".into(), 6, dim()),
+        },
         match f.verdicts.get(&c.key.0) {
             Some((refuted, confirmed)) => (format!("{refuted}/{confirmed}"), 9, Style::default()),
             None => ("—".into(), 9, dim()),
@@ -505,6 +517,12 @@ fn convoy_style(no: Option<i64>) -> Style {
         Some(n) if n > 0 => Style::default().fg(Color::Indexed(HUES[(n as usize - 1) % HUES.len()])),
         _ => dim(),
     }
+}
+
+/// A ticket's convoy cell (`#N`), starred when the ticket is on its convoy's critical path.
+fn ticket_convoy_cell(no: Option<i64>, critical: bool) -> (String, usize, Style) {
+    let (text, width, style) = convoy_cell(no, None, 7);
+    (if critical { format!("{text}*") } else { text }, width, style)
 }
 
 /// A convoy cell, in its convoy's color: `#N`, then its key when given; the bare key (or `—`) for

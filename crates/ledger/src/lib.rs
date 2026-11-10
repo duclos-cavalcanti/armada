@@ -297,6 +297,8 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE convoys ADD COLUMN no INTEGER;
     UPDATE convoys SET no = (SELECT COUNT(*) FROM convoys c
         WHERE c.created_at < convoys.created_at OR (c.created_at = convoys.created_at AND c.key <= convoys.key));",
+    // v12: each convoy's goal, the ticket whose Done proves its outcome (its critical path's end).
+    "ALTER TABLE convoys ADD COLUMN goal TEXT REFERENCES tickets(key);",
 ];
 
 /// The ledger's schema version (SQLite `user_version`): one past its last migration.
@@ -791,7 +793,7 @@ mod tests {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; \
-             ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; PRAGMA user_version = 1;",
+             ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; PRAGMA user_version = 1;",
         )
         .unwrap();
         drop(conn);
@@ -815,7 +817,7 @@ mod tests {
         drop(Ledger::open(&path).unwrap());
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no;
+            "DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal;
              INSERT INTO convoys(key, created_at) VALUES ('PROJ-9', 't2'), ('PROJ-5', 't1'), ('PROJ-7', 't3');
              PRAGMA user_version = 10;",
         )
@@ -840,7 +842,7 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO convoys(key, created_at) VALUES ('PROJ-100', 't1');
              INSERT INTO convoy_plans(convoy, body, updated_at) VALUES ('PROJ-100', 'ship the seed', 't2');
-             ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; PRAGMA user_version = 7;",
+             ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; PRAGMA user_version = 7;",
         )
         .unwrap();
         drop(conn);
@@ -867,7 +869,7 @@ mod tests {
         // Back to v4: the same rebuild, without the admiral kind.
         let v4 = MIGRATIONS[3].replace(",'admiral'", ""); // v5's rebuild
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; PRAGMA user_version = 4;"))
+        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; PRAGMA user_version = 4;"))
             .unwrap();
         drop(conn);
 
@@ -1168,6 +1170,44 @@ mod tests {
                 ("t5".to_string(), serde_json::Value::Null),
             ]
         );
+    }
+
+    #[test]
+    fn a_convoy_goal_is_one_of_its_live_tickets_and_stays_until_another_is_set() {
+        let db = Ledger::in_memory().unwrap();
+        let ticket = |key: &str, epic: &str, status: TicketStatus| TrackerTicket {
+            key: TicketKey(key.into()),
+            title: "T".into(),
+            status,
+            assignee: None,
+            convoy: Some(ConvoyKey(epic.into())),
+            blocked_by: vec![],
+            labels: vec![],
+        };
+        for (key, epic, status) in [("PROJ-1", "PROJ-50", TicketStatus::Todo), ("PROJ-2", "PROJ-50", TicketStatus::Cancelled), ("PROJ-3", "PROJ-60", TicketStatus::Todo), ("PROJ-4", "PROJ-60", TicketStatus::Todo)] {
+            db.sync(&ticket(key, epic, status), "t").unwrap();
+        }
+        let (k, goal) = (ConvoyKey("PROJ-50".into()), TicketKey("PROJ-1".into()));
+        db.open(&k, None, "t1").unwrap();
+        assert_eq!(db.goal(&k).unwrap(), None, "no goal until one is set");
+        assert!(db.set_goal(&k, &TicketKey("PROJ-3".into()), "t2").is_err(), "another convoy's ticket");
+        assert!(db.set_goal(&k, &TicketKey("PROJ-2".into()), "t2").is_err(), "a Cancelled ticket proves nothing");
+        assert!(db.set_goal(&k, &TicketKey("PROJ-404".into()), "t2").is_err(), "not on the board");
+        db.set_goal(&k, &goal, "t2").unwrap();
+        db.set_goal(&k, &goal, "t3").unwrap(); // unchanged: no event
+        assert_eq!(db.goal(&k).unwrap(), Some(goal.clone()));
+        assert_eq!(db.active().unwrap()[0].goal, Some(goal.clone()), "the convoy row carries it");
+        let set: Vec<_> = db.events_of(EventKind::ConvoyGoalSet).unwrap().into_iter().map(|e| e.created_at).collect();
+        assert_eq!(set, ["t2"]);
+
+        let theirs = ConvoyKey("PROJ-60".into());
+        let added = TicketKey("PROJ-4".into());
+        db.add_member(&k, &added, "t4").unwrap();
+        db.set_goal(&k, &added, "t5").unwrap();
+        assert!(db.remove_member(&k, &added).is_err(), "the goal stays in its convoy");
+        db.set_goal(&k, &goal, "t6").unwrap();
+        db.remove_member(&k, &added).unwrap();
+        assert_eq!(TicketRepo::get(&db, &added).unwrap().unwrap().convoy, Some(theirs));
     }
 
     #[test]
@@ -1568,6 +1608,10 @@ fn row_to_convoy(r: &rusqlite::Row) -> rusqlite::Result<Convoy> {
         created_at: r.get("created_at")?,
         ended_at: r.get("ended_at")?,
         anchored_at: r.get("anchored_at")?,
+        goal: match r.as_ref().column_index("goal") {
+            Ok(i) => r.get::<_, Option<String>>(i)?.map(ticket_key).transpose()?,
+            Err(_) => None,
+        },
     })
 }
 
@@ -1598,6 +1642,13 @@ impl ConvoyRepo for Ledger {
     }
 
     fn remove_member(&self, convoy: &ConvoyKey, ticket: &TicketKey) -> Result<()> {
+        anyhow::ensure!(
+            self.goal(convoy)?.as_ref() != Some(ticket),
+            "{} is convoy {}'s goal — set another first (`fleetc convoy open {} --goal <KEY-N>`)",
+            ticket.0,
+            convoy.0,
+            convoy.0
+        );
         let n = self
             .conn
             .execute("DELETE FROM convoy_members WHERE ticket = ?1 AND convoy = ?2", params![ticket.0, convoy.0])?;
@@ -1725,6 +1776,41 @@ impl ConvoyRepo for Ledger {
             .conn
             .query_row("SELECT body FROM convoy_plans WHERE convoy = ?1", params![key.0], |r| r.get(0))
             .optional()?)
+    }
+
+    fn set_goal(&self, key: &ConvoyKey, goal: &TicketKey, at: &str) -> Result<()> {
+        // Write the goal + ConvoyGoalSet (CDC, same txn). Unchanged logs nothing.
+        if self.goal(key)?.as_ref() == Some(goal) {
+            return Ok(());
+        }
+        let t = TicketRepo::get(self, goal)?.ok_or_else(|| anyhow::anyhow!("{} isn't on the board", goal.0))?;
+        anyhow::ensure!(t.convoy.as_ref() == Some(key), "{} isn't in convoy {}: a convoy's goal is one of its tickets", goal.0, key.0);
+        anyhow::ensure!(t.status != Some(TicketStatus::Cancelled), "{} is Cancelled: it proves nothing", goal.0);
+        let tx = self.conn.unchecked_transaction()?;
+        let n = tx.execute("UPDATE convoys SET goal = ?2 WHERE key = ?1", params![key.0, goal.0])?;
+        anyhow::ensure!(n == 1, "no convoy {}", key.0);
+        tx.execute(
+            "INSERT INTO events(created_at, kind, entity_kind, entity_ref, payload_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                at,
+                EventKind::ConvoyGoalSet.as_str(),
+                EntityKind::Convoy.as_str(),
+                key.0,
+                serde_json::json!({ "goal": goal.0 }).to_string()
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn goal(&self, key: &ConvoyKey) -> Result<Option<TicketKey>> {
+        // Read-only readers can run ahead of fleetd's migration: a ledger without the column has no goal.
+        match self.conn.query_row("SELECT goal FROM convoys WHERE key = ?1", params![key.0], |r| r.get::<_, Option<String>>(0)) {
+            Ok(goal) => goal.map(ticket_key).transpose().map_err(Into::into),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(rusqlite::Error::SqliteFailure(_, Some(m))) if m.contains("no such column") => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     fn active(&self) -> Result<Vec<Convoy>> {
@@ -2306,7 +2392,7 @@ mod repo_tests {
             format!("INSERT INTO inspections(session_id, reported_at, verdict, body, inspected_at) VALUES ({}, '{at}', '{v}', 'b', '{at}9');", s.0)
         };
         conn.execute_batch(&format!(
-            "DELETE FROM cases; DROP INDEX one_open_case; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; DROP TABLE cases;
+            "DELETE FROM cases; DROP INDEX one_open_case; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; DROP TABLE cases;
              {} {} {} {} {} {} {}
              INSERT INTO reports(session_id, state, last_action, reported_at) VALUES ({}, 'escalated', 'Y?', 't3'), ({}, 'escalated', 'Z?', 't4');
              PRAGMA user_version = 8;",

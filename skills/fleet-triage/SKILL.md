@@ -41,9 +41,11 @@ And the deadlines from the tracker: the sprint's end, and each ticket's due date
   anchored") goes with the convoy, never alone.
 - **Placement.** A ticket whose work another convoy's plan owns moves there (`convoy remove` /
   `add`); a ticket in no convoy that one needs joins it; a convoy with nothing left open closes.
-- **Pace.** For each convoy, its critical path against the sprint's end and the due dates: what's
-  stuck (escalated for long, a dead cog, waiting on a blocker that isn't moving), what won't land
-  in time, and the one action that unblocks it.
+- **Pace.** For each convoy, its critical path (the `*` tickets in `fleetc context --convoy <C>
+  --format table`) against the sprint's end and the due dates: what's stuck on it (anchored,
+  escalated for long, a dead cog, waiting on a blocker that isn't moving, in another convoy too),
+  what won't land in time, and the one action that unblocks it. A convoy with no goal has no path:
+  its grooming names one (`/fleet-groom-convoy`, the admiral's).
 - **Machinery.** fleetd up, its health light, dry-run on or off as the operator intends, and the
   last plan's failures. A fault in the kit itself is yours to fix, as any kit bug.
 

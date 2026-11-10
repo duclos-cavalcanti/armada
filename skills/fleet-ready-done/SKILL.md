@@ -43,8 +43,9 @@ wins. This covers *what* a good ticket and a finished MR are, not the process ar
 
 ## The convoy plan
 
-A convoy (`fleetc convoy open <KEY> --plan <file|->`) may carry a plan: what ties its tickets
-together, for the captain that dispatches them. Kept short:
+A convoy (`fleetc convoy open <KEY> --plan <file|-> --goal <KEY-N>`) may carry a plan: what ties
+its tickets together, for the captain that dispatches them. Its goal is the ticket whose Done proves
+the Outcome. Kept short:
 
 ```markdown
 ## Outcome

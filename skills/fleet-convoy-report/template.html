@@ -185,8 +185,8 @@ document.getElementById('app').append(...[
     h('p', { class: 'note' }, `Moved: each ticket weighs by its stage (${[['todo', '0'], ['progress', '⅓'], ['qa', '⅔'], ['done', '1']]
       .map(([id, w]) => `${label(id)} ${w}`).join(' · ')}), averaged.`,
       D.cancelled ? ` ${D.cancelled} cancelled left out.` : '',
-      cp ? ` Critical path: the plan's ${cp.named.join(' → ')}, and the convoy's tickets they wait on.`
-         : ' The plan names no critical path.')),
+      cp ? ` Critical path: the goal, ${cp.goal}, and every ticket of the convoy it waits on.`
+         : ' The convoy names no goal, so no critical path.')),
   board,
   c.plan ? h('details', {}, h('summary', {}, 'Convoy plan'), h('pre', {}, c.plan)) : null,
   BOARD.map(b => section(b, lane[b.id], b.id !== 'blocked' ? row : [

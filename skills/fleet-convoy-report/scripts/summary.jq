@@ -8,9 +8,6 @@ def stage: {done: "done", in_qa: "qa", in_progress: "progress"}[.status // ""] /
 def weight: {todo: 0, progress: 1, qa: 2, done: 3}[.];
 # How far a set of tickets has moved, in %.
 def grade: if length == 0 then 0 else (map(.stage | weight) | add) * 100 / (3 * length) | round end;
-# A set of keys and every key it waits on, transitively, through $by (key → blocker keys).
-def closure($by): (. + [.[] | $by[.] // [] | .[]] | unique) as $n
-  | if ($n | length) == length then . else $n | closure($by) end;
 
 ($led.manual) as $manual
 | ($ctx.tickets | map(select(.status != "cancelled"))) as $live
@@ -27,16 +24,10 @@ def closure($by): (. + [.[] | $by[.] // [] | .[]] | unique) as $n
         blocked: ((.waiting_on | length) > 0 or .status == "blocked"),
         held: .held,
         manual: (.hand or .live_cog == "hand" or any($manual[]; . == $k)),
-        escalated: .inspect
+        escalated: .inspect,
+        # On the critical path, as fleetd derives it: the convoy's goal and every ticket it waits on.
+        critical: (.critical // false)
       })) as $tickets
-# The critical path: the keys on the plan's `**Critical path**` line, and every ticket of the convoy
-# they wait on, done or not; none when the plan names none.
-| ($tickets | map(.key)) as $keys
-| ($led.blockers | map_values(map(select(IN($keys[]))))) as $by
-| ([($ctx.plan // "") | splits("\n") | select(test("^\\s*[-*]\\s*\\*\\*critical path"; "i"))][0] // ""
-   | [scan("[A-Z][A-Z0-9]*-[0-9]+") | select(IN($keys[]))]) as $named
-| ($named | closure($by)) as $path
-| ($tickets | map(.critical = (.key | IN($path[])))) as $tickets
 | ($tickets | length) as $n
 | {
     project: $project,
@@ -57,8 +48,8 @@ def closure($by): (. + [.[] | $by[.] // [] | .[]] | unique) as $n
       escalated: ($tickets | map(select(.escalated)) | length),
       proposed: ($led.proposals | length)
     },
-    critical: (if $named == [] then null else ($tickets | map(select(.critical))) as $cp | {
-      named: $named,
+    critical: (if $ctx.goal == null then null else ($tickets | map(select(.critical))) as $cp | {
+      goal: $ctx.goal,
       total: ($cp | length),
       grade: ($cp | grade),
       counts: ($cp | reduce .[].stage as $s ({done: 0, qa: 0, progress: 0, todo: 0}; .[$s] += 1))

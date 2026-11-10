@@ -43,10 +43,11 @@ auto-mode classifier, which can block it. Read your convoy's slice; don't re-ass
 fleetc context
 ```
 
-The slice is `{ convoy, tickets: [ { key, status, classification, dispatched,
-live_cog, ship_state, fork_from, hand, inspect } ] }` (`fork_from` is set on a `stacked` ticket: its
+The slice is `{ convoy, goal, tickets: [ { key, status, classification, dispatched,
+live_cog, ship_state, fork_from, hand, inspect, critical } ] }` (`fork_from` is set on a `stacked` ticket: its
 parent's branch; `hand`: the operator works it — `convoy add --hand`, or a `product-owner` label;
-`inspect`: its worker or sailor escalated and no verdict judges it yet). fleetd has already done the deterministic work — the
+`inspect`: its worker or sailor escalated and no verdict judges it yet; `critical`: on the convoy's
+critical path, its `goal` and all it waits on — dispatch it like any other, the frontier is the same). fleetd has already done the deterministic work — the
 DAG, the blockers, the holds — and handed you a verdict per ticket:
 
 - **`classification`** — fleetd's dispatch verdict (`null` once a ticket is past the

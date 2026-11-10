@@ -261,9 +261,13 @@ fn handle_convoy(request: &str, cmds: &Sender<Command>, open: bool) -> String {
         Ok(k) => k,
         Err(e) => return http_response("400 Bad Request", "text/plain", &e.to_string()),
     };
+    let goal = match dto.goal.as_deref().map(TicketKey::parse).transpose() {
+        Ok(g) => g,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &e.to_string()),
+    };
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
     let cmd = if open {
-        Command::OpenConvoy { key, title: dto.title, plan: dto.plan, reply: reply_tx }
+        Command::OpenConvoy { key, title: dto.title, plan: dto.plan, goal, reply: reply_tx }
     } else {
         Command::CloseConvoy { key, reply: reply_tx }
     };

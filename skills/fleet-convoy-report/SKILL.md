@@ -24,18 +24,19 @@ It prints the page's path (default `projects/<p>/exports/<convoy-title>_<UTC dat
 second run that day replaces it), then the summary as JSON. Open the page (`open <path>`).
 
 - `scripts/report.sh` gathers: `fleetc context --convoy` (each ticket's status, open blockers, hold,
-  live cog, MR state, as fleetd derives them), the ledger read-only (`scripts/ledger.sql`: titles,
-  blockers, each ticket's latest MR, the tickets worked by hand, the open proposals naming the convoy) and the
-  tracker's link (`fleetc ticket --where`).
+  live cog, MR state, critical path, as fleetd derives them), the ledger read-only
+  (`scripts/ledger.sql`: titles, each ticket's latest MR, the tickets worked by hand, the open
+  proposals naming the convoy) and the tracker's link (`fleetc ticket --where`).
 - `scripts/summary.jq` stages, flags and grades the tickets.
 - `template.html` renders them; the data rides in it as JSON.
 
 **The grade.** Each ticket weighs by its stage: To-Do 0, In-Progress ⅓, In-QA ⅔, Done 1, averaged
 over the convoy's tickets. Cancelled ones are left out.
 
-**The critical path.** The tickets on the plan's `**Critical path**` line, and every ticket of the
-convoy they wait on, done or not (`/fleet-groom-convoy` names the line). It gets its own grade, and
-its tickets sit in red at the foot of each column. A plan with no such line has none.
+**The critical path.** The convoy's goal (`fleetc convoy open --goal`, the ticket whose Done proves
+its outcome) and every ticket of the convoy it waits on, done or not, as fleetd derives it
+(`critical` in `fleetc context`). It gets its own grade, and its tickets sit in red at the foot of
+each column. A convoy with no goal has none.
 
 **Escalations.** Each escalation of a convoy ticket's cog, as its inspection judged it: refuted (an
 option cleared it, sent back to the cog) or confirmed (it went to the operator), with their shares,
