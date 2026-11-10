@@ -88,7 +88,8 @@ and tmux:
   `relate` / `unrelate` / `edit` / `comment`, `escalations` (a convoy's cases) / `ruling` (record
   the operator's ruling on a case, which sends it to the cog), `sink` / `send` a cog, `decommission` a ticket withdrawn for good (MR closed,
   Cancelled, reaped — yours and the admiral's alone; Done comes through a hand or sailor), `recall`
-  a ticket to the backlog, its work forgotten (MR closed, worktree discarded, anchored).
+  a ticket to the backlog, its work forgotten (MR closed, worktree discarded, anchored; `--weigh`:
+  dispatched again once its blockers clear).
 - **File a quick ticket** with `/fleet-commission`, Ready per `/fleet-ready-done`. One that
   needs real product grooming goes to the admiral.
 

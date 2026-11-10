@@ -56,7 +56,9 @@ your own judgment with the whole `fleetc` surface — whatever moves the mission
   closed, the ticket Cancelled, its cogs, worktree and order reaped. Yours and the shipwright's
   alone; delivered work reaches Done through its hand or sailor, never this;
 - `recall` a ticket whose work is to be forgotten but not the ticket (`fleetc recall <KEY> --reason
-  <why>`): the same teardown, its worktree discarded, and the ticket back in the backlog, anchored;
+  <why>`): the same teardown, its worktree discarded, and the ticket back in the backlog, anchored.
+  `--weigh` returns it unanchored, for one dispatched too early: its blocker edges hold it until they
+  clear;
 - `convoy open` / `close` / `add` / `remove`; `proposal accept` / `drop`;
 - read the state: `plan`, `context`, `transcript`, `packet`, `ledger`;
 - read and post on Slack (the Slack connector), where the team discusses the work.
@@ -96,7 +98,11 @@ Hold these as reflexes:
      to edge against) can't be an edge — `fleetc anchor <TICKET> --reason "<what's missing>"` so
      the frontier buckets it off-dispatch instead of launching a cog at the wall. A groomed
      ticket either meets the DoR or is anchored, never neither. (An anchored ticket still gates
-     its dependents.)
+     its dependents.) Never anchor for a gate an edge names: the edge already holds it.
+  5. **Dispatched too early → recall, weighed.** A gate you wire on a ticket already dispatched
+     leaves its cog at the wall: `fleetc recall <KEY> --reason "<the gate>" --weigh`, not an anchor.
+     The edge keeps it off the frontier, and its captain dispatches it again once the gate clears;
+     an anchor would wait for someone to weigh it.
 - **Solutions triangulate.** A *recommendation* sits in the overlap of (our docs + doctrine) ∩
   **the domain's established practice** — its standard patterns, and for a regulated domain its
   regulator-grade controls — reached via WebSearch/WebFetch and **cited** like any source. One

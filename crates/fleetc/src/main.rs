@@ -46,7 +46,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc escalations [--key <KEY-N>] [--case <N>]   (the cases of KEY's convoy, newest first: escalation → verdict → ruling; a cog reads only its own convoy's, before it escalates)\n  \
      fleetc ruling   --case <N> | --key <KEY-N>  --question <text> --answer <text|->   (the operator's ruling on a confirmed case, recorded then sent to its cog; --key: one with no escalation behind it)\n  \
      fleetc decommission <KEY-N> --reason <why> [--yes]   (withdraw it for good: close its MR, cancel it with the reason, reap its cogs + worktree)\n  \
-     fleetc recall   <KEY-N> --reason <why> [--yes]   (forget its work: close its MR, end its cogs, discard its worktree; back to the backlog, anchored)\n  \
+     fleetc recall   <KEY-N> --reason <why> [--weigh] [--yes]   (forget its work: close its MR, end its cogs, discard its worktree; back to the backlog, anchored, or with --weigh dispatched again once its blockers clear)\n  \
      fleetc packet   [<KEY-N>]        (the cog's work-packet: order + ship + ticket)\n  \
      fleetc context  [--convoy <KEY>] [--format table]   (a captain's convoy slice)\n  \
      fleetc plan                       (fleetd's latest reconcile plan — the parity lens)\n  \
@@ -658,11 +658,12 @@ fn decommission(args: &[String]) -> Result<()> {
     withdraw(args, "decommission")
 }
 
-/// `fleetc recall <KEY-N> --reason <why> [--yes]` — take a ticket off the line and forget its work,
-/// without cancelling it: fleetd closes its open MR (noting why; the branch stays on the forge), ends
-/// its cogs, discards its worktree and order, and returns it to the backlog (To Do, unassigned, out of
-/// the sprint, the reason commented), anchored until it's weighed. The operator's call; it asks first,
-/// showing what will go, unless `--yes`.
+/// `fleetc recall <KEY-N> --reason <why> [--weigh] [--yes]` — take a ticket off the line and forget its
+/// work, without cancelling it: fleetd closes its open MR (noting why; the branch stays on the forge),
+/// ends its cogs, discards its worktree and order, and returns it to the backlog (To Do, unassigned,
+/// out of the sprint, the reason commented), anchored until it's weighed. `--weigh` weighs it at once
+/// (any hold on it too): dispatched too early, it goes again once its blockers clear. The operator's
+/// call; it asks first, showing what will go, unless `--yes`.
 fn recall(args: &[String]) -> Result<()> {
     withdraw(args, "recall")
 }
@@ -672,32 +673,34 @@ fn withdraw(args: &[String], verb: &str) -> Result<()> {
     if in_cog() {
         bail!("a cog doesn't {verb} tickets — the operator does (propose it instead)");
     }
-    let usage = format!("usage: fleetc {verb} <KEY-N> --reason <why> [--yes]");
+    let recall = verb == "recall";
+    let usage = format!("usage: fleetc {verb} <KEY-N> --reason <why> {}[--yes]", if recall { "[--weigh] " } else { "" });
     let ticket = ticket_key(args.first().ok_or_else(|| anyhow!("{usage}"))?, verb)?;
-    let (mut reason, mut yes) = (None, false);
+    let (mut reason, mut weigh, mut yes) = (None, false, false);
     let mut it = args[1..].iter();
     while let Some(flag) = it.next() {
         match flag.as_str() {
             "--reason" => reason = Some(it.next().cloned().ok_or_else(|| anyhow!("--reason needs a value"))?),
+            "--weigh" if recall => weigh = true,
             "--yes" => yes = true,
             other => bail!("unknown flag {other:?} — {usage}"),
         }
     }
     let reason = reason.filter(|r| !r.trim().is_empty()).ok_or_else(|| anyhow!("{verb} needs --reason <why> — it goes on the ticket"))?;
     if !yes {
-        eprint!("{}Proceed? [y/N] ", withdraw_preview(&ticket, verb)?);
+        eprint!("{}Proceed? [y/N] ", withdraw_preview(&ticket, verb, weigh)?);
         let mut answer = String::new();
         std::io::stdin().read_line(&mut answer)?;
         if !matches!(answer.trim(), "y" | "Y" | "yes") {
-            bail!("not {}", if verb == "recall" { "recalled" } else { "decommissioned" });
+            bail!("not {}", if recall { "recalled" } else { "decommissioned" });
         }
     }
-    post_and_print(&format!("/{verb}"), &wire::DecommissionCmd { ticket, reason })
+    post_and_print(&format!("/{verb}"), &wire::DecommissionCmd { ticket, reason, weigh })
 }
 
 /// What a decommission or a recall takes down, read off the ledger: its open MRs, its live cogs, its
-/// worktree, and where the ticket ends up.
-fn withdraw_preview(ticket: &str, verb: &str) -> Result<String> {
+/// worktree, and where the ticket ends up (a recall `weigh`ed: unanchored).
+fn withdraw_preview(ticket: &str, verb: &str, weigh: bool) -> Result<String> {
     use domain::ports::{OrderRepo, SessionRepo, ShipRepo};
     let db = project_dir().ledger();
     let ledger = ledger::Ledger::open_readonly(&db).map_err(|_| anyhow!("no ledger yet ({db})"))?;
@@ -718,7 +721,8 @@ fn withdraw_preview(ticket: &str, verb: &str) -> Result<String> {
         };
     }
     out += &if recall {
-        format!("  move {ticket} to To Do, unassigned, out of the sprint, the reason commented; anchor it until you weigh it\n")
+        let then = if weigh { "weigh it: dispatched again once its blockers clear" } else { "anchor it until you weigh it" };
+        format!("  move {ticket} to To Do, unassigned, out of the sprint, the reason commented; {then}\n")
     } else {
         format!("  comment the reason on {ticket}, then move it to Cancelled\n")
     };

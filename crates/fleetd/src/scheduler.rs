@@ -101,7 +101,7 @@ pub enum Command {
     AddToConvoy { convoy: ConvoyKey, ticket: TicketKey, hand: bool, reply: UrlReply }, // → what it says (and what it left)
     RemoveFromConvoy { convoy: ConvoyKey, ticket: TicketKey, reply: UrlReply },
     Decommission { ticket: TicketKey, reason: String, reply: UrlReply }, // an action: close MR, cancel, reap → what it did
-    Recall { ticket: TicketKey, reason: String, reply: UrlReply }, // an action: close MR, clear, back to the backlog, anchor → what it did
+    Recall { ticket: TicketKey, reason: String, weigh: bool, reply: UrlReply }, // an action: close MR, clear, back to the backlog, anchor (or weigh) → what it did
     SetSetting { key: String, value: String, reply: Reply }, // live-config overwrite (validated here)
     GetSettings { reply: SettingsReply },                    // a read: every live lever + source
 }
@@ -376,8 +376,8 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let res = decommission(ledger, forge, tracker, host, &cfg.project.path, &ticket, &reason);
             let _ = reply.send(res.map_err(|e| format!("{e:#}")));
         }
-        Command::Recall { ticket, reason, reply } => {
-            let res = recall(ledger, forge, tracker, host, &cfg.project.path, &ticket, &reason);
+        Command::Recall { ticket, reason, weigh, reply } => {
+            let res = recall(ledger, forge, tracker, host, &cfg.project.path, &ticket, &reason, weigh);
             let _ = reply.send(res.map_err(|e| format!("{e:#}")));
         }
         Command::DropProposal { id, reply } => {
@@ -507,8 +507,10 @@ fn decommission<H: SessionHost>(
 /// Recall a ticket from the fleet and forget its work, without cancelling it: close its open MR
 /// (noting why; its branch stays on the forge), end its cogs, discard its worktree and branch (unsaved
 /// work and all) and its order, and return it to the backlog: To Do, unassigned, out of the sprint,
-/// the reason commented. It stays anchored, so no captain dispatches it again until it's weighed.
+/// the reason commented. It stays anchored, so no captain dispatches it again until it's weighed;
+/// `weigh` releases it at once (any hold on it too), its blocker edges alone gating its next dispatch.
 /// Refused once its MR has merged: that work landed.
+#[allow(clippy::too_many_arguments)]
 fn recall<H: SessionHost>(
     ledger: &Ledger,
     forge: &dyn Forge,
@@ -517,6 +519,7 @@ fn recall<H: SessionHost>(
     project: &str,
     ticket: &TicketKey,
     reason: &str,
+    weigh: bool,
 ) -> Result<String> {
     ensure_ticket(ledger, tracker, ticket)?;
     let mut ships = Vec::new();
@@ -547,21 +550,27 @@ fn recall<H: SessionHost>(
         did.push(format!("discarded {wt}"));
     }
 
-    // Anchored before the tracker moves, so a captain's pass in between can't dispatch it again.
+    // Anchored before the tracker moves, so a captain's pass in between can't dispatch it again;
+    // weighed only once it's back in To Do, so a failure on the way leaves it anchored.
     TicketRepo::set_held(ledger, ticket, true, Some(&format!("recalled: {reason}")), &now)?;
-    did.push("anchored (weigh to release)".into());
     match tracker.unclaim(ticket) {
         Ok(()) => did.push(format!("{} → To Do, unassigned, out of the sprint", ticket.0)),
         Err(e) => did.push(format!("{}: {e:#}", ticket.0)),
     }
     tracker.comment(ticket, &format!("Recalled from the fleet to the backlog: {reason}"))?;
     TicketRepo::sync(ledger, &tracker.get(ticket)?, &now)?; // the board shows it back in To Do now
+    if weigh {
+        TicketRepo::set_held(ledger, ticket, false, None, &now)?;
+        did.push("weighed: dispatched again once its blockers clear".into());
+    } else {
+        did.push("anchored (weigh to release)".into());
+    }
     ledger.append(
         &now,
         EventKind::TicketRecalled,
         EntityKind::Ticket,
         &ticket.0,
-        &serde_json::json!({ "reason": reason, "closed": ships.iter().map(|(s, _)| s.iid).collect::<Vec<_>>() }),
+        &serde_json::json!({ "reason": reason, "weighed": weigh, "closed": ships.iter().map(|(s, _)| s.iid).collect::<Vec<_>>() }),
     )?;
     Ok(did.join(" · "))
 }
@@ -2761,11 +2770,11 @@ mod tests {
         let host = FakeHost::new();
 
         let merged = FakeForge { state: Some(ShipState::Merged), ..Default::default() };
-        assert!(recall(&db, &merged, &tracker, &host, "/p", &key, "wrong approach").is_err(), "a merged MR is refused");
+        assert!(recall(&db, &merged, &tracker, &host, "/p", &key, "wrong approach", false).is_err(), "a merged MR is refused");
         assert!(SessionRepo::get(&db, &id).unwrap().unwrap().ended_at.is_none(), "untouched");
 
         let forge = FakeForge { state: Some(ShipState::Open), ..Default::default() };
-        let said = recall(&db, &forge, &tracker, &host, "/p", &key, "wrong approach").unwrap();
+        let said = recall(&db, &forge, &tracker, &host, "/p", &key, "wrong approach", false).unwrap();
         assert_eq!((forge.disarmed.borrow().clone(), forge.closed.borrow().clone()), (vec![7], vec![7]), "disarmed, then closed");
         assert_eq!(*forge.noted.borrow(), vec![(7, "Recalled to the backlog: wrong approach".to_string())]);
         let t = TicketRepo::get(&db, &key).unwrap().unwrap();
@@ -2775,6 +2784,22 @@ mod tests {
         assert!(db.armada().unwrap().is_empty(), "the ship ended");
         assert!(said.contains("closed !7") && said.contains("To Do") && said.contains("anchored"), "said: {said}");
         assert!(db.since(Seq(0)).unwrap().iter().any(|e| e.kind == EventKind::TicketRecalled));
+    }
+
+    #[test]
+    fn recall_with_weigh_returns_the_ticket_unanchored_even_one_held_before() {
+        let (db, id) = db_with_live_worker();
+        let key = TicketKey("PROJ-1".into());
+        TicketRepo::set_held(&db, &key, true, Some("waits on PROJ-2"), "t").unwrap();
+        let tracker = FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]);
+
+        let said = recall(&db, &FakeForge::default(), &tracker, &FakeHost::new(), "/p", &key, "dispatched too early", true).unwrap();
+        let t = TicketRepo::get(&db, &key).unwrap().unwrap();
+        assert_eq!((t.status, t.held), (Some(TicketStatus::Todo), false), "back to To Do, weighed");
+        assert!(SessionRepo::get(&db, &id).unwrap().unwrap().ended_at.is_some(), "its cog ended");
+        assert!(said.contains("weighed") && !said.contains("anchored"), "said: {said}");
+        let ev = db.since(Seq(0)).unwrap();
+        assert!(ev.iter().any(|e| e.kind == EventKind::TicketRecalled && e.payload["weighed"] == true));
     }
 
     #[test]

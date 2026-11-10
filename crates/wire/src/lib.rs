@@ -220,6 +220,9 @@ pub struct ProposalCmd {
 pub struct DecommissionCmd {
     pub ticket: String,
     pub reason: String,
+    /// A recall's only: return the ticket weighed, not anchored, so its blocker edges alone gate it.
+    #[serde(default)]
+    pub weigh: bool,
 }
 
 

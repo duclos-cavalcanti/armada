@@ -597,11 +597,14 @@ fn handle_decommission(request: &str, cmds: &Sender<Command>, recall: bool) -> S
             let verb = if recall { "recall" } else { "decommission" };
             return Err(http_response("400 Bad Request", "text/plain", &format!("a {verb} needs a reason")));
         }
-        Ok((parse_ticket(&dto.ticket)?, dto.reason))
+        if dto.weigh && !recall {
+            return Err(http_response("400 Bad Request", "text/plain", "a decommission cancels the ticket: only a recall weighs it"));
+        }
+        Ok((parse_ticket(&dto.ticket)?, dto.reason, dto.weigh))
     });
     match parsed {
-        Ok((ticket, reason)) if recall => relay(cmds, |reply| Command::Recall { ticket, reason, reply }),
-        Ok((ticket, reason)) => relay(cmds, |reply| Command::Decommission { ticket, reason, reply }),
+        Ok((ticket, reason, weigh)) if recall => relay(cmds, |reply| Command::Recall { ticket, reason, weigh, reply }),
+        Ok((ticket, reason, _)) => relay(cmds, |reply| Command::Decommission { ticket, reason, reply }),
         Err(r) => r,
     }
 }

@@ -37,8 +37,9 @@ And the deadlines from the tracker: the sprint's end, and each ticket's due date
   needs real grooming first.
 - **Anchored tickets.** Re-judge each hold against its reason: the ruling it waited on is made, the
   blocker landed, the ticket has gone Done or Cancelled elsewhere. Then weigh it, leave it,
-  `recall` it to the backlog, or `decommission` it. A hold a convoy anchor placed ("convoy <C>
-  anchored") goes with the convoy, never alone.
+  `recall` it to the backlog, or `decommission` it. A hold that only waits on a blocker its edge
+  names is redundant: weigh it, or, dispatched with its cog at the wall, `recall --weigh` it. A hold
+  a convoy anchor placed ("convoy <C> anchored") goes with the convoy, never alone.
 - **Placement.** A ticket whose work another convoy's plan owns moves there (`convoy remove` /
   `add`); a ticket in no convoy that one needs joins it; a convoy with nothing left open closes.
 - **Pace.** For each convoy, its critical path (the `*` tickets in `fleetc context --convoy <C>
