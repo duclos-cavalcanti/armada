@@ -5,7 +5,9 @@
 //!   hooks (`./install.sh --hooks`), and no `core.hooksPath` sends git elsewhere;
 //! - the lookouts' command guard (`hooks/claude-hook-lookout-guard`) is there to attach;
 //! - the checkout's own git settings carry no `core.worktree` and no `user.name` / `user.email`:
-//!   what a test that borrowed the checkout's `.git` leaves behind, and git runs no hook for.
+//!   what a test that borrowed the checkout's `.git` leaves behind, and git runs no hook for;
+//! - the checkout follows origin: on its default branch, with no uncommitted change, fast-forwarded
+//!   to origin's. The check advances it: captains and admirals run there, on its `.claude/` and docs.
 
 use anyhow::{bail, Result};
 use std::os::unix::fs::PermissionsExt;
@@ -50,7 +52,39 @@ pub fn problems(checkout: &str) -> Vec<String> {
     if !executable(&kit_hooks().join(LOOKOUT_GUARD)) {
         out.push(format!("the lookouts' command guard is missing: {}", kit_hooks().join(LOOKOUT_GUARD).display()));
     }
+    if out.is_empty() {
+        out.extend(follow_origin(checkout)); // only a guarded checkout with clean settings is moved
+    }
     out
+}
+
+/// Fast-forward the checkout to origin's default branch, or say what keeps it from following: another
+/// branch, an uncommitted change, a failed fetch, or a divergence. Never forces anything.
+fn follow_origin(checkout: &str) -> Option<String> {
+    let git = |args: &[&str]| -> std::result::Result<String, String> {
+        let out = Command::new("git").arg("-C").arg(checkout).args(args).output().map_err(|e| e.to_string())?;
+        let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
+        if out.status.success() { Ok(text(&out.stdout)) } else { Err(text(&out.stderr)) }
+    };
+    let Ok(default) = git(&["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) else {
+        return Some("origin/HEAD doesn't resolve in the checkout: git remote set-head origin --auto".into());
+    };
+    let branch = default.strip_prefix("origin/").unwrap_or(&default).to_string();
+    match git(&["symbolic-ref", "--short", "HEAD"]) {
+        Ok(b) if b == branch => {}
+        Ok(b) => return Some(format!("the checkout is on {b}, not {branch}, so it can't follow {default}: git switch {branch}")),
+        Err(_) => return Some(format!("the checkout's HEAD is detached, so it can't follow {default}: git switch {branch}")),
+    }
+    if git(&["status", "--porcelain", "--untracked-files=no"]).is_ok_and(|s| !s.is_empty()) {
+        return Some(format!("the checkout has uncommitted changes, so it can't follow {default}: commit or discard them"));
+    }
+    let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
+    if let Err(e) = git(&["fetch", "--quiet", "--no-tags", "origin", &refspec]) {
+        return Some(format!("can't fetch {default}: {e}"));
+    }
+    git(&["merge", "--ff-only", "--quiet", &default])
+        .err()
+        .map(|e| format!("the checkout's {branch} can't fast-forward to {default}, so it has diverged: {e}"))
 }
 
 /// The boot check, for preflight's checklist: a miss refuses to come online.
@@ -59,7 +93,7 @@ pub fn preflight(checkout: &str) -> Result<String> {
     if !problems.is_empty() {
         bail!("{}", problems.join("; "));
     }
-    Ok("ref guard linked · lookout guard present · git settings clean".into())
+    Ok("ref guard linked · lookout guard present · git settings clean · checkout follows origin".into())
 }
 
 /// The `--settings` a lookout launches with: the command guard on its every Bash call.
@@ -101,6 +135,27 @@ mod tests {
         std::os::unix::fs::symlink(kit_hooks().join(REF_GUARD), Path::new(&checkout).join(".git/hooks/reference-transaction")).unwrap();
         assert_eq!(problems(&checkout), Vec::<String>::new(), "guarded and clean");
         assert!(preflight(&checkout).is_ok());
+
+        // Behind origin: the check fast-forwards it.
+        let head = |r: &str| String::from_utf8_lossy(&Command::new("git").arg("-C").arg(&checkout).args(["rev-parse", r]).output().unwrap().stdout).trim().to_string();
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "next"]);
+        git(&["push", "-q", "origin", "HEAD:refs/heads/master"]);
+        let next = head("HEAD");
+        git(&["reset", "-q", "--hard", "HEAD~1"]);
+        assert_eq!(problems(&checkout), Vec::<String>::new(), "behind is healthy: it follows");
+        assert_eq!(head("HEAD"), next, "fast-forwarded to origin/master");
+
+        // An uncommitted change, or another branch: it can't follow, and says so.
+        std::fs::write(Path::new(&checkout).join("x"), "x").unwrap();
+        git(&["add", "x"]);
+        let p = problems(&checkout);
+        assert!(p.len() == 1 && p[0].contains("uncommitted changes"), "{p:?}");
+        git(&["rm", "-q", "--cached", "x"]);
+        git(&["switch", "-q", "-c", "other"]);
+        let p = problems(&checkout);
+        assert!(p.len() == 1 && p[0].contains("on other, not master"), "{p:?}");
+        git(&["switch", "-q", "master"]);
+        assert_eq!(problems(&checkout), Vec::<String>::new(), "back on master");
 
         git(&["config", "user.name", "test"]);
         git(&["config", "core.worktree", "/nowhere/at/all"]);

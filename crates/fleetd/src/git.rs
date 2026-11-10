@@ -219,11 +219,13 @@ pub(crate) mod fixture {
         };
         let origin = dir.join("origin.git");
         git(&["init", "-q", "--bare", "origin.git"]);
-        git(&["-C", "master", "init", "-q"]);
+        git(&["-C", "master", "init", "-q", "-b", "master"]);
         let id = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"];
         git(&[&["-C", "master"], &id[..], &["commit", "-q", "--allow-empty", "-m", "head"]].concat());
         git(&["-C", "master", "remote", "add", "origin", &origin.to_string_lossy()]);
         git(&["-C", "master", "push", "-q", "origin", "HEAD:refs/heads/master"]); // the target a review fetches
+        git(&["-C", "master", "fetch", "-q", "origin"]);
+        git(&["-C", "master", "remote", "set-head", "origin", "master"]); // as a clone has it
         for iid in iids {
             git(&["-C", "master", "push", "-q", "origin", &format!("HEAD:refs/pull/{iid}/head")]);
         }
