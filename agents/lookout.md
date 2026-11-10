@@ -61,9 +61,10 @@ refusal; escalate if you truly need more.
 - **An ally's**: an MR we don't own. You review it and comment; its author answers.
 
 1. **Check it against the refused list**, when `FLEET_REFUSED` is set: read that file. It lists
-   what the operator refuses outright, each entry with why. Judge by intent, not by name: the same
-   capability under another route or name still counts. Each entry the MR builds is a must-fix,
-   quoting the entry:
+   what the operator refuses outright, one `[[refused]]` each: its `id`, `what` is refused, `why`,
+   and the `ruling` it rests on. Judge by intent, not by name: the same capability under another
+   route or name still counts. Each entry the MR builds is a must-fix, headed `refused: <id>`,
+   with its why and its ruling:
    - **ours**: one thread each (`fleetc review-post --thread --body -`);
    - **an ally's**: one comment, under `## Refused by design` (`fleetc review-post --body -`).
 2. **Review it** with the project's review skill: `/$FLEET_REVIEW_SKILL <iid>` when

@@ -9,7 +9,8 @@
 //!   default branch, fast-forwarded. The check advances it: captains and admirals run there.
 //! - **Project Skills**: the skills fleet.toml names exist.
 //! - **Project Worktrees**: no stale worktree entry blocks cutting one again.
-//! - **Project Memory**: the refused list, when there is one.
+//! - **Project Memory**: the refused list, when there is one, parses with each entry whole: a broken
+//!   one would silently weaken every review, so it fails.
 
 use crate::config::Config;
 use anyhow::{bail, Result};
@@ -207,11 +208,14 @@ fn worktrees(checkout: &str) -> HealthCheck {
 }
 
 fn refused(path: &Path) -> HealthCheck {
-    let about = "the refused list is in place";
-    if path.is_file() {
-        check("Project Memory", "refused-list", about, HealthStatus::Ok, None)
-    } else {
-        check("Project Memory", "refused-list", about, HealthStatus::Unset, Some(format!("none at {}: nothing is refused", path.display())))
+    let about = "the refused list parses, each entry whole";
+    if !path.is_file() {
+        return check("Project Memory", "refused-list", about, HealthStatus::Unset, Some(format!("none at {}: nothing is refused", path.display())));
+    }
+    match crate::config::refused_list(path) {
+        Ok(_) => check("Project Memory", "refused-list", about, HealthStatus::Ok, None),
+        // A broken list would silently weaken every review: it holds the lookouts until it's fixed.
+        Err(e) => check("Project Memory", "refused-list", about, HealthStatus::Fail, Some(format!("{e:#}"))),
     }
 }
 
@@ -256,7 +260,7 @@ pub(crate) mod tests {
     pub(crate) fn cfg(dir: &Path, checkout: &str) -> Config {
         let mut c = Config::default();
         c.project.path = checkout.to_string();
-        c.refused = dir.join("refused.md");
+        c.refused = dir.join("refused.toml");
         c
     }
 
@@ -329,10 +333,38 @@ pub(crate) mod tests {
 
         std::fs::create_dir_all(Path::new(&checkout).join(".claude/skills/no-such-review")).unwrap();
         std::fs::write(Path::new(&checkout).join(".claude/skills/no-such-review/SKILL.md"), "x").unwrap();
-        std::fs::write(&cfg.refused, "- x").unwrap();
+        std::fs::write(&cfg.refused, REFUSED).unwrap();
         let c = checks(&cfg);
         assert_eq!(status(&c, "review-skill").0, HealthStatus::Ok);
         assert_eq!(status(&c, "refused-list").0, HealthStatus::Ok);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const REFUSED: &str = "[[refused]]\nid = \"batch-create\"\nwhat = \"a batch create\"\nwhy = \"one at a time\"\nruling = \"operator, 2026-11-09\"\n";
+
+    #[test]
+    fn a_refused_list_that_isnt_whole_fails_and_holds_the_lookouts() {
+        let dir = std::env::temp_dir().join(format!("health-refused-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = cfg(&dir, &dir.join("checkout").to_string_lossy());
+        let refused = |body: &str| {
+            std::fs::write(&cfg.refused, body).unwrap();
+            let c = vec![super::refused(&cfg.refused)];
+            (status(&c, "refused-list").0, problems(&c).len())
+        };
+        assert_eq!(refused(REFUSED), (HealthStatus::Ok, 0));
+        assert_eq!(refused(""), (HealthStatus::Ok, 0), "an empty list refuses nothing");
+        for (broken, why) in [
+            ("[[refused]\n", "not TOML"),
+            (&format!("{REFUSED}{REFUSED}") as &str, "an id twice"),
+            (&REFUSED.replace("one at a time", " "), "an empty why"),
+            (&REFUSED.replace("ruling = \"operator, 2026-11-09\"\n", ""), "no ruling"),
+            (&REFUSED.replace("batch-create", "Batch create"), "an id that isn't a slug"),
+            (&format!("{REFUSED}owner = \"x\"\n"), "an unknown field"),
+        ] {
+            assert_eq!(refused(broken), (HealthStatus::Fail, 1), "{why}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

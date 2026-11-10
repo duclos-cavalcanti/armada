@@ -43,8 +43,10 @@ as you go.
    `.claude/skills/` (e.g. `mr-review`)? If so, `review_skill = "<name>"`: every lookout runs it
    on every MR, ours and allies'. If not, leave it out: the kit's `/fleet-review` runs. Anything
    every review must refuse outright, as the design forbids it? List it in
-   `projects/$NAME/refused.md`, one bullet each with why: every lookout checks each MR against it,
-   and you can add to it any time.
+   `projects/$NAME/refused.toml`, one `[[refused]]` each (`id`, a slug; `what`; `why`; `ruling`,
+   who made it and when): every lookout checks each MR against it, and you can add to it any time.
+   The health check holds the lookouts while it doesn't parse, so a broken list never weakens a
+   review.
 7. **Grooming** — does it have its own grooming skill there too (e.g. `groom-ticket`)? If so,
    `groom_skill = "<name>"`: an admiral runs it on each ticket it grooms. And a
    read-only readiness check (e.g. `assess-ticket`)? If so, `assess_skill = "<name>"`: captains run

@@ -2982,7 +2982,7 @@ mod tests {
         let host = FakeHost::new();
 
         *forge.snapshot.borrow_mut() = Some(forge_ship(7, &sha));
-        let refused = dir.join("refused.md");
+        let refused = dir.join("refused.toml");
         std::fs::write(&refused, "- `POST /v1/batch`: one at a time\n").unwrap();
         launch_lookout(&db, &forge, &host, &project, 7, Some("mr-review"), Some(&refused)).unwrap();
         let (name, cwd, cmd) = host.spawned.borrow()[0].clone();

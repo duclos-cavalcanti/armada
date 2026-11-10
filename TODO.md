@@ -39,11 +39,6 @@
   diff since it and whether the open threads are fixed, and raises nothing new on code a prior
   review passed (a correctness or security defect excepted). Measure cost per review for a day,
   then try the cheaper re-review: Sonnet and/or `effort: medium` on re-reviews, Opus on the first.
-- [ ] **A structured refused list.** `projects/<p>/refused.md` is prose. Make it
-  `refused.toml`, one `[[refused]]` per entry (`id`, `what`, `why`, `ruling`), a serde type. The
-  health check parses it when it exists: a parse error, a duplicate id or an empty field fails it,
-  which holds the lookouts, so a broken list never silently weakens a review. The lookout cites a
-  match by its id. A `fleetc refused` verb waits for a second reader (workers, triage).
 - [ ] **Record a ship's lifecycle as events.** `ShipOpened`, `ShipSynced`, `ShipMerged` and
   `ShipClosed` are event kinds nothing writes, so a merge leaves no history: counting merges per
   day reads `ships.ended_at` against the snapshot's `merged`. Append `ShipOpened` when a ship is
