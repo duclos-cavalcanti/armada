@@ -32,6 +32,7 @@ h2 { font-size: 15px; margin: 32px 0 8px; font-weight: 600; }
 .hero { margin-top: 20px; }
 .hero-num { font-size: 56px; font-weight: 600; line-height: 1; }
 .hero-num small { font-size: 16px; font-weight: 400; color: var(--ink-2); margin-left: 8px; }
+.esc { margin-top: 10px; cursor: default; }
 .bar { display: flex; gap: 2px; height: 24px; margin: 18px 0 10px; }
 .bar > div { min-width: 2px; display: flex; align-items: center; justify-content: center;
              font-size: 12px; font-weight: 600; cursor: default; }
@@ -123,6 +124,15 @@ const byKey = (a, b) => (a.key ?? '').localeCompare(b.key ?? '', undefined, { nu
 const lane = Object.fromEntries(BOARD.map(b => [b.id, D.tickets.filter(t => column(t) === b.id).sort(byKey)]));
 document.title = `#${c.no ?? '?'} ${c.title ?? c.key} · convoy report`;
 
+// How its escalations were judged: refuted, sent back to the cog; confirmed, to the operator.
+const escalationsLine = e => {
+  const n = e.refuted + e.confirmed;
+  if (!n) return h('p', { class: 'sub esc' }, 'No escalation inspected yet.');
+  const pct = v => `${Math.round(100 * v / n)}%`;
+  return h('p', { class: 'sub esc', 'data-tip': 'Refuted: an option cleared it, sent back to the cog. Confirmed: no option did, so it came to you.' },
+    `${n} escalations inspected · ${e.refuted} refuted (${pct(e.refuted)}) · ${e.confirmed} confirmed (${pct(e.confirmed)}) · ${e.ruled} ruled`);
+};
+
 // The convoy by stage; each stage's critical-path count in brackets.
 const onPathAt = id => cp ? cp.counts[id] : 0;
 const counted = id => `${k[id]}${onPathAt(id) ? ` (${onPathAt(id)})` : ''}`;
@@ -171,6 +181,7 @@ document.getElementById('app').append(...[
     h('div', { class: 'legend' }, STAGES.map(s => h('span', {}, h('i', { style: `background:var(--${s.id})` }),
       `${s.label} ${counted(s.id)}`)),
       cp ? h('span', {}, h('i', { style: 'background:var(--critical)' }), `Critical path ${cp.total}, in brackets`) : null),
+    escalationsLine(D.escalations),
     h('p', { class: 'note' }, `Moved: each ticket weighs by its stage (${[['todo', '0'], ['progress', '⅓'], ['qa', '⅔'], ['done', '1']]
       .map(([id, w]) => `${label(id)} ${w}`).join(' · ')}), averaged.`,
       D.cancelled ? ` ${D.cancelled} cancelled left out.` : '',

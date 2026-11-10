@@ -37,6 +37,10 @@ over the convoy's tickets. Cancelled ones are left out.
 convoy they wait on, done or not (`/fleet-groom-convoy` names the line). It gets its own grade, and
 its tickets sit in red at the foot of each column. A plan with no such line has none.
 
+**Escalations.** Each escalation of a convoy ticket's cog, as its inspection judged it: refuted (an
+option cleared it, sent back to the cog) or confirmed (it went to the operator), with their shares,
+and the rulings made on the convoy's cases.
+
 **The board.** Each ticket sits in one column: To-Do, In-Progress, In-QA, Blocked, Done; they add up
 to Tickets. **Blocked** is an open ticket that waits on an open blocker or is Blocked on the tracker;
 it leaves its stage's column (the grade still counts its stage). **Proposed** is the open proposals
@@ -46,6 +50,6 @@ marked for a hand, dispatched to one, or worked by one.
 ## Hand off
 
 The path, then one line: `#N KEY: G% moved (C% critical path, d/c Done) · D/T Done · Q In-QA · P
-In-Progress · B Blocked · H by hand · R proposed`. Add one more line naming what holds the convoy back most: the blocker the most tickets wait
+In-Progress · B Blocked · H by hand · R proposed · E escalations, F% refuted`. Add one more line naming what holds the convoy back most: the blocker the most tickets wait
 on, or the hold that keeps the most tickets off the frontier. That line is your judgement; the page
 is measured.

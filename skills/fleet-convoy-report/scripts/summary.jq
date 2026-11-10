@@ -63,6 +63,7 @@ def closure($by): (. + [.[] | $by[.] // [] | .[]] | unique) as $n
       grade: ($cp | grade),
       counts: ($cp | reduce .[].stage as $s ({done: 0, qa: 0, progress: 0, todo: 0}; .[$s] += 1))
     } end),
+    escalations: $led.escalations,
     tickets: $tickets,
     proposals: $led.proposals
   }

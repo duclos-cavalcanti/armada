@@ -1,6 +1,6 @@
 -- The ledger facts `fleetc context` leaves out, as one JSON object: the convoy's header, every
 -- ticket's title and blockers (done ones too), each ticket's latest MR, the tickets worked by hand,
--- and the open proposals naming the convoy. `:convoy` is its key.
+-- the open proposals naming the convoy, and how its escalations were judged. `:convoy` is its key.
 SELECT json_object(
   'convoy', (SELECT json_object('key', key, 'no', no, 'title', title, 'opened', created_at, 'closed', ended_at)
              FROM convoys WHERE key = :convoy),
@@ -18,6 +18,14 @@ SELECT json_object(
                SELECT ticket FROM hand_tickets
                UNION SELECT ticket FROM orders WHERE auto_impl = 0
                UNION SELECT ticket FROM sessions WHERE kind = 'hand' AND ticket IS NOT NULL)),
+  -- Each escalation of a convoy ticket's cog, as its inspection judged it: refuted (an option cleared
+  -- it, sent back to the cog) or confirmed (the operator rules); and the rulings made on its cases.
+  'escalations', (SELECT json_object('refuted', coalesce(sum(i.verdict = 'refute'), 0),
+                                     'confirmed', coalesce(sum(i.verdict = 'confirm'), 0),
+                                     'ruled', (SELECT count(*) FROM cases WHERE convoy = :convoy AND ruling IS NOT NULL))
+                  FROM inspections i JOIN sessions s ON s.id = i.session_id JOIN tickets t ON t.key = s.ticket
+                  LEFT JOIN convoy_members m ON m.ticket = t.key
+                  WHERE coalesce(m.convoy, t.convoy) = :convoy),
   -- Outside the convoy until accepted: never in its count or grade.
   'proposals', (SELECT json_group_array(json_object('id', id, 'key', key, 'title', title, 'from', from_ticket))
                 FROM (SELECT p.id, p.existing AS key, coalesce(t.title, p.title) AS title, p.from_ticket
