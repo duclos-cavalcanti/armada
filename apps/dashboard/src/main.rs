@@ -149,10 +149,9 @@ pub struct App {
     cursors: [usize; Pane::COUNT],
     /// The slots showing their alternate pane (indexed by the slot's `Pane`).
     swapped: [bool; Pane::COUNT],
-    /// Transient footer notice (e.g. yank feedback); shown for ~3s.
-    pub flash: Option<(String, Instant)>,
-    /// The last action's reply (a failure in red); the footer shows it until the next one.
-    pub reply: Option<action::Reply>,
+    /// What the dashboard last said back (an action's reply, a yank's) and when: `ui` boxes it low
+    /// over the body for a few seconds. Set only by `notify`.
+    pub notice: Option<(action::Reply, Instant)>,
     /// Where the action handler's replies arrive from its background thread.
     replies: (std::sync::mpsc::Sender<action::Reply>, std::sync::mpsc::Receiver<action::Reply>),
     /// The key help popup; `?` toggles it.
@@ -174,8 +173,7 @@ impl App {
             focus: TabId::all().map(|t| t.panes()[0]),
             cursors: [0; Pane::COUNT],
             swapped: [false; Pane::COUNT],
-            flash: None,
-            reply: None,
+            notice: None,
             replies: std::sync::mpsc::channel(),
             help: false,
             yank_requested: None,
@@ -299,6 +297,11 @@ impl App {
             Pane::Health | Pane::Log => None, // no row actions; `y` yanks
         }?;
         Some((pane.coordinate().to_string(), fields))
+    }
+
+    /// Say something back to the operator: every reply the dashboard shows comes through here.
+    fn notify(&mut self, said: action::Reply) {
+        self.notice = Some((said, Instant::now()));
     }
 
     fn move_active_cursor(&mut self, delta: isize) {
@@ -493,10 +496,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, project: wire
             }
         })?;
         if let Some((n, text)) = yanked {
-            app.flash = Some(match pbcopy(&text) {
-                Ok(()) => (format!("⎘ yanked {} lines", n), Instant::now()),
-                Err(e) => (format!("yank failed: {}", e), Instant::now()),
-            });
+            app.notify(pbcopy(&text).map(|()| format!("⎘ yanked {n} lines")).map_err(|e| format!("yank failed: {e}")));
         }
 
         if event::poll(Duration::from_millis(250))? {
@@ -506,7 +506,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, project: wire
         }
 
         if let Ok(r) = app.replies.1.try_recv() {
-            app.reply = Some(r);
+            app.notify(r);
         }
         app.refresh(false);
 

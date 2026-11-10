@@ -1,4 +1,4 @@
-//! The render layer — tab strip, per-tab panes, footer. Pure read over `App`
+//! The render layer — tab strip, per-tab panes, footer, and the notice and help over them. Pure read over `App`
 //! (and its `Fleet` view model); every pane is a header + a list of rows with the
 //! focused row highlighted. A plain `Paragraph` per pane, scrolled just enough to keep the
 //! cursor row in view (the Log pane is the long one).
@@ -13,7 +13,10 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs};
 use ratatui::Frame;
 use std::collections::HashMap;
 
-/// Top-level renderer: tab strip, the active tab's body, footer.
+/// How long a notice stays up.
+const NOTICE_SECS: u64 = 5;
+
+/// Top-level renderer: tab strip, the active tab's body, footer, then the notice and help over them.
 pub fn render(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -23,6 +26,7 @@ pub fn render(f: &mut Frame, app: &App) {
     render_tab_strip(f, chunks[0], app);
     render_body(f, chunks[1], app);
     render_footer(f, chunks[2], app);
+    render_notice(f, chunks[1], app);
     if app.help {
         render_help(f);
     }
@@ -67,6 +71,23 @@ fn render_help(f: &mut Frame) {
     let popup = Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
     f.render_widget(Clear, popup);
     f.render_widget(Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" keys · ? or Esc closes ")), popup);
+}
+
+/// The dashboard's last reply (`App::notify`), boxed at the body's bottom right for a few seconds:
+/// cyan, or red with a `✗` on a failure. Clipped to the body's width.
+fn render_notice(f: &mut Frame, area: Rect, app: &App) {
+    let Some((said, _)) = app.notice.as_ref().filter(|(_, at)| at.elapsed().as_secs() < NOTICE_SECS) else {
+        return;
+    };
+    let (text, style) = match said {
+        Ok(s) => (Line::from(format!(" {s} ")), Style::default().fg(Color::Cyan)),
+        Err(s) => (Line::from(format!(" ✗ {s} ")), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+    };
+    // One cell in from the corner, inside the last pane's border.
+    let (w, h) = ((text.width() as u16 + 2).min(area.width.saturating_sub(2)), 3.min(area.height.saturating_sub(2)));
+    let rect = Rect::new(area.right().saturating_sub(w + 1), area.bottom().saturating_sub(h + 1), w, h);
+    f.render_widget(Clear, rect);
+    f.render_widget(Paragraph::new(text).style(style).block(Block::default().borders(Borders::ALL).border_style(style)), rect);
 }
 
 fn render_tab_strip(f: &mut Frame, area: Rect, app: &App) {
@@ -244,28 +265,17 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let dim = Style::default().fg(Color::DarkGray);
     let zoom = if app.zoomed { "[ZOOMED]  " } else { "" };
-    let flash = app
-        .flash
-        .as_ref()
-        .filter(|(_, at)| at.elapsed().as_secs() < 3)
-        .map(|(msg, _)| format!("{}  ", msg))
-        .unwrap_or_default();
     let status = match &app.fleet.load_error {
         Some(e) => format!("ledger unreachable: {}", short(e, 48)),
         None => tick_summary(&app.fleet.tick),
     };
     let status = if app.fleet.fleetd_up { status } else { format!("fleetd down (see Log) · {status}") };
-    let reply = match &app.reply {
-        Some(Ok(said)) => Span::styled(format!(" › {said} "), Style::default().fg(Color::Cyan)),
-        Some(Err(failed)) => Span::styled(format!(" ✗ {failed} "), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        None => Span::raw(""),
-    };
-    let body = format!(" {flash}{zoom}{status}  ·  ? keys");
+    let body = format!(" {zoom}{status}  ·  ? keys");
     let sick = match health(&app.fleet.health) {
         Some(Err(why)) => Span::styled(format!(" health: {why} · lookouts held "), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
         _ => Span::raw(""),
     };
-    let line = Line::from(vec![sick, Span::styled(body, dim), reply]);
+    let line = Line::from(vec![sick, Span::styled(body, dim)]);
     f.render_widget(Paragraph::new(line), area);
 }
 

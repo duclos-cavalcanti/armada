@@ -73,7 +73,8 @@ check passes. The tab strip's title is fleetd's mode as its last reconcile pass 
 The pane titles name no keys: `?` lists the keys that work everywhere, then each pane's.
 
 The keys are fixed, never "smart": `enter` on a row whose session is down (or has none) opens
-nothing else — it fails. A failed action shows in red in the footer for a few seconds.
+nothing else — it fails. An action's reply, and a yank's, shows boxed at the bottom right for a few
+seconds, red on a failure.
 
 ## Layout
 
@@ -85,7 +86,7 @@ apps/dashboard/
     ├── main.rs      # entry, event loop, key handling, tab + pane focus
     ├── action.rs    # non-navigation keys → handler.sh (the action handler)
     ├── source.rs    # Fleet::load() — reads the ledger read-only (+ fleetd's log) into the view model
-    └── ui/mod.rs    # tab strip + per-tab panes + footer (pure render over App)
+    └── ui/mod.rs    # tab strip + per-tab panes + footer + the notice and help over them (pure render over App)
 ```
 
 ## Build & run

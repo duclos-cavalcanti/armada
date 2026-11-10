@@ -8,8 +8,9 @@
 #
 # This script owns the ENTIRE (coordinate, key) → action mapping. Adding or
 # changing an action is a one-arm edit here; the dashboard binary never changes.
-# An unhandled (coordinate, key) pair is a silent no-op. The footer shows an action's reply: the
-# last line it prints on stdout, or, on a failure (non-zero exit), its last line on stderr, in red.
+# An unhandled (coordinate, key) pair is a silent no-op. The dashboard shows an action's reply in a
+# box at its bottom right: the last line it prints on stdout, or, on a failure (non-zero exit), its
+# last line on stderr, in red.
 #
 # The keys are fixed, never "smart": enter switches to the row's tmux session (or fails),
 # m opens the MR, t opens the ticket, e switches to the ticket's admiral, a convenes one to investigate.

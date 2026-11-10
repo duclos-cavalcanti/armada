@@ -10,7 +10,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 /// action, edit the script; the binary never changes.
 const HANDLER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/handler.sh");
 
-/// What an action said back: `Ok` its reply, `Err` its failure. The footer shows the last one.
+/// What an action said back: `Ok` its reply, `Err` its failure. `App::notify` shows it.
 pub type Reply = Result<String, String>;
 
 /// Convert a (KeyCode, KeyModifiers) tuple to the canonical lowercase key name
@@ -85,7 +85,7 @@ pub fn is_reserved(code: KeyCode, mods: KeyModifiers) -> bool {
 ///   handler.sh <coordinate> <key> <field>...
 /// — a direct exec (no `sh -c`), so row fields are distinct argv entries and need
 /// no shell quoting. Its output never reaches the terminal (it'd corrupt the TUI's
-/// alternate screen): its reply goes to `replies` for the footer, the last line of its stdout on
+/// alternate screen): its reply goes to `replies` for `App::notify`, the last line of its stdout on
 /// success (if it said anything), of its stderr on a failure. An unhandled (coordinate, key) is
 /// the handler's silent no-op.
 pub fn spawn(
