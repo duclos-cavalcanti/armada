@@ -88,6 +88,25 @@ id_newtype!(/// Monotonic event cursor (`GET /events?since=`).
 #[serde(rename_all = "snake_case")]
 pub enum CrewKind { Worker, Sailor, Hand, Captain, Lookout, Admiral }
 
+/// One named check of the fleet's health check, as `health_checked` records it (`payload.checks`):
+/// its group and name, what it checks, and how it stands. A `Fail` holds the lookouts; a `Warn`
+/// only lights the dashboard; `Unset` is a check with nothing to check (no skill named, say).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HealthCheck {
+    pub group: String,
+    pub name: String,
+    /// What it checks, in a few words.
+    pub about: String,
+    pub status: HealthStatus,
+    /// Why it isn't `ok`, and the fix; `None` when it is.
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthStatus { Ok, Warn, Fail, Unset }
+
 // Per-cog self-reported state (ex `<cog>-status` schemas). Each cog reports its own
 // vocabulary; `fleetc status` parses the report into the matching enum BEFORE the
 // write (the enum IS the lint — a worker can't report a sailor state). Stored as the

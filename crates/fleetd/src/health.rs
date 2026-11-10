@@ -1,15 +1,19 @@
-//! The fleet's health check: the guards on the project's shared git state, and that state itself.
-//! fleetd runs it at boot, where a miss refuses to come online, and after every sync, where a miss
-//! holds the lookouts until it passes (the dashboard's `fleet:` light goes out). It checks that:
-//! - the kit's ref guard (`hooks/git-hook-reference-transaction`) is linked into the checkout's git
-//!   hooks (`./install.sh --hooks`), and no `core.hooksPath` sends git elsewhere;
-//! - the lookouts' command guard (`hooks/claude-hook-lookout-guard`) is there to attach;
-//! - the checkout's own git settings carry no `core.worktree` and no `user.name` / `user.email`:
-//!   what a test that borrowed the checkout's `.git` leaves behind, and git runs no hook for;
-//! - the checkout follows origin: on its default branch, with no uncommitted change, fast-forwarded
-//!   to origin's. The check advances it: captains and admirals run there, on its `.claude/` and docs.
+//! The fleet's health check: one named check each on what the fleet runs on, grouped. fleetd runs it
+//! at boot, where a `Fail` refuses to come online, and after every sync, where a `Fail` holds the
+//! lookouts until it passes (the dashboard's `fleet:` light goes out) and a `Warn` only lights the
+//! dashboard. Each change is recorded (`health_checked`), and the dashboard's Health tab shows it.
+//! - **Kit**: its agents are linked into `~/.claude/agents`; the lookouts' command guard is there.
+//! - **Git**: the checkout is a git repository; the kit's ref guard is linked into its hooks and no
+//!   `core.hooksPath` skips it; its git settings carry no `core.worktree`, `user.name` or
+//!   `user.email` (what a test that borrowed its `.git` leaves behind); and it follows origin, on its
+//!   default branch, fast-forwarded. The check advances it: captains and admirals run there.
+//! - **Project Skills**: the skills fleet.toml names exist.
+//! - **Project Worktrees**: no stale worktree entry blocks cutting one again.
+//! - **Project Memory**: the refused list, when there is one.
 
+use crate::config::Config;
 use anyhow::{bail, Result};
+use domain::{HealthCheck, HealthStatus};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -17,6 +21,8 @@ use std::process::Command;
 /// The kit's guards, linked or attached from here.
 pub const REF_GUARD: &str = "git-hook-reference-transaction";
 pub const LOOKOUT_GUARD: &str = "claude-hook-lookout-guard";
+/// The kit agents a review needs: a missing one holds the lookouts; any other only warns.
+const REVIEW_AGENTS: [&str; 2] = ["lookout.md", "spyglass.md"];
 
 /// The kit's `hooks/` folder. fleetd is built from the kit, so it's found from the build tree.
 pub fn kit_hooks() -> PathBuf {
@@ -24,36 +30,127 @@ pub fn kit_hooks() -> PathBuf {
     hooks.canonicalize().unwrap_or(hooks)
 }
 
-/// Every way the project's git state, or its guards, are off; empty when healthy.
-pub fn problems(checkout: &str) -> Vec<String> {
-    let mut out = Vec::new();
+/// Every check, in the Health tab's order.
+pub fn checks(cfg: &Config) -> Vec<HealthCheck> {
+    let checkout = cfg.project.path.as_str();
+    let mut out = vec![kit_agents(), lookout_guard()];
+    out.extend(git(checkout));
+    out.extend([
+        skill(checkout, "review-skill", "the review skill fleet.toml names exists", cfg.review_skill.as_deref(), HealthStatus::Fail, "the kit's /fleet-review runs"),
+        skill(checkout, "grooming-skill", "the grooming skill fleet.toml names exists", cfg.groom_skill.as_deref(), HealthStatus::Warn, "an admiral grooms by /fleet-ready-done"),
+        skill(checkout, "dor-skill", "the readiness check fleet.toml names exists", cfg.assess_skill.as_deref(), HealthStatus::Warn, "Ready is judged by /fleet-ready-done"),
+        worktrees(checkout),
+        refused(&cfg.refused),
+    ]);
+    out
+}
+
+/// The failing checks' details: what holds the lookouts. Empty when healthy.
+pub fn problems(checks: &[HealthCheck]) -> Vec<String> {
+    checks
+        .iter()
+        .filter(|c| c.status == HealthStatus::Fail)
+        .map(|c| format!("{}: {}", c.name, c.detail.as_deref().unwrap_or("failed")))
+        .collect()
+}
+
+/// The boot check, for preflight's checklist: a `Fail` refuses to come online.
+pub fn preflight(cfg: &Config) -> Result<String> {
+    let checks = checks(cfg);
+    let problems = problems(&checks);
+    if !problems.is_empty() {
+        bail!("{}", problems.join("; "));
+    }
+    let count = |s| checks.iter().filter(|c| c.status == s).count();
+    Ok(format!("{} ok · {} warn · {} unset", count(HealthStatus::Ok), count(HealthStatus::Warn), count(HealthStatus::Unset)))
+}
+
+fn check(group: &str, name: &str, about: &str, status: HealthStatus, detail: Option<String>) -> HealthCheck {
+    HealthCheck { group: group.into(), name: name.into(), about: about.into(), status, detail }
+}
+
+/// Ok when there's nothing to say, else `status` with why.
+fn verdict(group: &str, name: &str, about: &str, status: HealthStatus, detail: Option<String>) -> HealthCheck {
+    match detail {
+        None => check(group, name, about, HealthStatus::Ok, None),
+        Some(d) => check(group, name, about, status, Some(d)),
+    }
+}
+
+// ── Kit ─────────────────────────────────────────────────────────────────────────────
+
+fn kit_agents() -> HealthCheck {
+    let about = "each kit agent is linked into ~/.claude/agents";
+    let agents = kit_hooks().join("../agents");
+    let linked = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude/agents"));
+    let mut missing: Vec<String> = std::fs::read_dir(&agents)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "md"))
+        .filter(|p| {
+            let name = p.file_name().unwrap_or_default();
+            linked.as_ref().and_then(|l| l.join(name).canonicalize().ok()) != p.canonicalize().ok()
+        })
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect();
+    missing.sort();
+    if missing.is_empty() {
+        return check("Kit", "agents", about, HealthStatus::Ok, None);
+    }
+    let status = if missing.iter().any(|m| REVIEW_AGENTS.contains(&m.as_str())) { HealthStatus::Fail } else { HealthStatus::Warn };
+    check("Kit", "agents", about, status, Some(format!("not linked: {}: run ./install.sh", missing.join(", "))))
+}
+
+fn lookout_guard() -> HealthCheck {
+    let guard = kit_hooks().join(LOOKOUT_GUARD);
+    let miss = (!executable(&guard)).then(|| format!("missing or not executable: {}", guard.display()));
+    verdict("Kit", "lookout-guard", "the lookouts' command guard is installed", HealthStatus::Fail, miss)
+}
+
+// ── Git ─────────────────────────────────────────────────────────────────────────────
+
+fn git(checkout: &str) -> Vec<HealthCheck> {
     let git_dir = Path::new(checkout).join(".git");
     if !git_dir.is_dir() {
-        return vec![format!("no git checkout at {checkout}")];
+        return vec![check("Git", "checkout", "the project checkout is a git repository", HealthStatus::Fail, Some(format!("no git checkout at {checkout}")))];
     }
+    let mut out = vec![check("Git", "checkout", "the project checkout is a git repository", HealthStatus::Ok, None)];
+
     let want = kit_hooks().join(REF_GUARD).canonicalize().ok();
     let link = git_dir.join("hooks/reference-transaction");
-    if want.is_none() || link.canonicalize().ok() != want {
-        out.push("the ref guard isn't linked into the checkout: run ./install.sh --hooks".to_string());
+    let miss = if want.is_none() || link.canonicalize().ok() != want {
+        Some("not linked into the checkout: run ./install.sh --hooks".to_string())
     } else if !executable(&link) {
-        out.push("the ref guard isn't executable".to_string());
-    }
+        Some("not executable".to_string())
+    } else {
+        None
+    };
+    out.push(verdict("Git", "ref-guard", "the ref guard is linked into the checkout's hooks", HealthStatus::Fail, miss));
+
     let config = git_dir.join("config");
-    for (scope, key) in [(Some(&config), "core.hooksPath"), (None, "core.hooksPath")] {
-        if let Some(v) = setting(scope.map(|p| p.as_path()), key) {
-            out.push(format!("{key} is set ({v}), so git skips the ref guard"));
-        }
-    }
-    for key in ["core.worktree", "user.name", "user.email"] {
-        if let Some(v) = setting(Some(&config), key) {
-            out.push(format!("the checkout's git settings carry {key} = {v} (a borrowed .git?): git config --file {} --unset {key}", config.display()));
-        }
-    }
-    if !executable(&kit_hooks().join(LOOKOUT_GUARD)) {
-        out.push(format!("the lookouts' command guard is missing: {}", kit_hooks().join(LOOKOUT_GUARD).display()));
-    }
-    if out.is_empty() {
-        out.extend(follow_origin(checkout)); // only a guarded checkout with clean settings is moved
+    let set: Vec<String> = [(Some(config.as_path()), "core.hooksPath"), (None, "core.hooksPath")]
+        .into_iter()
+        .filter_map(|(scope, key)| setting(scope, key).map(|v| format!("{key} = {v} ({})", if scope.is_some() { "the checkout's" } else { "global" })))
+        .collect();
+    let miss = (!set.is_empty()).then(|| format!("{}, so git skips the ref guard: unset it", set.join("; ")));
+    out.push(verdict("Git", "hooks-path", "no core.hooksPath lets git skip the ref guard", HealthStatus::Fail, miss));
+
+    let carried: Vec<String> = ["core.worktree", "user.name", "user.email"]
+        .into_iter()
+        .filter_map(|key| setting(Some(&config), key).map(|v| format!("{key} = {v}")))
+        .collect();
+    let miss = (!carried.is_empty())
+        .then(|| format!("carries {} (a borrowed .git?): git config --file {} --unset <key>", carried.join(", "), config.display()));
+    out.push(verdict("Git", "git-settings", "the checkout's git config is clean", HealthStatus::Fail, miss));
+
+    let about = "the checkout is on origin's default branch, fast-forwarded";
+    if out.iter().all(|c| c.status == HealthStatus::Ok) {
+        out.push(verdict("Git", "follows-origin", about, HealthStatus::Fail, follow_origin(checkout)));
+    } else {
+        // Only a guarded checkout with clean settings is moved.
+        out.push(check("Git", "follows-origin", about, HealthStatus::Unset, Some("not run until the git checks above pass".into())));
     }
     out
 }
@@ -61,39 +158,69 @@ pub fn problems(checkout: &str) -> Vec<String> {
 /// Fast-forward the checkout to origin's default branch, or say what keeps it from following: another
 /// branch, an uncommitted change, a failed fetch, or a divergence. Never forces anything.
 fn follow_origin(checkout: &str) -> Option<String> {
-    let git = |args: &[&str]| -> std::result::Result<String, String> {
-        let out = Command::new("git").arg("-C").arg(checkout).args(args).output().map_err(|e| e.to_string())?;
-        let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
-        if out.status.success() { Ok(text(&out.stdout)) } else { Err(text(&out.stderr)) }
-    };
-    let Ok(default) = git(&["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) else {
-        return Some("origin/HEAD doesn't resolve in the checkout: git remote set-head origin --auto".into());
+    let default = match run_git(checkout, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) {
+        Ok(d) => d,
+        Err(_) => return Some("origin/HEAD doesn't resolve in the checkout: git remote set-head origin --auto".into()),
     };
     let branch = default.strip_prefix("origin/").unwrap_or(&default).to_string();
-    match git(&["symbolic-ref", "--short", "HEAD"]) {
+    match run_git(checkout, &["symbolic-ref", "--short", "HEAD"]) {
         Ok(b) if b == branch => {}
-        Ok(b) => return Some(format!("the checkout is on {b}, not {branch}, so it can't follow {default}: git switch {branch}")),
-        Err(_) => return Some(format!("the checkout's HEAD is detached, so it can't follow {default}: git switch {branch}")),
+        Ok(b) => return Some(format!("on {b}, not {branch}, so it can't follow {default}: git switch {branch}")),
+        Err(_) => return Some(format!("its HEAD is detached, so it can't follow {default}: git switch {branch}")),
     }
-    if git(&["status", "--porcelain", "--untracked-files=no"]).is_ok_and(|s| !s.is_empty()) {
-        return Some(format!("the checkout has uncommitted changes, so it can't follow {default}: commit or discard them"));
+    if run_git(checkout, &["status", "--porcelain", "--untracked-files=no"]).is_ok_and(|s| !s.is_empty()) {
+        return Some(format!("uncommitted changes, so it can't follow {default}: commit or discard them"));
     }
     let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
-    if let Err(e) = git(&["fetch", "--quiet", "--no-tags", "origin", &refspec]) {
+    if let Err(e) = run_git(checkout, &["fetch", "--quiet", "--no-tags", "origin", &refspec]) {
         return Some(format!("can't fetch {default}: {e}"));
     }
-    git(&["merge", "--ff-only", "--quiet", &default])
+    run_git(checkout, &["merge", "--ff-only", "--quiet", &default])
         .err()
-        .map(|e| format!("the checkout's {branch} can't fast-forward to {default}, so it has diverged: {e}"))
+        .map(|e| format!("its {branch} can't fast-forward to {default}, so it has diverged: {e}"))
 }
 
-/// The boot check, for preflight's checklist: a miss refuses to come online.
-pub fn preflight(checkout: &str) -> Result<String> {
-    let problems = problems(checkout);
-    if !problems.is_empty() {
-        bail!("{}", problems.join("; "));
+// ── Project ─────────────────────────────────────────────────────────────────────────
+
+/// A skill fleet.toml names: in the checkout's `.claude/skills/`, or the kit's (`~/.claude/skills/`).
+fn skill(checkout: &str, name: &str, about: &str, named: Option<&str>, missing: HealthStatus, default: &str) -> HealthCheck {
+    let Some(skill) = named else {
+        return check("Project Skills", name, about, HealthStatus::Unset, Some(format!("none named: {default}")));
+    };
+    let homes = [Some(PathBuf::from(checkout)), std::env::var_os("HOME").map(PathBuf::from)];
+    let found = homes.iter().flatten().any(|h| h.join(".claude/skills").join(skill).join("SKILL.md").is_file());
+    let miss = (!found).then(|| format!("fleet.toml names {skill}, but there's no .claude/skills/{skill}/SKILL.md in the checkout"));
+    verdict("Project Skills", name, about, missing, miss)
+}
+
+fn worktrees(checkout: &str) -> HealthCheck {
+    let about = "no stale worktree entries under review/ or impl/";
+    let listing = run_git(checkout, &["worktree", "list", "--porcelain"]).unwrap_or_default();
+    let stale: Vec<String> = listing
+        .split("\n\n")
+        .filter(|entry| entry.lines().any(|l| l.starts_with("prunable")))
+        .filter_map(|entry| entry.lines().find_map(|l| l.strip_prefix("worktree ")))
+        .map(|p| Path::new(p).file_name().map_or(p.to_string(), |n| n.to_string_lossy().into_owned()))
+        .collect();
+    let miss = (!stale.is_empty()).then(|| format!("stale: {}, which blocks cutting them again: git -C {checkout} worktree prune", stale.join(", ")));
+    verdict("Project Worktrees", "worktrees", about, HealthStatus::Fail, miss)
+}
+
+fn refused(path: &Path) -> HealthCheck {
+    let about = "the refused list is in place";
+    if path.is_file() {
+        check("Project Memory", "refused-list", about, HealthStatus::Ok, None)
+    } else {
+        check("Project Memory", "refused-list", about, HealthStatus::Unset, Some(format!("none at {}: nothing is refused", path.display())))
     }
-    Ok("ref guard linked · lookout guard present · git settings clean · checkout follows origin".into())
+}
+
+// ── helpers ─────────────────────────────────────────────────────────────────────────
+
+fn run_git(checkout: &str, args: &[&str]) -> std::result::Result<String, String> {
+    let out = Command::new("git").arg("-C").arg(checkout).args(args).output().map_err(|e| e.to_string())?;
+    let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
+    if out.status.success() { Ok(text(&out.stdout)) } else { Err(text(&out.stderr)) }
 }
 
 /// The `--settings` a lookout launches with: the command guard on its every Bash call.
@@ -122,19 +249,37 @@ fn executable(path: &Path) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
+    /// A config over a fixture checkout, its refused list beside it.
+    pub(crate) fn cfg(dir: &Path, checkout: &str) -> Config {
+        let mut c = Config::default();
+        c.project.path = checkout.to_string();
+        c.refused = dir.join("refused.md");
+        c
+    }
+
+    fn status(checks: &[HealthCheck], name: &str) -> (HealthStatus, String) {
+        let c = checks.iter().find(|c| c.name == name).unwrap_or_else(|| panic!("no check {name}"));
+        (c.status, c.detail.clone().unwrap_or_default())
+    }
+
     #[test]
-    fn a_checkout_is_healthy_once_guarded_and_clean_and_each_miss_is_named() {
+    fn the_git_checks_pass_once_guarded_and_clean_and_each_miss_is_named() {
         let (dir, checkout, _) = crate::git::fixture::checkout("health", &[]);
+        let cfg = cfg(&dir, &checkout);
         let git = |args: &[&str]| assert!(Command::new("git").arg("-C").arg(&checkout).args(args).status().unwrap().success());
-        let p = problems(&checkout);
-        assert!(p.len() == 1 && p[0].contains("./install.sh --hooks"), "unguarded: {p:?}");
+        let c = checks(&cfg);
+        let (s, d) = status(&c, "ref-guard");
+        assert!(s == HealthStatus::Fail && d.contains("./install.sh --hooks"), "unguarded: {d}");
+        assert_eq!(status(&c, "follows-origin").0, HealthStatus::Unset, "not moved while unguarded");
 
         std::os::unix::fs::symlink(kit_hooks().join(REF_GUARD), Path::new(&checkout).join(".git/hooks/reference-transaction")).unwrap();
-        assert_eq!(problems(&checkout), Vec::<String>::new(), "guarded and clean");
-        assert!(preflight(&checkout).is_ok());
+        let c = checks(&cfg);
+        for name in ["checkout", "ref-guard", "hooks-path", "git-settings", "follows-origin", "worktrees"] {
+            assert_eq!(status(&c, name).0, HealthStatus::Ok, "{name}");
+        }
 
         // Behind origin: the check fast-forwards it.
         let head = |r: &str| String::from_utf8_lossy(&Command::new("git").arg("-C").arg(&checkout).args(["rev-parse", r]).output().unwrap().stdout).trim().to_string();
@@ -142,27 +287,52 @@ mod tests {
         git(&["push", "-q", "origin", "HEAD:refs/heads/master"]);
         let next = head("HEAD");
         git(&["reset", "-q", "--hard", "HEAD~1"]);
-        assert_eq!(problems(&checkout), Vec::<String>::new(), "behind is healthy: it follows");
+        assert_eq!(status(&checks(&cfg), "follows-origin").0, HealthStatus::Ok, "behind is healthy: it follows");
         assert_eq!(head("HEAD"), next, "fast-forwarded to origin/master");
 
         // An uncommitted change, or another branch: it can't follow, and says so.
         std::fs::write(Path::new(&checkout).join("x"), "x").unwrap();
         git(&["add", "x"]);
-        let p = problems(&checkout);
-        assert!(p.len() == 1 && p[0].contains("uncommitted changes"), "{p:?}");
+        let (s, d) = status(&checks(&cfg), "follows-origin");
+        assert!(s == HealthStatus::Fail && d.contains("uncommitted changes"), "{d}");
         git(&["rm", "-q", "--cached", "x"]);
         git(&["switch", "-q", "-c", "other"]);
-        let p = problems(&checkout);
-        assert!(p.len() == 1 && p[0].contains("on other, not master"), "{p:?}");
+        let (s, d) = status(&checks(&cfg), "follows-origin");
+        assert!(s == HealthStatus::Fail && d.contains("on other, not master"), "{d}");
         git(&["switch", "-q", "master"]);
-        assert_eq!(problems(&checkout), Vec::<String>::new(), "back on master");
+        assert_eq!(status(&checks(&cfg), "follows-origin").0, HealthStatus::Ok, "back on master");
 
         git(&["config", "user.name", "test"]);
         git(&["config", "core.worktree", "/nowhere/at/all"]);
-        let p = problems(&checkout);
-        assert!(p.iter().any(|m| m.contains("user.name = test")), "{p:?}");
-        assert!(p.iter().any(|m| m.contains("core.worktree = /nowhere/at/all")), "found even though it breaks git: {p:?}");
-        assert!(preflight(&checkout).is_err());
+        let c = checks(&cfg);
+        let (s, d) = status(&c, "git-settings");
+        assert!(s == HealthStatus::Fail && d.contains("user.name = test") && d.contains("core.worktree = /nowhere/at/all"), "found even though it breaks git: {d}");
+        assert_eq!(status(&c, "follows-origin").0, HealthStatus::Unset, "never moved with a broken worktree setting");
+        assert!(preflight(&cfg).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_named_skill_must_exist_and_only_the_review_skill_holds_the_lookouts() {
+        let (dir, checkout, _) = crate::git::fixture::checkout("health-skills", &[]);
+        let mut cfg = cfg(&dir, &checkout);
+        let c = checks(&cfg);
+        assert_eq!(status(&c, "review-skill").0, HealthStatus::Unset, "none named: the kit's");
+        assert_eq!(status(&c, "refused-list").0, HealthStatus::Unset, "no refused list");
+
+        cfg.review_skill = Some("no-such-review".into());
+        cfg.groom_skill = Some("no-such-groom".into());
+        let c = checks(&cfg);
+        assert_eq!(status(&c, "review-skill").0, HealthStatus::Fail);
+        assert_eq!(status(&c, "grooming-skill").0, HealthStatus::Warn, "a grooming skill doesn't hold reviews");
+        assert!(problems(&c).iter().any(|p| p.starts_with("review-skill:")) && !problems(&c).iter().any(|p| p.starts_with("grooming-skill:")));
+
+        std::fs::create_dir_all(Path::new(&checkout).join(".claude/skills/no-such-review")).unwrap();
+        std::fs::write(Path::new(&checkout).join(".claude/skills/no-such-review/SKILL.md"), "x").unwrap();
+        std::fs::write(&cfg.refused, "- x").unwrap();
+        let c = checks(&cfg);
+        assert_eq!(status(&c, "review-skill").0, HealthStatus::Ok);
+        assert_eq!(status(&c, "refused-list").0, HealthStatus::Ok);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

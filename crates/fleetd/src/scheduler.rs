@@ -120,8 +120,8 @@ pub fn run(
 ) {
     let (mut next_poll, mut next_sync, mut next_reconcile) =
         (Instant::now(), Instant::now(), Instant::now());
-    // The last health check's misses (`None`: not run yet). Boot passed it; each sync re-runs it.
-    let mut health: Option<Vec<String>> = None;
+    // The last health check (`None`: not run yet). Boot passed it; each sync re-runs it.
+    let mut health: Option<Vec<domain::HealthCheck>> = None;
 
     // The cadences + thresholds + dry_run are LIVE levers (`settings` overlay): each tick re-reads
     // the effective value off the ledger, so a `fleetc settings set` takes effect with no restart.
@@ -136,7 +136,7 @@ pub fn run(
             if let Err(e) = tick_sync(&ledger, forge.as_ref(), tracker.as_ref()) {
                 tracing::error!("sync tick error: {e:#}");
             }
-            if let Err(e) = tick_health(&ledger, &cfg.project.path, &mut health) {
+            if let Err(e) = tick_health(&ledger, &cfg, &mut health) {
                 tracing::error!("health check error: {e:#}");
             }
             next_sync = now + Duration::from_secs(settings::sync_secs(&cfg, &ledger));
@@ -148,7 +148,7 @@ pub fn run(
             let dry_run = settings::dry_run(&cfg, &ledger);
             let levers = reconcile::Levers {
                 dry_run,
-                healthy: health.as_ref().is_none_or(|p| p.is_empty()),
+                healthy: health.as_ref().is_none_or(|c| crate::health::problems(c).is_empty()),
                 captain_sleep_secs: settings::captain_sleep_secs(&cfg, &ledger),
                 admirals: settings::admirals(&cfg, &ledger),
                 lookouts: settings::lookouts(&cfg, &ledger),
@@ -1303,25 +1303,34 @@ pub fn tick_sync(ledger: &Ledger, forge: &dyn Forge, tracker: &dyn Tracker) -> R
 }
 
 /// Re-run the health check after a sync. A change (or the first run) is recorded as a
-/// `health_checked` event, which the dashboard's `fleet:` light reads, and logged: a miss loudly, as
-/// it holds the lookouts until a check passes.
-fn tick_health(ledger: &Ledger, checkout: &str, last: &mut Option<Vec<String>>) -> Result<()> {
-    let problems = crate::health::problems(checkout);
-    if last.as_ref() == Some(&problems) {
+/// `health_checked` event, every named check in it, which the dashboard's `fleet:` light and Health
+/// tab read, and logged: a failure loudly, as it holds the lookouts until it passes.
+fn tick_health(ledger: &Ledger, cfg: &Config, last: &mut Option<Vec<domain::HealthCheck>>) -> Result<()> {
+    let checks = crate::health::checks(cfg);
+    if last.as_ref() == Some(&checks) {
         return Ok(());
     }
+    let problems = crate::health::problems(&checks);
     match problems.as_slice() {
         [] => tracing::info!("health: ok"),
         misses => tracing::error!("health: {} — lookouts held until it passes", misses.join("; ")),
+    }
+    let warns: Vec<String> = checks
+        .iter()
+        .filter(|c| c.status == domain::HealthStatus::Warn)
+        .map(|c| format!("{}: {}", c.name, c.detail.as_deref().unwrap_or("")))
+        .collect();
+    if !warns.is_empty() {
+        tracing::warn!("health: {}", warns.join("; "));
     }
     ledger.append(
         &now_rfc3339(),
         EventKind::HealthChecked,
         EntityKind::Ticker,
         "health",
-        &serde_json::json!({ "ok": problems.is_empty(), "problems": problems }),
+        &serde_json::json!({ "ok": problems.is_empty(), "problems": problems, "checks": checks }),
     )?;
-    *last = Some(problems);
+    *last = Some(checks);
     Ok(())
 }
 
@@ -1750,20 +1759,22 @@ mod tests {
     #[test]
     fn each_change_in_health_is_recorded_once_for_the_dashboards_light() {
         let (dir, checkout, _) = crate::git::fixture::checkout("tick-health", &[]);
+        let cfg = crate::health::tests::cfg(&dir, &checkout);
         let db = Ledger::in_memory().unwrap();
         let mut last = None;
         let checks = |db: &Ledger| db.events_of(EventKind::HealthChecked).unwrap();
-        tick_health(&db, &checkout, &mut last).unwrap();
-        tick_health(&db, &checkout, &mut last).unwrap();
+        let ref_guard = |e: &Event| e.payload["checks"].as_array().unwrap().iter().find(|c| c["name"] == "ref-guard").unwrap()["status"].clone();
+        tick_health(&db, &cfg, &mut last).unwrap();
+        tick_health(&db, &cfg, &mut last).unwrap();
         assert_eq!(checks(&db).len(), 1, "unguarded, once");
         assert_eq!(checks(&db)[0].payload["ok"], false);
+        assert_eq!(ref_guard(&checks(&db)[0]), "fail", "every check named in it");
 
         let link = std::path::Path::new(&checkout).join(".git/hooks/reference-transaction");
         std::os::unix::fs::symlink(crate::health::kit_hooks().join(crate::health::REF_GUARD), link).unwrap();
-        tick_health(&db, &checkout, &mut last).unwrap();
+        tick_health(&db, &cfg, &mut last).unwrap();
         assert_eq!(checks(&db).len(), 2);
-        assert_eq!(checks(&db)[1].payload["ok"], true, "guarded: the light comes back on");
-        assert_eq!(last, Some(vec![]));
+        assert_eq!(ref_guard(&checks(&db)[1]), "ok", "guarded: recorded as it changes");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

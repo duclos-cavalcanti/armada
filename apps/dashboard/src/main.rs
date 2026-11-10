@@ -28,24 +28,27 @@ struct Cli {
 }
 
 /// Top-level tabs, cycled by `Tab` / `S-Tab`. Fleet (the line, top-down by phase),
-/// Ships (every open MR, ours + allies), Board (the tickets), Log (fleetd's log).
+/// Ships (every open MR, ours + allies), Board (the tickets), Health (the health check, check by
+/// check), Log (fleetd's log).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TabId {
     Fleet,
     Ships,
     Board,
+    Health,
     Log,
 }
 
 impl TabId {
-    pub fn all() -> [TabId; 4] {
-        [TabId::Fleet, TabId::Ships, TabId::Board, TabId::Log]
+    pub fn all() -> [TabId; 5] {
+        [TabId::Fleet, TabId::Ships, TabId::Board, TabId::Health, TabId::Log]
     }
     pub fn label(self) -> &'static str {
         match self {
             TabId::Fleet => "Fleet",
             TabId::Ships => "Ships",
             TabId::Board => "Board",
+            TabId::Health => "Health",
             TabId::Log => "Log",
         }
     }
@@ -60,6 +63,7 @@ impl TabId {
             TabId::Fleet => &[Pane::Convoys, Pane::Proposals, Pane::Dispatched, Pane::Impl, Pane::Merge, Pane::Reviews],
             TabId::Ships => &[Pane::Ships],
             TabId::Board => &[Pane::Tickets],
+            TabId::Health => &[Pane::Health],
             TabId::Log => &[Pane::Log],
         }
     }
@@ -81,11 +85,12 @@ pub enum Pane {
     Convoys,
     Proposals,
     Anchored,
+    Health,
     Log,
 }
 
 impl Pane {
-    const COUNT: usize = 12;
+    const COUNT: usize = 13;
     /// The coordinate the action handler keys on: `tab/pane`.
     fn coordinate(self) -> &'static str {
         match self {
@@ -97,6 +102,7 @@ impl Pane {
             Pane::Tickets => "board/tickets",
             Pane::Convoys => "fleet/convoys",
             Pane::Proposals | Pane::Anchored => "fleet/proposals", // the row's kind tells them apart
+            Pane::Health => "health/checks",
             Pane::Log => "log/fleetd",
         }
     }
@@ -138,7 +144,7 @@ pub enum YankScope {
 pub struct App {
     pub tab: TabId,
     /// The focused pane on each tab (indexed by `TabId`).
-    focus: [Pane; 4],
+    focus: [Pane; 5],
     /// The row cursor of each pane (indexed by `Pane`).
     cursors: [usize; Pane::COUNT],
     /// The slots showing their alternate pane (indexed by the slot's `Pane`).
@@ -217,6 +223,7 @@ impl App {
             Pane::Convoys => f.convoys.len(),
             Pane::Proposals => f.proposals.len(),
             Pane::Anchored => f.held.len(),
+            Pane::Health => ui::health_rows(f).len(),
             Pane::Log => f.log.len(),
         }
     }
@@ -289,7 +296,7 @@ impl App {
             }),
             Pane::Proposals => f.proposals.get(i).map(|p| vec!["proposal".into(), p.id.0.to_string()]),
             Pane::Anchored => f.held.get(i).map(|t| vec!["anchored".into(), t.key.0.clone()]),
-            Pane::Log => None, // no row actions; `y` yanks
+            Pane::Health | Pane::Log => None, // no row actions; `y` yanks
         }?;
         Some((pane.coordinate().to_string(), fields))
     }

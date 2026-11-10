@@ -141,8 +141,13 @@ pub struct Fleet {
     pub held: Vec<Ticket>,
     /// The latest reconcile `TickRan` event — fleetd's last plan (applied/failed/planned).
     pub tick: Option<Event>,
-    /// The latest health check (`payload.ok`, `payload.problems`): the `fleet:` light.
+    /// The latest health check (`payload.ok`, `payload.problems`, `payload.checks`): the `fleet:` light
+    /// and the Health tab.
     pub health: Option<Event>,
+    /// Every recorded change in health, newest first: the Health tab's history.
+    pub health_history: Vec<Event>,
+    /// When fleetd last synced, which re-runs the health check.
+    pub last_sync: Option<String>,
     /// The tmux sessions up right now — whether `enter` on a cog has a pane to switch to.
     pub tmux_up: HashSet<String>,
     /// fleetd answers on its socket.
@@ -310,6 +315,8 @@ impl Fleet {
             proposals: db.pending().unwrap_or_default(),
             tick: db.latest_tick()?,
             health: db.latest_health().unwrap_or_default(),
+            health_history: db.events_of(domain::EventKind::HealthChecked).map(|mut e| { e.reverse(); e }).unwrap_or_default(),
+            last_sync: db.last_sync().unwrap_or_default(),
             tmux_up: tmux_sessions(),
             ..Default::default()
         })

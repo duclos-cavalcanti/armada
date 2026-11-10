@@ -74,6 +74,19 @@ impl Ledger {
             .optional()?)
     }
 
+    /// When fleetd last synced (the latest `tick_ran` of the `sync` ticker): the health check runs
+    /// right after it. `None` before the first sync.
+    pub fn last_sync(&self) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT created_at FROM events WHERE kind = ?1 AND entity_ref = 'sync' ORDER BY seq DESC LIMIT 1",
+                params![EventKind::TickRan.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
     /// The convoy's plan history, oldest first: each `ConvoyPlanned` (`payload.plan`: the plan as
     /// set; `null`: cleared). The read behind `fleetc convoy plan`.
     pub fn plan_history(&self, convoy: &ConvoyKey) -> Result<Vec<Event>> {

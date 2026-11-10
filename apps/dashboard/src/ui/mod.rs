@@ -5,7 +5,7 @@
 
 use crate::source::{open_blockers, CogRow, LandingRow, OrderRow, Phase, ShipRow};
 use crate::{App, Pane, TabId};
-use domain::{Convoy, Event, PipelineStatus, Proposal, Proposed, ShipSnapshot, Ticket};
+use domain::{Convoy, Event, HealthCheck, HealthStatus, PipelineStatus, Proposal, Proposed, ShipSnapshot, Ticket};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -70,15 +70,13 @@ fn render_help(f: &mut Frame) {
 }
 
 fn render_tab_strip(f: &mut Frame, area: Rect, app: &App) {
-    let titles: Vec<Line> = TabId::all().iter().map(|t| Line::from(t.label())).collect();
+    // The Health tab wears the health check's color, selected or not (its highlight is that color too).
+    let health = health_color(&app.fleet.health);
+    let titles: Vec<Line> = TabId::all()
+        .iter()
+        .map(|t| if *t == TabId::Health { Line::from(Span::styled(t.label(), health)) } else { Line::from(t.label()) })
+        .collect();
     let selected = TabId::all().iter().position(|t| *t == app.tab).unwrap_or(0);
-    // The health light: on while fleetd's last health check passed, out on a miss (the footer says
-    // why), dim before the first check.
-    let light = match health(&app.fleet.health) {
-        Some(Ok(())) => Span::styled("●", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-        Some(Err(_)) => Span::styled("○", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        None => Span::styled("·", Style::default().fg(Color::DarkGray)),
-    };
     // fleetd's mode, as its last reconcile pass ran it: red while it only plans, green while live.
     let mode = match app.fleet.tick.as_ref().and_then(|t| t.payload["dry_run"].as_bool()) {
         Some(true) => Span::styled("dry_run=true", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
@@ -86,9 +84,9 @@ fn render_tab_strip(f: &mut Frame, area: Rect, app: &App) {
         None => Span::styled("dry_run=?", Style::default().fg(Color::DarkGray)),
     };
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title(Line::from(vec![Span::raw(" fleet: "), light, Span::raw(" | "), mode, Span::raw(" ")])))
+        .block(Block::default().borders(Borders::ALL).title(Line::from(vec![Span::raw(" fleet: "), mode, Span::raw(" ")])))
         .select(selected)
-        .highlight_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+        .highlight_style(if app.tab == TabId::Health { health } else { Style::default().fg(Color::Cyan) }.add_modifier(Modifier::BOLD));
     f.render_widget(tabs, area);
 }
 
@@ -222,6 +220,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             Some(header(&[("Ticket", 12), ("Convoy", 16), ("Why", 0)])),
             f.held.iter().map(|t| held_row(t, &f.held_reasons, f.convoy_no(t.convoy.as_ref()))).collect(),
         ),
+        Pane::Health => (health_title(f), None, health_rows(f)),
         Pane::Log => (
             format!(
                 " fleetd · {} · {} · newest first ",
@@ -538,6 +537,113 @@ fn held_row(t: &Ticket, reasons: &HashMap<String, String>, convoy_no: Option<i64
         convoy_cell(convoy_no, t.convoy.as_ref().map(|c| c.0.as_str()), 16),
         (format!("⚓ {reason}"), 0, yellow()),
     ])
+}
+
+// ── health ─────────────────────────────────────────────────────────────────────────
+
+/// The health check's color: green while the last one passed, yellow with a warning, red on a failure
+/// (the footer says why), dim before the first.
+fn health_color(check: &Option<Event>) -> Style {
+    let warned = || check.as_ref().is_some_and(|e| checks_of(e).iter().any(|c| c.status == HealthStatus::Warn));
+    match health(check) {
+        None => dim(),
+        Some(Err(_)) => Style::default().fg(Color::Red),
+        Some(Ok(())) if warned() => yellow(),
+        Some(Ok(())) => green(),
+    }
+}
+
+/// The named checks a health event recorded; none from one recorded before they were named.
+fn checks_of(e: &Event) -> Vec<HealthCheck> {
+    serde_json::from_value(e.payload["checks"].clone()).unwrap_or_default()
+}
+
+fn health_title(f: &crate::source::Fleet) -> String {
+    let checks = f.health.as_ref().map(checks_of).unwrap_or_default();
+    let count = |s| checks.iter().filter(|c| c.status == s).count();
+    let state = match (count(HealthStatus::Fail), count(HealthStatus::Warn)) {
+        (0, 0) if checks.is_empty() => "no named checks yet".to_string(),
+        (0, 0) => "✓ passing".to_string(),
+        (0, w) => format!("! {w} warning"),
+        (n, _) => format!("✗ {n} failing — lookouts held"),
+    };
+    // It runs right after each sync, and records only a change: the later of the two is when it last ran.
+    let ran = [f.last_sync.as_deref(), f.health.as_ref().map(|e| e.created_at.as_str())].into_iter().flatten().filter_map(age_of).min();
+    format!(" Health · {state} · checked {} ago ", fmt_age(ran))
+}
+
+/// The Health tab: each group's checks (✓ ok, ! warn, ✗ fail, – unset), what each checks (faded),
+/// why one isn't ok and its fix; then every recorded change, newest first.
+pub(crate) fn health_rows(f: &crate::source::Fleet) -> Vec<Line<'static>> {
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let mut rows = Vec::new();
+    let checks = f.health.as_ref().map(checks_of).unwrap_or_default();
+    if checks.is_empty() {
+        rows.push(Line::styled("No named checks recorded yet: fleetd records them on its next check.", dim()));
+    }
+    let mut group = String::new();
+    for c in &checks {
+        if c.group != group {
+            if !group.is_empty() {
+                rows.push(Line::from(""));
+            }
+            rows.push(Line::styled(c.group.clone(), bold));
+            group = c.group.clone();
+        }
+        let (mark, style) = match c.status {
+            HealthStatus::Ok => ("✓", green()),
+            HealthStatus::Warn => ("!", yellow()),
+            HealthStatus::Fail => ("✗", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            HealthStatus::Unset => ("–", dim()),
+        };
+        rows.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{mark} {:<16}", c.name), style),
+            Span::styled(c.about.clone(), dim()),
+        ]));
+        if let Some(detail) = &c.detail {
+            let style = match c.status {
+                HealthStatus::Fail => Style::default().fg(Color::Red),
+                HealthStatus::Warn => yellow(),
+                _ => dim(),
+            };
+            rows.push(Line::from(vec![Span::raw("      "), Span::styled(format!("↳ {detail}"), style)]));
+        }
+    }
+    rows.push(Line::from(""));
+    rows.push(Line::styled("Changes", bold));
+    // Each fleetd boot records health afresh: only a change of state is a change, at its first record.
+    let mut changes: Vec<(&Event, (&'static str, String, Style))> = Vec::new();
+    for e in f.health_history.iter().rev() {
+        let state = health_state(e);
+        if changes.last().is_none_or(|(_, last)| last.1 != state.1) {
+            changes.push((e, state));
+        }
+    }
+    for (e, (mark, text, style)) in changes.into_iter().rev() {
+        rows.push(Line::from(vec![
+            Span::styled(format!("  {:<8}", fmt_age(age_of(&e.created_at))), dim()),
+            Span::styled(format!("{mark} {text}"), style),
+        ]));
+    }
+    rows
+}
+
+/// A recorded health check, in a word: passing, warning on some checks, or failing on some.
+fn health_state(e: &Event) -> (&'static str, String, Style) {
+    let checks = checks_of(e);
+    let named = |s| checks.iter().filter(|c| c.status == s).map(|c| c.name.clone()).collect::<Vec<_>>().join(", ");
+    if e.payload["ok"].as_bool().unwrap_or(false) {
+        return match named(HealthStatus::Warn) {
+            w if w.is_empty() => ("✓", "passing".to_string(), green()),
+            w => ("!", format!("passing, warning: {w}"), yellow()),
+        };
+    }
+    let failing = match named(HealthStatus::Fail) {
+        n if n.is_empty() => e.payload["problems"].as_array().into_iter().flatten().filter_map(|p| p.as_str()).collect::<Vec<_>>().join("; "),
+        n => n,
+    };
+    ("✗", format!("failing: {failing}"), Style::default().fg(Color::Red))
 }
 
 /// A fleetd log line (`<date> <time> <LEVEL> <module>: <message>`): the time, the level coloured,

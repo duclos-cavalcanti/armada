@@ -36,13 +36,17 @@ Cycle with `Tab` / `S-Tab`:
   and the last column shows its review (`◎` a lookout is on it, `✓` reviewed at its head).
 - **Board** — the sprint tickets, with the Convoys and Proposals panes again (the same panes as
   on Fleet).
+- **Health** — fleetd's health check, check by check, grouped (Kit, Git, Project Skills, Project
+  Worktrees, Project Memory): `✓` ok, `!` a warning (lights the dashboard only), `✗` a failure
+  (holds the lookouts), `–` nothing to check; what each checks, faded, and why one isn't ok with
+  its fix. Below, every change of state, newest first. The title says when it last ran.
 - **Log** — fleetd's log (`.fleet/fleetd.log`), newest first, warnings yellow and errors red;
   the title says whether fleetd is up. The footer flags a down fleetd from every tab.
 
-The tab strip's title is the health light, `fleet: ●`: green while fleetd's last health check
-passed (the ref guard is linked, the checkout's git settings are clean). On a miss it goes out
-(`○`, red), the footer says why, and no lookout launches until a check passes. Beside it, fleetd's
-mode as its last reconcile pass ran: `dry_run=true` in red (it only plans), `dry_run=false` in green.
+The **Health** tab's name is the health light: green while fleetd's last health check passed,
+yellow with a warning, red on a failure, when the footer says why and no lookout launches until the
+check passes. The tab strip's title is fleetd's mode as its last reconcile pass ran:
+`dry_run=true` in red (it only plans), `dry_run=false` in green.
 
 ## Keys
 

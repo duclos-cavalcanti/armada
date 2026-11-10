@@ -136,7 +136,7 @@ fn checks(
     [
         ("runtime", preflight::runtime(project)),
         ("project", git::GitWorktrees::new(&cfg.project.path).preflight()),
-        ("health", health::preflight(&cfg.project.path)),
+        ("health", health::preflight(cfg)),
         ("forge", forge.preflight()),
         ("tracker", tracker.preflight()),
         ("host", host.preflight()),
