@@ -28,11 +28,12 @@ impl JiraTracker {
         let out = Command::new("jira")
             .args(["issue", "list", "-p", &self.project, "-q", jql, "--raw", "--paginate", &format!("{from}:100")])
             .output()?;
-        ensure!(
-            out.status.success(),
-            "jira issue list failed: {}",
-            crate::preflight::one_line(&out.stderr)
-        );
+        if !out.status.success() {
+            // jira-cli fails an empty match ("No result found"): an empty page, not an error.
+            let err = crate::preflight::one_line(&out.stderr);
+            ensure!(err.contains("No result found"), "jira issue list failed: {err}");
+            return Ok("[]".into());
+        }
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
