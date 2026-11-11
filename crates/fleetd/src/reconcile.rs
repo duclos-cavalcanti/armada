@@ -138,10 +138,11 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
                 SessionRepo::for_ticket(ledger, tkey)?.into_iter().filter(|s| s.ended_at.is_none()).map(|s| s.kind).collect();
             let live_sailor = live.contains(&CrewKind::Sailor);
             let live_builder = live.iter().any(|k| matches!(k, CrewKind::Worker | CrewKind::Hand));
-            let changed = Some(ship_fingerprint(&snap, has_open_blocker(ledger, tkey)?)) != ship.swept;
+            let blocked = has_open_blocker(ledger, tkey)?;
+            let changed = Some(ship_fingerprint(&snap, blocked)) != ship.swept;
             let urgent = snap.has_conflicts || snap.pipeline == Some(PipelineStatus::Failed);
             let settled = urgent || rested(ledger.threads_changed_at(&ship.id)?.as_deref(), review_settle_secs);
-            if auto && !held && !todo && !live_sailor && !live_builder && settled && (needs_work(&snap) || changed) {
+            if auto && !held && !todo && !live_sailor && !live_builder && settled && (needs_work(&snap, blocked) || changed) {
                 actions.push(Action::LaunchSailor { ticket: tkey.0.clone() });
             }
         }
@@ -1175,27 +1176,28 @@ fn stand_down_captain<H: SessionHost>(ledger: &Ledger, host: &H, convoy: &str) -
     Ok(())
 }
 
-/// The change-fingerprint of a ship snapshot — the fields a sailor would act on (state, head,
-/// conflicts, threads, approvals, pipeline, merge-readiness). Excludes `synced_at` (always moves) +
-/// the defaulted arm fields, so it changes only when something sweep-worthy changed. `merge_status`
-/// is in here so a readiness change (ci_must_pass → mergeable, mergeable → conflict) re-fires the sailor.
 /// Does this ship have open work a sailor must act on THIS sweep? The "needs attention" half of
 /// the LaunchSailor trigger (beside fingerprint-change), so a broken-but-unchanged ship with no
 /// attendant still gets one. The signals are the ones `sailor.md` acts on: a conflict (rechart),
 /// open review threads (parley), or a failed pipeline (repair). A ship gated on an upstream MR
 /// (`merge_request_blocked`) is waiting, not working — it re-engages via a fingerprint change when
 /// the block clears, so exclude it to avoid churning sailors on an unfixable-until-upstream failure.
+/// So is a red pipeline while its ticket has an open blocker (`blocked`): the blocker may be the fix
+/// (a repo-wide red), and its landing re-fires the sweep. Conflicts and threads stay its work.
 /// A clean ship is resting: its first arming sweep is driven by fingerprint-change on handoff, not
 /// here, so `needs_work` stays silent on it (no churn on an armed-and-waiting ship).
-fn needs_work(s: &ShipSnapshot) -> bool {
+fn needs_work(s: &ShipSnapshot, blocked: bool) -> bool {
     if s.merge_status.as_deref() == Some("merge_request_blocked") {
         return false;
     }
-    s.has_conflicts || s.open_threads > 0 || s.pipeline == Some(PipelineStatus::Failed)
+    s.has_conflicts || s.open_threads > 0 || (s.pipeline == Some(PipelineStatus::Failed) && !blocked)
 }
 
-/// What a sweep was launched against. `blocked` (an open ticket blocker) appends a marker only when
-/// set, so an unblocked ship's fingerprint is unchanged by it and the blocker landing reads as a change.
+/// What a sweep was launched against: the fields a sailor would act on (state, head, conflicts,
+/// threads, approvals, pipeline, merge-readiness), never `synced_at` (always moves), so it changes
+/// only when something sweep-worthy changed — a readiness change (ci_must_pass → mergeable) re-fires
+/// the sailor. `blocked` (an open ticket blocker) appends a marker only when set, so an unblocked
+/// ship's fingerprint is unchanged by it and the blocker landing reads as a change.
 fn ship_fingerprint(s: &ShipSnapshot, blocked: bool) -> String {
     format!(
         "{:?}|{}|{}|{}|{}/{}|{:?}|{:?}{}",
@@ -2690,6 +2692,33 @@ mod tests {
             s.merge_status = Some("merge_request_blocked".into());
         });
         assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty(), "a blocked ship doesn't re-launch while unchanged");
+    }
+
+    #[test]
+    fn a_red_pipeline_waits_on_an_open_blocker_but_threads_dont() {
+        // The red may be the blocker's to fix (a repo-wide failure): no sailor re-launched on it
+        // while unchanged; the blocker landing re-fires the sweep. Open threads are still its work.
+        let db = db();
+        ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
+        ticket(&db, "PROJ-2", TicketStatus::InQa, false, vec!["PROJ-1"]);
+        order_wt(&db, "PROJ-2", true, Some("/wt/PROJ-2"));
+        ship(&db, 10, "PROJ-2", ShipState::Open);
+        let swept = |mutate: &dyn Fn(&mut ShipSnapshot)| {
+            let s = db.armada().unwrap().into_iter().find(|s| s.iid == 10).unwrap();
+            let mut snap = ShipRepo::snapshot(&db, &s.id).unwrap().unwrap();
+            mutate(&mut snap);
+            db.sync_snapshot(&snap).unwrap();
+            let snap = ShipRepo::snapshot(&db, &s.id).unwrap().unwrap();
+            db.set_swept(&s.id, Some(&ship_fingerprint(&snap, true))).unwrap();
+        };
+        let launch = vec![Action::LaunchSailor { ticket: "PROJ-2".into() }];
+        swept(&|s| s.pipeline = Some(PipelineStatus::Failed));
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty(), "red, blocked, unchanged: it waits");
+        swept(&|s| s.open_threads = 1);
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap(), launch, "a thread to answer is its work, blocked or not");
+        swept(&|s| s.open_threads = 0);
+        ticket(&db, "PROJ-1", TicketStatus::Done, false, vec![]);
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap(), launch, "the blocker landed");
     }
 
     #[test]
