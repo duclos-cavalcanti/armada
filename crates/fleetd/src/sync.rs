@@ -48,8 +48,9 @@ pub fn sync_board(ledger: &Ledger, tracker: &dyn Tracker, now: &str) -> Result<u
 }
 
 /// Pull the convoy's tickets (its epic's children, whatever their sprint) and their blockers into
-/// the ledger — `convoy open` runs it, so its captain starts on the whole convoy.
-pub fn sync_convoy(ledger: &Ledger, tracker: &dyn Tracker, convoy: &ConvoyKey, now: &str) -> Result<()> {
+/// the ledger — `convoy open` runs it, so its captain starts on the whole convoy. Returns the
+/// children, as the tracker has them now.
+pub fn sync_convoy(ledger: &Ledger, tracker: &dyn Tracker, convoy: &ConvoyKey, now: &str) -> Result<Vec<TrackerTicket>> {
     sync_convoy_with(ledger, tracker, convoy, &mut HashSet::new(), now)
 }
 
@@ -59,13 +60,14 @@ fn sync_convoy_with(
     convoy: &ConvoyKey,
     done: &mut HashSet<TicketKey>,
     now: &str,
-) -> Result<()> {
-    for t in tracker.children(&TicketKey(convoy.0.clone()))? {
+) -> Result<Vec<TrackerTicket>> {
+    let children = tracker.children(&TicketKey(convoy.0.clone()))?;
+    for t in &children {
         if !done.contains(&t.key) {
-            sync_with_blockers(ledger, tracker, &t, done, now)?;
+            sync_with_blockers(ledger, tracker, t, done, now)?;
         }
     }
-    Ok(())
+    Ok(children)
 }
 
 /// Sync `t` after any blocker not yet synced this pass, so its `is blocked by` edges have their FK.
@@ -349,8 +351,11 @@ mod tests {
         fn transition(&self, _: &TicketKey, _: TicketStatus) -> Result<()> {
             Ok(())
         }
-        fn assigned_to_peer(&self, _: &TicketKey) -> Result<bool> {
-            Ok(false)
+        fn assigned_peers(&self, _: &[TicketKey]) -> Result<Vec<(TicketKey, String)>> {
+            Ok(vec![])
+        }
+        fn assign_to_me(&self, _: &TicketKey) -> Result<()> {
+            Ok(())
         }
         fn claim(&self, _: &TicketKey) -> Result<()> {
             Ok(())

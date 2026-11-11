@@ -272,9 +272,12 @@ pub trait Tracker {
     fn board(&self) -> Result<Vec<TrackerTicket>>;
     fn get(&self, key: &TicketKey) -> Result<TrackerTicket>;
     fn transition(&self, key: &TicketKey, to: TicketStatus) -> Result<()>;
-    /// True when the ticket is assigned to someone OTHER than the operator — the claim gate
-    /// (never stomp a peer). `false` = unassigned or already ours, so it's safe to claim.
-    fn assigned_to_peer(&self, key: &TicketKey) -> Result<bool>;
+    /// Of `keys`, those assigned to someone OTHER than the operator, each with the teammate's name —
+    /// the ownership gate (never stomp a peer). One left out is unassigned or already ours.
+    fn assigned_peers(&self, keys: &[TicketKey]) -> Result<Vec<(TicketKey, String)>>;
+    /// Assign the ticket to the operator, and only that (no lane, label or sprint): a ticket
+    /// nobody owns becomes ours as it joins a convoy. Idempotent.
+    fn assign_to_me(&self, key: &TicketKey) -> Result<()>;
     /// Mark the ticket as the operator's active work, after the In Progress transition locked it
     /// (Jira: assign to me, add the claim label, join the active sprint; filesystem: assign to me).
     /// Best-effort follow-ons: try every step, then report the ones that failed (idempotent).

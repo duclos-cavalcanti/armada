@@ -197,13 +197,23 @@ impl Tracker for FsTracker {
         self.update(key, |h| h.status = to)
     }
 
-    fn assigned_to_peer(&self, key: &TicketKey) -> Result<bool> {
-        Ok(self.load(key)?.header.assignee.is_some_and(|a| a != self.user))
+    fn assigned_peers(&self, keys: &[TicketKey]) -> Result<Vec<(TicketKey, String)>> {
+        let mut peers = Vec::new();
+        for key in keys {
+            if let Some(peer) = self.load(key)?.header.assignee.filter(|a| *a != self.user) {
+                peers.push((key.clone(), peer));
+            }
+        }
+        Ok(peers)
+    }
+
+    fn assign_to_me(&self, key: &TicketKey) -> Result<()> {
+        let user = self.user.clone();
+        self.update(key, |h| h.assignee = Some(user))
     }
 
     fn claim(&self, key: &TicketKey) -> Result<()> {
-        let user = self.user.clone();
-        self.update(key, |h| h.assignee = Some(user))
+        self.assign_to_me(key)
     }
 
     /// Back to To Do, unassigned: the folder has no sprint to leave.
@@ -350,7 +360,7 @@ mod tests {
     fn writes_rewrite_only_the_header_and_keep_the_body() {
         let (t, dir) = tracker("write", &[("ARMT-4.md", ARMT_4)]);
         let key = TicketKey("ARMT-4".into());
-        assert!(!t.assigned_to_peer(&key).unwrap(), "unassigned is claimable");
+        assert!(t.assigned_peers(std::slice::from_ref(&key)).unwrap().is_empty(), "unassigned is claimable");
         t.transition(&key, TicketStatus::InProgress).unwrap();
         t.claim(&key).unwrap();
         t.claim(&key).unwrap(); // idempotent
@@ -358,9 +368,9 @@ mod tests {
         assert!(text.ends_with("---\n## Outcome\n\nneg works.\n"), "body kept byte for byte: {text}");
         let got = t.get(&key).unwrap();
         assert_eq!((got.status, got.assignee.as_deref()), (TicketStatus::InProgress, Some("daniel")));
-        assert!(!t.assigned_to_peer(&key).unwrap(), "assigned to me isn't a peer");
+        assert!(t.assigned_peers(std::slice::from_ref(&key)).unwrap().is_empty(), "assigned to me isn't a peer");
         let peer = FsTracker::new(&dir, "ARMT", "someone-else");
-        assert!(peer.assigned_to_peer(&key).unwrap(), "assigned to daniel is a peer to someone else");
+        assert_eq!(peer.assigned_peers(std::slice::from_ref(&key)).unwrap(), [(key.clone(), "daniel".into())], "assigned to daniel is a peer to someone else");
         let _ = std::fs::remove_dir_all(dir);
     }
 

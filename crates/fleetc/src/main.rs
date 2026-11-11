@@ -32,8 +32,8 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc status   --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] --state <state> [--last-action <text>]\n  \
      fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
      fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
-     fleetc convoy   open <KEY> [--title <text>] [--plan <file|->] [--goal <KEY-N>] [--standing] | close [<KEY>]   (the plan ties its tickets together; the goal proves its outcome, and its critical path is all it waits on; standing: fleet-wide work, never delivered; re-opening keeps what you leave out)\n  \
-     fleetc convoy   add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N>   (a ticket joins the convoy — its only one, for a hand with --hand — or an added one leaves)\n  \
+     fleetc convoy   open <KEY> [--title <text>] [--plan <file|->] [--goal <KEY-N>] [--standing] | close [<KEY>]   (the plan ties its tickets together; the goal proves its outcome, and its critical path is all it waits on; standing: fleet-wide work, never delivered; re-opening keeps what you leave out; an epic holding a teammate's open ticket is refused NOT-OURS)\n  \
+     fleetc convoy   add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N>   (a ticket joins the convoy — its only one, for a hand with --hand — or an added one leaves; only one that's yours or nobody's, assigned to you: a teammate's is refused NOT-OURS)\n  \
      fleetc convoy   list | plan [<KEY>] [--history]   (the active convoys + their open tickets | a convoy's plan; --history: each change as a diff)\n  \
      fleetc anchor   <KEY-N> [--reason <why>]   (hold everything on it: off the frontier, its cogs stopped, its MR disarmed + drafted)\n  \
      fleetc anchor   --convoy <KEY> | --cog lookout   (a convoy: its captain, so nothing new is dispatched, and every open ticket in it, as above; lookout: every one)\n  \

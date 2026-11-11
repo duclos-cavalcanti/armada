@@ -56,16 +56,6 @@ impl JiraTracker {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
-    /// assign to the operator. jira-cli's `assign` needs an exact email (no `me` keyword),
-    /// so resolve it via `jira me` first — the documented self-assign idiom.
-    fn assign_to_me(&self, key: &TicketKey) -> Result<()> {
-        let me = self.jira(&["me"])?;
-        let me = me.trim();
-        ensure!(!me.is_empty(), "jira me returned empty");
-        self.jira(&["issue", "assign", &key.0, me])?;
-        Ok(())
-    }
-
     /// One issue by key — `jira issue view --raw`, a direct fetch. Never a JQL search: Jira's search
     /// index lags a create by seconds, so a just-filed ticket isn't found by `key = X` yet.
     fn view(&self, key: &TicketKey) -> Result<serde_json::Value> {
@@ -175,22 +165,26 @@ impl Tracker for JiraTracker {
         Ok(())
     }
 
-    /// The claim gate (claim.sh step 0): JQL asks Jira itself whether a PEER owns it —
-    /// `currentUser()` resolves the operator, so no accountId plumbing. A matching row = a peer.
-    /// jira-cli exits NON-ZERO when the query matches nothing — and nothing-matches is exactly the
-    /// claimable case (no peer owns it), NOT an error. So we can't route this through `self.jira()`
-    /// (which `ensure!`s a zero exit); we read the exit + the documented "No result found" message.
-    fn assigned_to_peer(&self, key: &TicketKey) -> Result<bool> {
-        let jql = format!("key = {} AND assignee IS NOT EMPTY AND assignee != currentUser()", key.0);
-        let out = Command::new("jira")
-            .args(["issue", "list", "-p", &self.project, "-q", &jql, "--plain", "--no-headers", "--columns", "KEY"])
-            .output()?;
-        if out.status.success() {
-            return Ok(!String::from_utf8_lossy(&out.stdout).trim().is_empty());
+    /// The ownership gate (claim.sh step 0): JQL asks Jira itself which a PEER owns —
+    /// `currentUser()` resolves the operator, so no accountId plumbing. One query per hundred keys.
+    fn assigned_peers(&self, keys: &[TicketKey]) -> Result<Vec<(TicketKey, String)>> {
+        let mut peers = Vec::new();
+        for chunk in keys.chunks(100) {
+            let keys = chunk.iter().map(|k| k.0.as_str()).collect::<Vec<_>>().join(", ");
+            let jql = format!("key in ({keys}) AND assignee IS NOT EMPTY AND assignee != currentUser()");
+            peers.extend(self.all_issues(&jql)?.into_iter().map(|t| (t.key, t.assignee.unwrap_or_else(|| "a teammate".into()))));
         }
-        let err = crate::preflight::one_line(&out.stderr);
-        ensure!(err.contains("No result found"), "jira assignee check failed: {err}");
-        Ok(false) // empty match → no peer → claimable
+        Ok(peers)
+    }
+
+    /// jira-cli's `assign` needs an exact email (no `me` keyword), so resolve it via `jira me`
+    /// first — the documented self-assign idiom.
+    fn assign_to_me(&self, key: &TicketKey) -> Result<()> {
+        let me = self.jira(&["me"])?;
+        let me = me.trim();
+        ensure!(!me.is_empty(), "jira me returned empty");
+        self.jira(&["issue", "assign", &key.0, me])?;
+        Ok(())
     }
 
     fn claim(&self, key: &TicketKey) -> Result<()> {

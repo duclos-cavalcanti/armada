@@ -207,6 +207,45 @@ fn ensure_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey) -> Res
     TicketRepo::sync(ledger, &tt, &now_rfc3339())
 }
 
+/// The ownership rule: the fleet takes on only a ticket that's the operator's or nobody's. Refused
+/// `NOT-OURS` while a teammate holds it ([`held_by_peers`]). Nobody's and `assign` (it's joining a
+/// convoy): assigned to the operator now. A dispatch leaves that to the claim. Syncs it first: the
+/// gate reads it fresh.
+fn own(ledger: &Ledger, tracker: &dyn Tracker, ticket: &TicketKey, assign: bool) -> Result<()> {
+    let fresh = tracker.get(ticket)?;
+    TicketRepo::sync(ledger, &fresh, &now_rfc3339())?;
+    if let Some(held) = held_by_peers(ledger, tracker, std::slice::from_ref(&fresh))?.pop() {
+        bail!("NOT-OURS: {held} is a teammate's. The fleet takes on only a ticket that's yours or nobody's: leave it to them, or settle it with them first");
+    }
+    if assign && fresh.assignee.is_none() {
+        tracker.assign_to_me(ticket)?;
+        TicketRepo::sync(ledger, &tracker.get(ticket)?, &now_rfc3339())?;
+    }
+    Ok(())
+}
+
+/// Which of `tickets` a teammate holds, each said with who: assigned to them, or, unassigned, their
+/// MR open on it (one the fleet didn't open: no order). Assigned to the operator, it's ours, whoever
+/// else has an MR on it.
+fn held_by_peers(ledger: &Ledger, tracker: &dyn Tracker, tickets: &[domain::TrackerTicket]) -> Result<Vec<String>> {
+    if tickets.is_empty() {
+        return Ok(vec![]);
+    }
+    let peers = tracker.assigned_peers(&tickets.iter().map(|t| t.key.clone()).collect::<Vec<_>>())?;
+    let armada = ShipRepo::armada(ledger)?;
+    let mut held = Vec::new();
+    for t in tickets {
+        if let Some((_, peer)) = peers.iter().find(|(k, _)| k == &t.key) {
+            held.push(format!("{} (assigned to {peer})", t.key.0));
+        } else if t.assignee.is_none() && OrderRepo::get(ledger, &t.key)?.is_none() {
+            if let Some(mr) = armada.iter().find(|s| s.ticket.as_ref() == Some(&t.key) && s.ended_at.is_none()) {
+                held.push(format!("{} (unassigned, but !{} by {} is open on it)", t.key.0, mr.iid, mr.pilot));
+            }
+        }
+    }
+    Ok(held)
+}
+
 /// Queue the order — a hand's for a hand-marked ticket, whatever the producer asked: whether a
 /// ticket gets a hand is the ledger's call, not the captain's.
 fn dispatch(ledger: &Ledger, order: Order) -> Result<()> {
@@ -222,11 +261,10 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let _ = reply.send(res); // receiver may have hung up; nothing to do
         }
         Command::Dispatch { order, reply } => {
-            // Producer self-fetch: a lone / off-sprint ticket isn't synced, so the order FK
-            // (orders.ticket → tickets.key) would fail. Pull it from the tracker + upsert first.
-            // The worktree is NOT dispatch's job — the operating agent berths it (fleet-berth)
-            // and passes it in the order; dispatch only ensures the ledger row exists.
-            let res = ensure_ticket(ledger, tracker, &order.ticket)
+            // The ownership gate syncs the ticket first, so a lone / off-sprint one has its row
+            // (the order FK). The worktree is NOT dispatch's job — the operating agent berths it
+            // (fleet-berth) and passes it in the order.
+            let res = own(ledger, tracker, &order.ticket, false)
                 .and_then(|()| dispatch(ledger, order))
                 .map_err(|e| e.to_string());
             let _ = reply.send(res);
@@ -582,7 +620,7 @@ fn recall<H: SessionHost>(
 /// Put a ticket in a convoy — its only one (an off-sprint ticket is pulled onto the board first).
 /// Says what happened, naming the epic's convoy it left, if any.
 fn add_to_convoy(ledger: &Ledger, tracker: &dyn Tracker, convoy: &ConvoyKey, ticket: &TicketKey) -> Result<String> {
-    ensure_ticket(ledger, tracker, ticket)?;
+    own(ledger, tracker, ticket, true)?;
     Ok(match ledger.add_member(convoy, ticket, &now_rfc3339())? {
         Some(epic) => format!("{} is in convoy {} (moved from {}, its epic's)", ticket.0, convoy.0, epic.0),
         None => format!("{} is in convoy {}", ticket.0, convoy.0),
@@ -693,7 +731,16 @@ fn open_convoy(
     standing: bool,
 ) -> Result<()> {
     let now = now_rfc3339();
-    sync::sync_convoy(ledger, tracker, key, &now)?;
+    let mut open = sync::sync_convoy(ledger, tracker, key, &now)?;
+    open.retain(|t| !matches!(t.status, TicketStatus::Done | TicketStatus::Cancelled));
+    let held = held_by_peers(ledger, tracker, &open)?;
+    anyhow::ensure!(
+        held.is_empty(),
+        "NOT-OURS: convoy {} would take on what a teammate holds: {}. The fleet can't dispatch or land it, so it'd be a \
+         blocker in the convoy that we don't control: move it out of the epic, or settle it with its owner, first",
+        key.0,
+        held.join(", ")
+    );
     ledger.open(key, title, standing, &now)?;
     if let Some(plan) = plan {
         ledger.set_plan(key, Some(plan), &now)?;
@@ -1546,8 +1593,14 @@ mod tests {
             }
             Ok(())
         }
-        fn assigned_to_peer(&self, _: &TicketKey) -> Result<bool> {
-            Ok(false)
+        fn assigned_peers(&self, keys: &[TicketKey]) -> Result<Vec<(TicketKey, String)>> {
+            Ok(keys.iter().filter_map(|k| Some((k.clone(), self.get(k).ok()?.assignee.filter(|a| a != "me")?))).collect())
+        }
+        fn assign_to_me(&self, key: &TicketKey) -> Result<()> {
+            if let Some(t) = self.tickets.borrow_mut().iter_mut().find(|t| &t.key == key) {
+                t.assignee = Some("me".into());
+            }
+            Ok(())
         }
         fn claim(&self, _: &TicketKey) -> Result<()> {
             Ok(())
@@ -1604,6 +1657,25 @@ mod tests {
             self.comments.borrow_mut().push((key.clone(), body.into()));
             Ok(())
         }
+    }
+
+    #[test]
+    fn a_convoy_wont_open_on_an_epic_holding_a_teammates_ticket() {
+        let db = Ledger::in_memory().unwrap();
+        let epic = ConvoyKey("PROJ-50".into());
+        let child = |k: &str, who: Option<&str>, status| TrackerTicket { convoy: Some(epic.clone()), assignee: who.map(String::from), ..tt(k, status) };
+        let tracker = FakeTracker::new(vec![
+            child("PROJ-1", Some("me"), TicketStatus::Todo),
+            child("PROJ-2", Some("Jack"), TicketStatus::InProgress),
+            child("PROJ-3", Some("Ana"), TicketStatus::Done), // landed: history, not a blocker
+        ]);
+        let err = open_convoy(&db, &tracker, &epic, None, None, None, false).unwrap_err().to_string();
+        assert!(err.starts_with("NOT-OURS: convoy PROJ-50 would take on what a teammate holds: PROJ-2 (assigned to Jack)."), "{err}");
+        assert!(err.contains("a blocker in the convoy that we don't control"), "{err}");
+        assert!(ConvoyRepo::active(&db).unwrap().is_empty(), "not opened");
+
+        tracker.tickets.borrow_mut().retain(|t| t.key.0 != "PROJ-2"); // moved out of the epic
+        open_convoy(&db, &tracker, &epic, None, None, None, false).expect("only ours and nobody's left: it opens");
     }
 
     #[test]
@@ -2129,6 +2201,42 @@ mod tests {
         let in_view = |c: &ConvoyKey| build_convoy_view(&db, c, true).unwrap().tickets.iter().any(|t| t.key == key);
         assert!(in_view(&ours) && !in_view(&epic), "one convoy: ours");
         assert!(add_to_convoy(&db, &tracker, &ConvoyKey("PROJ-91".into()), &key).is_err(), "never two");
+    }
+
+    #[test]
+    fn a_convoy_takes_only_a_ticket_thats_ours_or_nobodys_and_makes_it_ours() {
+        let db = Ledger::in_memory().unwrap();
+        let assigned = |k: &str, who: Option<&str>| TrackerTicket { assignee: who.map(String::from), ..tt(k, TicketStatus::Todo) };
+        let tracker = FakeTracker::new(vec![
+            assigned("PROJ-1", None),
+            assigned("PROJ-2", Some("Ana")),
+            assigned("PROJ-3", None),
+            assigned("PROJ-4", Some("me")),
+        ]);
+        let convoy = ConvoyKey("PROJ-90".into());
+        let add = |k: &str| add_to_convoy(&db, &tracker, &convoy, &TicketKey(k.into())).map_err(|e| e.to_string());
+        let ally = |k: &str, iid: i64| {
+            let ticket = Some(TicketKey(k.into()));
+            let (url, target, source, pilot, created_at) = ("u".into(), "master".into(), String::new(), "edavis".into(), "t".into());
+            let ship = Ship { id: ShipId(0), ticket, iid, url, target, source, pilot, created_at, ended_at: None, swept: None, reviewed: None, rounds: 0 };
+            ShipRepo::upsert(&db, &ship).unwrap();
+        };
+        sync::sync_board(&db, &tracker, "now").unwrap();
+
+        add("PROJ-1").unwrap();
+        assert_eq!(tracker.get(&TicketKey("PROJ-1".into())).unwrap().assignee.as_deref(), Some("me"), "nobody's: now ours");
+        let err = add("PROJ-2").unwrap_err();
+        assert!(err.starts_with("NOT-OURS: PROJ-2 (assigned to Ana) is a teammate's"), "{err}");
+        ally("PROJ-3", 20);
+        let err = add("PROJ-3").unwrap_err();
+        assert!(err.starts_with("NOT-OURS: PROJ-3 (unassigned, but !20 by edavis is open on it)"), "{err}");
+        assert_eq!(tracker.get(&TicketKey("PROJ-3".into())).unwrap().assignee, None, "refused: left as it was");
+        ally("PROJ-4", 21);
+        add("PROJ-4").expect("assigned to me: ours, whoever else has an MR on it");
+        let in_view: Vec<String> = build_convoy_view(&db, &convoy, true).unwrap().tickets.into_iter().map(|t| t.key.0).collect();
+        assert_eq!(in_view, ["PROJ-1", "PROJ-4"]);
+
+        assert!(own(&db, &tracker, &TicketKey("PROJ-2".into()), false).is_err(), "a dispatch is refused too");
     }
 
     #[test]

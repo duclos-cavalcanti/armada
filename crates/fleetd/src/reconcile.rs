@@ -509,6 +509,14 @@ pub(crate) fn classify(ledger: &Ledger, ticket: &Ticket, armada: &[Ship], stacks
     if ticket.held {
         return Ok(Some(Classification::Hold));
     }
+    // A teammate builds it unclaimed (their MR is open on it, the ticket unassigned): not ours to
+    // dispatch (the ownership rule — a dispatch would be refused `NOT-OURS`).
+    if ticket.assignee.is_none()
+        && OrderRepo::get(ledger, &ticket.key)?.is_none()
+        && armada.iter().any(|s| s.ticket.as_ref() == Some(&ticket.key) && s.ended_at.is_none())
+    {
+        return Ok(None);
+    }
     // Which blockers aren't terminal yet?
     let mut pending = Vec::new();
     for b in &ticket.blocked_by {
@@ -768,8 +776,8 @@ fn spawn<T: Tracker + ?Sized, H: SessionHost>(
     // Claim gate (claim.sh step 0): never stomp a peer. If a teammate owns it, skip the spawn —
     // benign (the order stays queued; a later tick re-checks). A gate *error* is fatal (fail
     // closed: don't claim if we can't verify ownership).
-    if tracker.assigned_to_peer(&tkey)? {
-        tracing::info!("spawn {ticket}: assigned to a peer — skipping the claim (respecting it)");
+    if let Some((_, peer)) = tracker.assigned_peers(std::slice::from_ref(&tkey))?.pop() {
+        tracing::info!("spawn {ticket}: assigned to {peer} — skipping the claim (respecting it)");
         return Ok(());
     }
 
@@ -2129,7 +2137,7 @@ mod tests {
     struct FakeTracker {
         moves: RefCell<Vec<(String, TicketStatus)>>,
         claims: RefCell<Vec<String>>, // tickets claimed
-        peer: RefCell<bool>,          // what assigned_to_peer returns
+        peer: RefCell<bool>,          // whether assigned_peer names one
         fail_claim: RefCell<bool>,    // force the claim to fail (best-effort test)
         parent: RefCell<Option<TicketKey>>, // what parent_of returns
         subtasks: RefCell<Vec<TicketStatus>>, // what subtasks returns
@@ -2160,8 +2168,11 @@ mod tests {
             self.moves.borrow_mut().push((key.0.clone(), to));
             Ok(())
         }
-        fn assigned_to_peer(&self, _key: &TicketKey) -> Result<bool> {
-            Ok(*self.peer.borrow())
+        fn assigned_peers(&self, keys: &[TicketKey]) -> Result<Vec<(TicketKey, String)>> {
+            Ok(if *self.peer.borrow() { keys.iter().map(|k| (k.clone(), "a peer".into())).collect() } else { vec![] })
+        }
+        fn assign_to_me(&self, _key: &TicketKey) -> Result<()> {
+            Ok(())
         }
         fn claim(&self, key: &TicketKey) -> Result<()> {
             if *self.fail_claim.borrow() {
@@ -2614,6 +2625,23 @@ mod tests {
         // …until PROJ-1 lands: the blocker lifting is itself a change → the sweep that arms.
         ticket(&db, "PROJ-1", TicketStatus::Done, false, vec![]);
         assert_eq!(plan(&db, &[], true, &LIVE).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-2".into() }]);
+    }
+
+    #[test]
+    fn a_ticket_a_teammate_builds_unclaimed_is_off_the_frontier() {
+        let db = db();
+        ticket(&db, "PROJ-1", TicketStatus::Todo, false, vec![]);
+        let class = |db: &Ledger| {
+            let t = TicketRepo::get(db, &TicketKey("PROJ-1".into())).unwrap().unwrap();
+            classify(db, &t, &db.armada().unwrap(), true).unwrap()
+        };
+        assert_eq!(class(&db), Some(Classification::Clean));
+        ship(&db, 10, "PROJ-1", ShipState::Open); // a teammate's: no order of ours
+        assert_eq!(class(&db), None, "their MR is open on it: not ours to dispatch");
+        let mut t = TicketRepo::get(&db, &TicketKey("PROJ-1".into())).unwrap().unwrap();
+        t.assignee = Some("me".into());
+        TicketRepo::upsert(&db, &t).unwrap();
+        assert_eq!(class(&db), Some(Classification::Clean), "assigned (to us; a peer's is the dispatch gate's): the tracker decides");
     }
 
     #[test]

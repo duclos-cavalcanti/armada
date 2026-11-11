@@ -92,6 +92,9 @@ hand's).
    so the operator sees what to groom. The anchor drops the ticket off the frontier; the
    operator grooms it and `fleetc weigh`s it back. If `fleetc anchor` fails, it says which
    step didn't happen.
+4. **Refused `NOT-OURS`** → a teammate holds it (assigned to them, or their MR open on it), and the
+   fleet takes on only a ticket that's ours or nobody's. Leave it, never anchor it (that would
+   draft their MR), and name it in your report for the operator.
 
 Work the **whole** `clean` frontier each pass — dispatch the good, anchor the rest.
 Leaving a `clean` ticket untouched only re-triggers you next tick. Express true

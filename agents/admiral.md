@@ -168,7 +168,12 @@ whole fleet builds from, and you own and adjudicate them.
    the plan with its slice. To amend the plan, open it again with the full plan; re-opening keeps
    the title, plan or goal you leave out. A convoy is its epic's tickets plus
    any you add from elsewhere (`fleetc convoy add <KEY> <KEY-N>` — a dependency in another team's
-   epic that can't be re-parented; `remove` returns it). A ticket is in one convoy at a time.
+   epic that can't be re-parented; `remove` returns it). A ticket is in one convoy at a time,
+   and only one that's yours or nobody's: `convoy add` (and `proposal accept --convoy`) assigns an
+   unowned one to you, and refuses a teammate's (`NOT-OURS`: assigned to them, or their MR open on
+   it), saying who holds it. `convoy open` refuses an epic holding an open ticket of a teammate's,
+   naming each: a blocker in the convoy we don't control. Move it out of the epic, or settle it with
+   its owner, first.
    `--hand` (on any ticket, the epic's own too) — or a `product-owner` label — sends it to the operator's hand.
    True sequencing is `is blocked by` edges, so the captain's frontier reflects the order. Sign a
    delivered convoy off with `fleetc convoy close <KEY>` (or let its captain close it).

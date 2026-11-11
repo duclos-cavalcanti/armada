@@ -82,3 +82,19 @@ Accepted edge cases: understood, not fixed, each with its workaround.
   *Workaround:* rerun, or run with `TMPDIR=/tmp`.
   *Fix if it bites:* root the test project under a short path (e.g. `/tmp/fi-<pid>`), and print
   `import_into`'s error in the assertion so (2) names itself.
+
+- **Only joining a convoy and dispatching check that a ticket is ours.**
+  *Scenario:* the fleet takes on only a ticket that's yours or nobody's. A teammate holds it while
+  it's assigned to them or, unassigned, while their MR is open on it. `convoy open` (over its
+  epic's open tickets), `convoy add`, `proposal accept --convoy` and `dispatch` refuse their ticket
+  (`NOT-OURS`), and the captain's frontier skips it. Two paths don't check:
+  - A teammate who takes a ticket in an open convoy's epic later: it stays in the convoy (never
+    dispatched, but a blocker we don't control).
+  - The other verbs that write to a ticket run on a teammate's all the same: `decommission` closes
+    their MR and cancels the ticket, `recall` closes it and unassigns them, `rework` puts a worker on
+    it, `anchor` / `weigh` (`--convoy` too) draft and ready it, and `ticket edit` / `comment` /
+    `block` / `unblock` / `relate` rewrite their ticket.
+  *Workaround:* before acting on a ticket outside your convoys, check who holds it
+  (`fleetc ticket <KEY>`, and its MRs). Triage's pace check names a convoy ticket that's stuck.
+  *Fix if it bites:* put `own` (scheduler.rs) in front of each of those verbs, on the ticket acted
+  on (not a `--by` / `--to` one), and have sync flag a convoy ticket a teammate takes.
