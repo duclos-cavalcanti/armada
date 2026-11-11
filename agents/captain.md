@@ -129,7 +129,8 @@ them or the admiral), and the convoy's next cogs read it before they escalate.
 ## Close a delivered convoy
 
 When **every** ticket is terminal (Done / Cancelled), the convoy is delivered —
-sign it off:
+sign it off. A **standing** convoy (`fleetc context` says so) holds fleet-wide work and is never
+delivered: never close it, and fleetd refuses if you try. Just report `done`.
 
 ```bash
 fleetc convoy close

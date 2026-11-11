@@ -275,9 +275,10 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
     // LAUNCH a captain for an active convoy with no captain alive on it (one stood down above
     // finishes now) that has rested `captain_sleep_secs` since its last captain finished. A dumb
     // loop: the captain looks, and finding nothing, leaves. An operator-anchored convoy (its hold
-    // lives here, on the trigger source) is skipped — no relaunch while the anchor stands.
+    // lives here, on the trigger source) is skipped — no relaunch while the anchor stands. So is a
+    // standing convoy holding no open ticket: nothing to dispatch or inspect, and nothing to close.
     for convoy in &active {
-        if convoy.anchored_at.is_some() {
+        if convoy.anchored_at.is_some() || (convoy.standing && !holds_open_ticket(ledger, &convoy.key)?) {
             continue;
         }
         let has_live_captain = stood_down.contains(&&convoy.key)
@@ -634,6 +635,13 @@ fn escalated_since(ledger: &Ledger, convoy: &ConvoyKey, finished: Option<&str>) 
     Ok(false)
 }
 
+/// Some ticket of the convoy is still open: not Done or Cancelled.
+fn holds_open_ticket(ledger: &Ledger, convoy: &ConvoyKey) -> Result<bool> {
+    Ok(TicketRepo::board(ledger)?.iter().any(|t| {
+        t.convoy.as_ref() == Some(convoy) && !matches!(t.status, Some(TicketStatus::Done | TicketStatus::Cancelled))
+    }))
+}
+
 /// An RFC 3339 time, parsed: the ledger's text times vary in their fraction, so never compare them as text.
 fn instant(t: &str) -> Option<time::OffsetDateTime> {
     time::OffsetDateTime::parse(t, &time::format_description::well_known::Rfc3339).ok()
@@ -933,10 +941,10 @@ pub(crate) fn reap<T: Tracker + ?Sized, H: SessionHost>(
         tracker.transition(&tkey, TicketStatus::Done)?;
     }
 
-    // rollup_parent: the ticket is now Done; if it's a sub-task and ALL its siblings are
-    // terminal, close the empty parent container. Best-effort — a tracker hiccup or a redundant
-    // close (two last siblings reaping together) never fails the reap.
-    if let Err(e) = roll_up_parent(tracker, &tkey) {
+    // rollup_parent: the ticket is now Done; if ALL its siblings are terminal, close the parent.
+    // Best-effort — a tracker hiccup or a redundant close (two last siblings reaping together)
+    // never fails the reap.
+    if let Err(e) = roll_up_parent(ledger, tracker, &tkey) {
         tracing::warn!("reap {ticket}: parent rollup failed: {e:#}");
     }
     clear(ledger, host, project, ticket, false)
@@ -988,12 +996,16 @@ pub(crate) fn clear<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, ti
     Ok(())
 }
 
-/// converge's `rollup_parent`: a sub-task just reaped (Done); if ALL of its parent's sub-tasks are
-/// terminal, close the empty parent container (the parent carries no work of its own). A no-op for
-/// a non-sub-task (`parent_of` → None) or an Epic (`children` empty — the guard). Fully live: the
-/// completeness check must be authoritative, so it can't be cached off the sprint-scoped ledger.
-fn roll_up_parent<T: Tracker + ?Sized>(tracker: &T, child: &TicketKey) -> Result<()> {
+/// converge's `rollup_parent`: a ticket just reaped (Done); if ALL of its parent's children are
+/// terminal, close the parent — a sub-task's container, or an epic (Jira's parent of its tickets).
+/// Never a standing convoy's epic: it's never delivered. A no-op for a ticket with no parent. Fully
+/// live: the completeness check must be authoritative, so it can't be cached off the sprint-scoped
+/// ledger.
+fn roll_up_parent<T: Tracker + ?Sized>(ledger: &Ledger, tracker: &T, child: &TicketKey) -> Result<()> {
     let Some(parent) = tracker.parent_of(child)? else { return Ok(()) };
+    if ConvoyRepo::active(ledger)?.iter().any(|c| c.key.0 == parent.0 && c.standing) {
+        return Ok(());
+    }
     let subs = tracker.children(&parent)?;
     let all_done =
         !subs.is_empty() && subs.iter().all(|s| matches!(s.status, TicketStatus::Done | TicketStatus::Cancelled));
@@ -3466,6 +3478,18 @@ mod tests {
     }
 
     #[test]
+    fn reap_never_closes_a_standing_convoys_epic() {
+        let db = db();
+        db.open(&ConvoyKey("PROJ-100".into()), None, true, "t1").unwrap();
+        ticket(&db, "PROJ-101", TicketStatus::InQa, false, vec![]);
+        let tracker = FakeTracker::new();
+        *tracker.parent.borrow_mut() = Some(TicketKey("PROJ-100".into()));
+        *tracker.subtasks.borrow_mut() = vec![TicketStatus::Done];
+        reap(&db, &tracker, &FakeHost::new(), "/project", "PROJ-101").unwrap();
+        assert!(!tracker.moves.borrow().iter().any(|(k, _)| k == "PROJ-100"), "its last ticket landed: it stands");
+    }
+
+    #[test]
     fn reap_leaves_the_parent_open_while_a_sibling_is_unfinished() {
         let db = db();
         ticket(&db, "PROJ-101", TicketStatus::InQa, false, vec![]);
@@ -3487,7 +3511,7 @@ mod tests {
     #[test]
     fn launches_a_captain_on_a_convoy_never_commanded() {
         let db = db();
-        db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
+        db.open(&ConvoyKey("PROJ-100".into()), None, false, "t1").unwrap();
         convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::InProgress); // nothing to do: it looks anyway
         assert_eq!(
             plan(&db, &[], true, &Levers { captain_sleep_secs: 900, ..LIVE }).unwrap(),
@@ -3496,9 +3520,21 @@ mod tests {
     }
 
     #[test]
+    fn a_standing_convoy_wakes_a_captain_only_while_it_holds_an_open_ticket() {
+        let db = db();
+        db.open(&ConvoyKey("PROJ-100".into()), None, true, "t1").unwrap();
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty(), "empty: no one to wake");
+        convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::Done);
+        convoy_ticket(&db, "PROJ-2", "PROJ-100", TicketStatus::Cancelled);
+        assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty(), "all delivered: still no one");
+        convoy_ticket(&db, "PROJ-3", "PROJ-100", TicketStatus::Todo);
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap(), vec![Action::LaunchCaptain { convoy: "PROJ-100".into() }], "a ticket joined");
+    }
+
+    #[test]
     fn a_convoy_rests_captain_sleep_secs_after_its_last_captain_finished() {
         let db = db();
-        db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
+        db.open(&ConvoyKey("PROJ-100".into()), None, false, "t1").unwrap();
         let id = SessionRepo::start(&db, &captain_cog("PROJ-100").session).unwrap().expect("session start");
         SessionRepo::end(&db, &id, &now_rfc3339()).unwrap();
         assert!(plan(&db, &[], true, &Levers { captain_sleep_secs: 900, ..LIVE }).unwrap().is_empty(), "finished just now: resting");
@@ -3512,7 +3548,7 @@ mod tests {
     #[test]
     fn a_new_escalation_cuts_the_convoys_rest_short() {
         let db = db();
-        db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
+        db.open(&ConvoyKey("PROJ-100".into()), None, false, "t1").unwrap();
         convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::InProgress);
         let finish = |at: &str| {
             let id = SessionRepo::start(&db, &captain_cog("PROJ-100").session).unwrap().expect("session start");
@@ -3541,7 +3577,7 @@ mod tests {
     fn no_captain_launch_for_an_anchored_convoy() {
         // The operator anchored the convoy (its hold lives on the convoy row) → no captain relaunch.
         let db = db();
-        db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
+        db.open(&ConvoyKey("PROJ-100".into()), None, false, "t1").unwrap();
         ConvoyRepo::anchor(&db, &ConvoyKey("PROJ-100".into()), "t2").unwrap();
         assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty());
     }
@@ -3549,7 +3585,7 @@ mod tests {
     #[test]
     fn no_launch_when_a_captain_already_commands_the_convoy() {
         let db = db();
-        db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
+        db.open(&ConvoyKey("PROJ-100".into()), None, false, "t1").unwrap();
         convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::Todo); // work waiting
         // an alive captain already holds the convoy → no second launch.
         assert!(plan(&db, &[captain_cog("PROJ-100")], true, &LIVE).unwrap().is_empty());
@@ -3570,7 +3606,7 @@ mod tests {
         // `claude --agent` doesn't self-exit: the captain's `done` report, not a dead tmux, ends its
         // pass. Its finish starts the rest, so no relaunch in the same plan.
         let db = db();
-        db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
+        db.open(&ConvoyKey("PROJ-100".into()), None, false, "t1").unwrap();
         let id = SessionRepo::start(&db, &captain_cog("PROJ-100").session).unwrap().expect("session start");
         let cog = Cog { session: SessionRepo::get(&db, &id).unwrap().unwrap(), liveness: Liveness::Active };
         assert!(plan(&db, std::slice::from_ref(&cog), true, &LIVE).unwrap().is_empty(), "mid-pass, it holds the slot");
@@ -3582,7 +3618,7 @@ mod tests {
     fn an_escalated_captain_holds_its_convoy_for_the_operator() {
         // Escalated isn't done: it waits in its pane, neither stood down nor doubled by a relaunch.
         let db = db();
-        db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
+        db.open(&ConvoyKey("PROJ-100".into()), None, false, "t1").unwrap();
         let id = SessionRepo::start(&db, &captain_cog("PROJ-100").session).unwrap().expect("session start");
         let cog = Cog { session: SessionRepo::get(&db, &id).unwrap().unwrap(), liveness: Liveness::Active };
         report(&db, &cog, CogState::Captain(CaptainState::Escalated));
@@ -3732,7 +3768,7 @@ mod tests {
     #[test]
     fn stands_down_a_dead_captain() {
         let db = db();
-        db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
+        db.open(&ConvoyKey("PROJ-100".into()), None, false, "t1").unwrap();
         let mut cog = captain_cog("PROJ-100");
         cog.liveness = Liveness::Dead; // finished its pass (or crashed) on a still-active convoy
         assert_eq!(
@@ -3744,7 +3780,7 @@ mod tests {
     #[test]
     fn executes_launch_captain_records_a_ticketless_session_and_injects_the_convoy_env() {
         let db = db();
-        db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
+        db.open(&ConvoyKey("PROJ-100".into()), None, false, "t1").unwrap();
         convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::Todo);
         let tracker = FakeTracker::new();
         let host = FakeHost::new();
@@ -3770,7 +3806,7 @@ mod tests {
     #[test]
     fn a_captain_is_handed_the_projects_readiness_check() {
         let db = db();
-        db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
+        db.open(&ConvoyKey("PROJ-100".into()), None, false, "t1").unwrap();
         convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::Todo);
         let host = FakeHost::new();
         let levers = Levers { assess_skill: Some("assess-ticket".into()), ..LIVE };
@@ -3783,7 +3819,7 @@ mod tests {
     #[test]
     fn executes_stand_down_captain_ends_the_session_and_kills_tmux() {
         let db = db();
-        db.open(&ConvoyKey("PROJ-100".into()), None, "t1").unwrap();
+        db.open(&ConvoyKey("PROJ-100".into()), None, false, "t1").unwrap();
         convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::Todo);
         let tracker = FakeTracker::new();
         let host = FakeHost::new();

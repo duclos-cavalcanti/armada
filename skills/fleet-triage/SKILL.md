@@ -41,7 +41,8 @@ And the deadlines from the tracker: the sprint's end, and each ticket's due date
   names is redundant: weigh it, or, dispatched with its cog at the wall, `recall --weigh` it. A hold
   a convoy anchor placed ("convoy <C> anchored") goes with the convoy, never alone.
 - **Placement.** A ticket whose work another convoy's plan owns moves there (`convoy remove` /
-  `add`); a ticket in no convoy that one needs joins it; a convoy with nothing left open closes.
+  `add`); a ticket in no convoy that one needs joins it; fleet-wide work no plan owns (a CI fix)
+  joins the standing convoy; a convoy with nothing left open closes, unless it's standing.
 - **Pace.** For each convoy, its critical path (the `*` tickets in `fleetc context --convoy <C>
   --format table`) against the sprint's end and the due dates: what's stuck on it (anchored,
   escalated for long, a dead cog, waiting on a blocker that isn't moving, in another convoy too),

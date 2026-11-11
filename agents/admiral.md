@@ -172,6 +172,10 @@ whole fleet builds from, and you own and adjudicate them.
    `--hand` (on any ticket, the epic's own too) — or a `product-owner` label — sends it to the operator's hand.
    True sequencing is `is blocked by` edges, so the captain's frontier reflects the order. Sign a
    delivered convoy off with `fleetc convoy close <KEY>` (or let its captain close it).
+   Fleet-wide work no convoy's plan owns (a CI fix, a security bump) goes to the **standing**
+   convoy (`convoy open <KEY> --standing`, on a small epic of its own): its captain dispatches and
+   inspects like any other but never closes it, and it costs nothing while it's empty. Add the
+   ticket to it, rather than opening a convoy on a broad epic, which pulls in every child.
 3. **Report, cited and terse.** One recommendation per item: the issue in a sentence, the doc
    §/line + code `file:line`, the options with costs, your recommendation, and what the operator
    must *rule* vs what's mechanical to encode. Encode the mechanical now; encode a ruling once

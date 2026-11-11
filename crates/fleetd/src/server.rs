@@ -267,9 +267,9 @@ fn handle_convoy(request: &str, cmds: &Sender<Command>, open: bool) -> String {
     };
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
     let cmd = if open {
-        Command::OpenConvoy { key, title: dto.title, plan: dto.plan, goal, reply: reply_tx }
+        Command::OpenConvoy { key, title: dto.title, plan: dto.plan, goal, standing: dto.standing, reply: reply_tx }
     } else {
-        Command::CloseConvoy { key, reply: reply_tx }
+        Command::CloseConvoy { key, captain: dto.captain, reply: reply_tx }
     };
     if cmds.send(cmd).is_err() {
         return http_response("503 Service Unavailable", "text/plain", "writer unavailable");

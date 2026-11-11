@@ -299,6 +299,8 @@ const MIGRATIONS: &[&str] = &[
         WHERE c.created_at < convoys.created_at OR (c.created_at = convoys.created_at AND c.key <= convoys.key));",
     // v12: each convoy's goal, the ticket whose Done proves its outcome (its critical path's end).
     "ALTER TABLE convoys ADD COLUMN goal TEXT REFERENCES tickets(key);",
+    // v13: standing convoys, fleet-wide work never delivered.
+    "ALTER TABLE convoys ADD COLUMN standing INTEGER NOT NULL DEFAULT 0 CHECK (standing IN (0, 1));",
 ];
 
 /// The ledger's schema version (SQLite `user_version`): one past its last migration.
@@ -793,7 +795,7 @@ mod tests {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; \
-             ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; PRAGMA user_version = 1;",
+             ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; PRAGMA user_version = 1;",
         )
         .unwrap();
         drop(conn);
@@ -817,7 +819,7 @@ mod tests {
         drop(Ledger::open(&path).unwrap());
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal;
+            "DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing;
              INSERT INTO convoys(key, created_at) VALUES ('PROJ-9', 't2'), ('PROJ-5', 't1'), ('PROJ-7', 't3');
              PRAGMA user_version = 10;",
         )
@@ -826,7 +828,7 @@ mod tests {
         let db = Ledger::open(&path).unwrap();
         let numbered: Vec<_> = (1..=3).map(|n| db.convoy_by_no(n).unwrap().unwrap().0).collect();
         assert_eq!(numbered, ["PROJ-5", "PROJ-9", "PROJ-7"], "by the order they opened");
-        db.open(&ConvoyKey("PROJ-1".into()), None, "t4").unwrap();
+        db.open(&ConvoyKey("PROJ-1".into()), None, false, "t4").unwrap();
         assert_eq!(db.convoy_by_no(4).unwrap(), Some(ConvoyKey("PROJ-1".into())));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -842,7 +844,7 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO convoys(key, created_at) VALUES ('PROJ-100', 't1');
              INSERT INTO convoy_plans(convoy, body, updated_at) VALUES ('PROJ-100', 'ship the seed', 't2');
-             ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; PRAGMA user_version = 7;",
+             ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; PRAGMA user_version = 7;",
         )
         .unwrap();
         drop(conn);
@@ -869,7 +871,7 @@ mod tests {
         // Back to v4: the same rebuild, without the admiral kind.
         let v4 = MIGRATIONS[3].replace(",'admiral'", ""); // v5's rebuild
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; PRAGMA user_version = 4;"))
+        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; PRAGMA user_version = 4;"))
             .unwrap();
         drop(conn);
 
@@ -1092,7 +1094,7 @@ mod tests {
     #[test]
     fn convoy_open_is_active_and_close_deactivates() {
         let db = Ledger::in_memory().unwrap();
-        db.open(&ConvoyKey("PROJ-100".into()), Some("auth"), "t1").unwrap();
+        db.open(&ConvoyKey("PROJ-100".into()), Some("auth"), false, "t1").unwrap();
         let active = db.active().unwrap();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].key, ConvoyKey("PROJ-100".into()));
@@ -1140,7 +1142,7 @@ mod tests {
     fn a_convoy_plan_is_set_replaced_and_cleared_and_never_blank() {
         let db = Ledger::in_memory().unwrap();
         let k = ConvoyKey("PROJ-100".into());
-        db.open(&k, None, "t1").unwrap();
+        db.open(&k, None, false, "t1").unwrap();
         assert_eq!(db.plan(&k).unwrap(), None, "no plan until one is given");
         db.set_plan(&k, Some("ship the seed"), "t2").unwrap();
         db.set_plan(&k, Some("ship the seed, then the quorums"), "t3").unwrap();
@@ -1154,7 +1156,7 @@ mod tests {
     fn a_convoy_plan_keeps_its_history_and_an_unchanged_one_logs_nothing() {
         let db = Ledger::in_memory().unwrap();
         let k = ConvoyKey("PROJ-100".into());
-        db.open(&k, None, "t1").unwrap();
+        db.open(&k, None, false, "t1").unwrap();
         db.set_plan(&k, Some("ship the seed"), "t2").unwrap();
         db.set_plan(&k, Some("ship the seed"), "t3").unwrap(); // a re-open with the same plan
         db.set_plan(&k, Some("ship the seed, then the quorums"), "t4").unwrap();
@@ -1188,7 +1190,7 @@ mod tests {
             db.sync(&ticket(key, epic, status), "t").unwrap();
         }
         let (k, goal) = (ConvoyKey("PROJ-50".into()), TicketKey("PROJ-1".into()));
-        db.open(&k, None, "t1").unwrap();
+        db.open(&k, None, false, "t1").unwrap();
         assert_eq!(db.goal(&k).unwrap(), None, "no goal until one is set");
         assert!(db.set_goal(&k, &TicketKey("PROJ-3".into()), "t2").is_err(), "another convoy's ticket");
         assert!(db.set_goal(&k, &TicketKey("PROJ-2".into()), "t2").is_err(), "a Cancelled ticket proves nothing");
@@ -1214,9 +1216,9 @@ mod tests {
     fn convoy_reopen_clears_ended_at() {
         let db = Ledger::in_memory().unwrap();
         let k = ConvoyKey("PROJ-100".into());
-        db.open(&k, None, "t1").unwrap();
+        db.open(&k, None, false, "t1").unwrap();
         db.close(&k, "t2").unwrap();
-        db.open(&k, Some("revived"), "t3").unwrap();
+        db.open(&k, Some("revived"), false, "t3").unwrap();
         let active = db.active().unwrap();
         assert_eq!(active.len(), 1, "re-opening clears ended_at");
         assert_eq!(active[0].title.as_deref(), Some("revived"));
@@ -1226,7 +1228,7 @@ mod tests {
     fn convoy_open_and_close_log_cdc_events_and_a_noop_close_logs_nothing() {
         let db = Ledger::in_memory().unwrap();
         let k = ConvoyKey("PROJ-100".into());
-        db.open(&k, None, "t1").unwrap();
+        db.open(&k, None, false, "t1").unwrap();
         db.close(&k, "t2").unwrap();
         db.close(&k, "t3").unwrap(); // already closed → no-op
         let kinds: Vec<_> = db.since(Seq(0)).unwrap().into_iter().map(|e| e.kind).collect();
@@ -1612,6 +1614,10 @@ fn row_to_convoy(r: &rusqlite::Row) -> rusqlite::Result<Convoy> {
             Ok(i) => r.get::<_, Option<String>>(i)?.map(ticket_key).transpose()?,
             Err(_) => None,
         },
+        standing: match r.as_ref().column_index("standing") {
+            Ok(i) => r.get(i)?,
+            Err(_) => false,
+        },
     })
 }
 
@@ -1662,15 +1668,17 @@ impl ConvoyRepo for Ledger {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    fn open(&self, key: &ConvoyKey, title: Option<&str>, now: &str) -> Result<()> {
-        // Idempotent create; re-opening a closed convoy clears ended_at and keeps its number, and its
-        // title unless a new one is given. A new one takes the next number. +ConvoyOpened (CDC).
+    fn open(&self, key: &ConvoyKey, title: Option<&str>, standing: bool, now: &str) -> Result<()> {
+        // Idempotent create; re-opening a closed convoy clears ended_at and keeps its number, its
+        // title unless a new one is given, and its standing. A new one takes the next number.
+        // +ConvoyOpened (CDC).
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO convoys(key, title, created_at, ended_at, no)
-             VALUES (?1, ?2, ?3, NULL, (SELECT COALESCE(MAX(no), 0) + 1 FROM convoys))
-             ON CONFLICT(key) DO UPDATE SET title = COALESCE(excluded.title, convoys.title), ended_at = NULL",
-            params![key.0, title, now],
+            "INSERT INTO convoys(key, title, created_at, ended_at, no, standing)
+             VALUES (?1, ?2, ?3, NULL, (SELECT COALESCE(MAX(no), 0) + 1 FROM convoys), ?4)
+             ON CONFLICT(key) DO UPDATE SET title = COALESCE(excluded.title, convoys.title), ended_at = NULL,
+                standing = MAX(convoys.standing, excluded.standing)",
+            params![key.0, title, now, standing],
         )?;
         tx.execute(
             "INSERT INTO events(created_at, kind, entity_kind, entity_ref, payload_json)
@@ -1680,7 +1688,7 @@ impl ConvoyRepo for Ledger {
                 EventKind::ConvoyOpened.as_str(),
                 EntityKind::Convoy.as_str(),
                 key.0,
-                serde_json::to_string(&serde_json::json!({ "title": title }))?,
+                serde_json::to_string(&serde_json::json!({ "title": title, "standing": standing }))?,
             ],
         )?;
         tx.commit()?;
@@ -2392,7 +2400,7 @@ mod repo_tests {
             format!("INSERT INTO inspections(session_id, reported_at, verdict, body, inspected_at) VALUES ({}, '{at}', '{v}', 'b', '{at}9');", s.0)
         };
         conn.execute_batch(&format!(
-            "DELETE FROM cases; DROP INDEX one_open_case; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; DROP TABLE cases;
+            "DELETE FROM cases; DROP INDEX one_open_case; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; DROP TABLE cases;
              {} {} {} {} {} {} {}
              INSERT INTO reports(session_id, state, last_action, reported_at) VALUES ({}, 'escalated', 'Y?', 't3'), ({}, 'escalated', 'Z?', 't4');
              PRAGMA user_version = 8;",
@@ -2418,16 +2426,16 @@ mod repo_tests {
     fn a_convoy_takes_the_next_number_and_keeps_it_when_reopened() {
         let db = Ledger::in_memory().unwrap();
         let (a, b) = (ConvoyKey("PROJ-100".into()), ConvoyKey("PROJ-200".into()));
-        db.open(&a, None, "t1").unwrap();
-        db.open(&b, Some("Second"), "t2").unwrap();
+        db.open(&a, None, false, "t1").unwrap();
+        db.open(&b, Some("Second"), false, "t2").unwrap();
         db.close(&a, "t3").unwrap();
-        db.open(&a, Some("Again"), "t4").unwrap();
+        db.open(&a, Some("Again"), false, "t4").unwrap();
         let no = |k: &ConvoyKey| db.active().unwrap().into_iter().find(|c| &c.key == k).unwrap().no;
         assert_eq!((no(&a), no(&b)), (1, 2), "reopened, it keeps #1");
         assert_eq!((db.convoy_by_no(2).unwrap(), db.convoy_by_no(3).unwrap()), (Some(b), None));
-        db.open(&ConvoyKey("PROJ-300".into()), None, "t5").unwrap();
+        db.open(&ConvoyKey("PROJ-300".into()), None, false, "t5").unwrap();
         assert_eq!(db.convoy_by_no(3).unwrap(), Some(ConvoyKey("PROJ-300".into())), "never reused: the next is #3");
-        db.open(&ConvoyKey("PROJ-050".into()), None, "t6").unwrap();
+        db.open(&ConvoyKey("PROJ-050".into()), None, false, "t6").unwrap();
         let order: Vec<i64> = db.active().unwrap().iter().map(|c| c.no).collect();
         assert_eq!(order, [1, 2, 3, 4], "listed by number, not by key");
     }

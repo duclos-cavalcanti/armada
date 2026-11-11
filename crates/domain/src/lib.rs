@@ -291,6 +291,10 @@ pub struct Convoy {
     /// is the goal and every ticket of the convoy it waits on ([`upstream`]); `None`: no path.
     #[serde(default)]
     pub goal: Option<TicketKey>,
+    /// Standing (`convoy open --standing`): fleet-wide work, never delivered. Its captain never closes
+    /// it, and fleetd wakes none while it holds no open ticket.
+    #[serde(default)]
+    pub standing: bool,
 }
 
 /// The goal and every ticket it waits on, through the `board`'s blocker edges, whatever their
@@ -347,6 +351,9 @@ pub struct ConvoyView {
     /// The ticket whose Done proves the outcome; `None`: no goal, so no critical path.
     #[serde(default)]
     pub goal: Option<TicketKey>,
+    /// Never delivered: the captain doesn't close it (`Convoy::standing`).
+    #[serde(default)]
+    pub standing: bool,
     pub tickets: Vec<ConvoyTicketView>,
 }
 

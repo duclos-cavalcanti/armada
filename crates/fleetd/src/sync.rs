@@ -469,7 +469,7 @@ mod tests {
         sync_convoy(&db, &FakeTracker(vec![], off), &epic, "now").unwrap();
         let six = TicketRepo::get(&db, &TicketKey("PROJ-6".into())).unwrap().unwrap();
         assert_eq!(six.blocked_by, vec![TicketKey("PROJ-7".into())], "its blocker came in first");
-        db.open(&epic, None, "now").unwrap();
+        db.open(&epic, None, false, "now").unwrap();
 
         let off = vec![child("PROJ-5", TicketStatus::Done, vec![]), child("PROJ-6", TicketStatus::Todo, vec!["PROJ-7"]), tt("PROJ-7", TicketStatus::InQa)];
         sync_board(&db, &FakeTracker(vec![], off), "later").unwrap();

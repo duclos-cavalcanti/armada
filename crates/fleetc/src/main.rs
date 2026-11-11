@@ -32,7 +32,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc status   --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] --state <state> [--last-action <text>]\n  \
      fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
      fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
-     fleetc convoy   open <KEY> [--title <text>] [--plan <file|->] [--goal <KEY-N>] | close [<KEY>]   (the plan ties its tickets together; the goal proves its outcome, and its critical path is all it waits on; re-opening keeps what you leave out)\n  \
+     fleetc convoy   open <KEY> [--title <text>] [--plan <file|->] [--goal <KEY-N>] [--standing] | close [<KEY>]   (the plan ties its tickets together; the goal proves its outcome, and its critical path is all it waits on; standing: fleet-wide work, never delivered; re-opening keeps what you leave out)\n  \
      fleetc convoy   add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N>   (a ticket joins the convoy — its only one, for a hand with --hand — or an added one leaves)\n  \
      fleetc convoy   list | plan [<KEY>] [--history]   (the active convoys + their open tickets | a convoy's plan; --history: each change as a diff)\n  \
      fleetc anchor   <KEY-N> [--reason <why>]   (hold everything on it: off the frontier, its cogs stopped, its MR disarmed + drafted)\n  \
@@ -244,15 +244,16 @@ fn hand(args: &[String]) -> Result<()> {
     submit("/hand", &wire::HandLaunch { worktree_path })
 }
 
-/// `fleetc convoy open <KEY> [--title <t>] [--plan <file|->] [--goal <KEY-N>]` — the operator opens a
-/// convoy (→ a captain gets staffed). `fleetc convoy close <KEY>` — the captain's "all delivered" sign-off (→ reconcile
-/// reaps the captain next tick). `fleetc convoy add|remove <KEY> <KEY-N>` — a ticket joins the
+/// `fleetc convoy open <KEY> [--title <t>] [--plan <file|->] [--goal <KEY-N>] [--standing]` — the operator
+/// opens a convoy (→ a captain gets staffed); `--standing`: one for fleet-wide work, never delivered.
+/// `fleetc convoy close <KEY>` — the captain's "all delivered" sign-off (→ reconcile reaps the captain
+/// next tick), or the operator retiring a standing one. `fleetc convoy add|remove <KEY> <KEY-N>` — a ticket joins the
 /// convoy beyond its epic's children (one convoy per ticket), or an added one leaves; `add --hand`
 /// marks it for a hand (without: for a worker).
 fn convoy(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("open") => {
-            let (mut key, mut title, mut plan, mut goal) = (None, None, None, None);
+            let (mut key, mut title, mut plan, mut goal, mut standing) = (None, None, None, None, false);
             let mut it = args[1..].iter();
             while let Some(a) = it.next() {
                 let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{a} needs a value"));
@@ -260,16 +261,18 @@ fn convoy(args: &[String]) -> Result<()> {
                     "--title" => title = Some(take()?),
                     "--plan" => plan = Some(plan_text(&take()?)?),
                     "--goal" => goal = Some(ticket_key(&take()?, "convoy open --goal")?),
+                    "--standing" => standing = true,
                     other => key = Some(other.to_string()),
                 }
             }
             let key = convoy_key(&key.ok_or_else(|| anyhow!("convoy open needs <KEY>"))?, "convoy open")?;
-            submit("/convoy-open", &wire::ConvoyCmd { key, title, plan, goal })
+            submit("/convoy-open", &wire::ConvoyCmd { key, title, plan, goal, standing, captain: false })
         }
         Some("close") => {
             let key = args.get(1).cloned().or_else(|| own("FLEET_CONVOY")).ok_or_else(|| anyhow!("convoy close needs <KEY>"))?;
             let key = convoy_key(&key, "convoy close")?;
-            submit("/convoy-close", &wire::ConvoyCmd { key, title: None, plan: None, goal: None })
+            let captain = captain_convoy().is_some();
+            submit("/convoy-close", &wire::ConvoyCmd { key, title: None, plan: None, goal: None, standing: false, captain })
         }
         Some(verb @ ("add" | "remove")) => {
             let hand = verb == "add" && args.iter().any(|a| a == "--hand");
@@ -285,7 +288,7 @@ fn convoy(args: &[String]) -> Result<()> {
             let key = args[1..].iter().find(|a| *a != "--history").cloned().or_else(|| own("FLEET_CONVOY"));
             convoy_plan(&convoy_key(&key.ok_or_else(|| anyhow!("convoy plan needs <KEY>"))?, "convoy plan")?, history)
         }
-        _ => bail!("usage: fleetc convoy open <KEY> [--title <text>] [--plan <file|->] [--goal <KEY-N>] | close [<KEY>] | add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N> | list | plan [<KEY>] [--history]"),
+        _ => bail!("usage: fleetc convoy open <KEY> [--title <text>] [--plan <file|->] [--goal <KEY-N>] [--standing] | close [<KEY>] | add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N> | list | plan [<KEY>] [--history]"),
     }
 }
 
@@ -305,7 +308,8 @@ fn convoy_list() -> Result<()> {
                     (t.key.0.clone(), t.status.map_or("-", |s| s.as_str()).to_string(), branch, t.title.clone().unwrap_or_default())
                 })
                 .collect();
-            (c.no, c.key.0, c.title.unwrap_or_default(), tickets)
+            let title = c.title.unwrap_or_default();
+            (c.no, c.key.0, if c.standing { format!("{title} (standing)") } else { title }, tickets)
         })
         .collect();
     print!("{}", render_convoy_list(&convoys));
@@ -798,6 +802,9 @@ fn render_convoy_table(json: &str) -> Result<String> {
         }
         None => "no goal: no critical path\n".into(),
     };
+    if v["standing"] == true {
+        out.insert_str(0, "standing: fleet-wide work, never delivered — never close it\n");
+    }
     out += &format!("{:<12} {:<12} {:<8} {:<10} {:<8} {:<8} {}\n", "TICKET", "STATUS", "CLASS", "DISPATCH", "COG", "SHIP", "WAITING");
     for t in tickets {
         out += &format!(
@@ -1904,7 +1911,7 @@ mod tests {
         let export = root.join("snapshot.db");
         ledger::snapshot(&p.ledger(), &export.to_string_lossy()).unwrap();
         let v1 = "ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; \
-                  ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; PRAGMA user_version = 1;";
+                  ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; PRAGMA user_version = 1;";
         assert!(std::process::Command::new("sqlite3").arg(&export).arg(v1).status().unwrap().success());
 
         import_into(&p, &export).unwrap();
@@ -2044,6 +2051,8 @@ mod tests {
         assert!(out.contains("\nPROJ-1*      done") && out.contains("\nPROJ-3       todo"), "{out}");
         let none = render_convoy_table(r#"{"convoy":"PROJ-100","tickets":[]}"#).unwrap();
         assert!(none.starts_with("no goal: no critical path\n"), "{none}");
+        let standing = render_convoy_table(r#"{"convoy":"PROJ-100","standing":true,"tickets":[]}"#).unwrap();
+        assert!(standing.starts_with("standing: fleet-wide work, never delivered — never close it\nno goal"), "{standing}");
     }
 
     #[test]

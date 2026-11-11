@@ -38,8 +38,9 @@ pub struct DispatchOrder {
 }
 
 /// A convoy open/close command as it travels the wire. `open` carries an optional `title`, `plan`
-/// (its text; none = no plan) and `goal` (a ticket key; none = unchanged); `close` ignores them.
-/// The verb is the route (`/convoy-open` vs `/convoy-close`).
+/// (its text; none = no plan), `goal` (a ticket key; none = unchanged) and `standing` (makes it
+/// standing; false = unchanged); `close` carries only `captain`. The verb is the route
+/// (`/convoy-open` vs `/convoy-close`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConvoyCmd {
     pub key: String,
@@ -49,6 +50,11 @@ pub struct ConvoyCmd {
     pub plan: Option<String>,
     #[serde(default)]
     pub goal: Option<String>,
+    #[serde(default)]
+    pub standing: bool,
+    /// Sent by its captain: a close it signs off, refused on a standing convoy.
+    #[serde(default)]
+    pub captain: bool,
 }
 
 /// Add a ticket to a convoy, or take an added one out (`POST /convoy-add`, `/convoy-remove`;
