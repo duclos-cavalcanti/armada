@@ -13,7 +13,8 @@
 # last line on stderr, in red.
 #
 # The keys are fixed, never "smart": enter switches to the row's tmux session (or fails),
-# m opens the MR, t opens the ticket, e switches to the ticket's admiral, a convenes one to investigate.
+# m opens the MR, t opens the ticket, e switches to the ticket's admiral, a convenes one: to
+# investigate a ticket, or to take a look at a convoy.
 #
 # Row-field contract per coordinate (coord + key are stripped, so $1 is the first
 # field — these positions match the dashboard's `focused_action()`):
@@ -47,24 +48,31 @@ launch_admiral() {
     tmux switch-client -t "=admiral-$1"
 }
 
-# Convene an admiral to investigate a ticket that has no escalation. It opens in a window of the
-# operator's own session, named after the ticket. fleetd only convenes `admiral-<KEY>` sessions,
-# so this window never blocks an escalation's admiral. If one already sits, the launch is refused.
-# Like fleetd's, it runs in the checkout with the ticket's worktree as `--add-dir`.
+# Convene an admiral, told <prompt>, in a window of the operator's own session named <key>: in the
+# checkout, like fleetd's, with <dir> as `--add-dir` when there is one. fleetd only convenes
+# `admiral-<KEY>` sessions, so this window never blocks an escalation's admiral. One already open on
+# <key> is switched to instead.
+convene() {
+    local key="$1" prompt="$2" dir="${3:-}" checkout cmd
+    if tmux select-window -t ":=$key" 2>/dev/null; then
+        echo "an admiral is already on $key: switched to its window"
+        return
+    fi
+    checkout="$(fleet project)" || fail "fleetd unreachable: no checkout to open the admiral in"
+    cmd="claude --agent admiral"
+    [ -z "$dir" ] || [ ! -d "$dir" ] || cmd+=" --add-dir $(printf %q "$dir")"
+    tmux new-window -n "$key" -c "$checkout" "$cmd -- $(printf %q "$prompt")" # `--`: --add-dir takes a list
+    echo "convened an admiral on $key (window $key)"
+}
+
+# Investigate a ticket that has no escalation (one that has sits with its own admiral), its worktree
+# beside the checkout.
 investigate() {
     [ -n "$1" ] || fail "no ticket on this row"
     ! tmux has-session -t "=admiral-$1" 2>/dev/null || fail "an admiral already sits on $1 (its escalation): e switches to it"
-    if tmux select-window -t ":=$1" 2>/dev/null; then
-        echo "an admiral is already investigating $1: switched to its window"
-        return
-    fi
-    local checkout wt cmd
-    checkout="$(fleet project)" || fail "fleetd unreachable: no checkout to open the admiral in"
+    local wt
     wt="$(fleet packet "$1" 2>/dev/null | jq -r '.order.worktree_path // empty')" || wt=
-    cmd="claude --agent admiral"
-    [ -z "$wt" ] || [ ! -d "$wt" ] || cmd+=" --add-dir $(printf %q "$wt")"
-    tmux new-window -n "$1" -c "$checkout" "$cmd -- 'Investigate $1.'" # `--`: --add-dir takes a list
-    echo "convened an admiral to investigate $1 (window $1)"
+    convene "$1" "Investigate $1." "$wt"
 }
 
 launch_browser() { open "$1"; }
@@ -92,6 +100,7 @@ main() {
         # ---- Fleet · convoys ----------------------------------------------
         fleet/convoys/enter) launch_tmux "${3:-}" "convoy ${1:-} has no captain" ;;
         fleet/convoys/t) launch_ticket "${1:-}" ;;
+        fleet/convoys/a) [ -n "${1:-}" ] || fail "no convoy on this row"; convene "$1" "Let's take a look at convoy $1." ;;
 
         # ---- Fleet · proposals ↔ anchored (an h/l pair; $1 tells them apart) --------
         # enter reads a proposal; a/d settle it; t opens an anchored ticket, w weighs it.

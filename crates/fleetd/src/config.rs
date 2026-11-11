@@ -42,7 +42,7 @@ pub struct Config {
     pub review_skill: Option<String>,
     /// The project's own grooming skill (its name, e.g. `groom-ticket`, in the checkout's
     /// `.claude/skills/`), which an admiral runs on each ticket it grooms. Unset = the kit's
-    /// `/fleet-ready-done` alone. `make groom` hands it over too.
+    /// `/fleet-ready-done` alone.
     pub groom_skill: Option<String>,
     /// The project's own readiness check (its name, e.g. `assess-ticket`): read-only, run on a ticket
     /// before it's dispatched (the captain) and when it's groomed (`/fleet-groom-convoy`), so Ready

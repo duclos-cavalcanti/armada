@@ -47,7 +47,7 @@ const HELP: &[(&str, &str)] = &[
 
 /// Each pane's keys, acting on its focused row (`handler.sh` maps them). The pane titles name none.
 const PANE_KEYS: &[(&str, &str)] = &[
-    ("Convoys", "enter its captain · t its epic"),
+    ("Convoys", "enter its captain · t its epic · a admiral"),
     ("Proposals", "enter read it · a accept · d drop"),
     ("Anchored", "t its ticket · w weigh it"),
     ("Dispatch", "t its ticket"),
@@ -63,7 +63,7 @@ fn render_help(f: &mut Frame) {
     let lines: Vec<Line> = HELP
         .iter()
         .map(|(k, what)| row(k, what))
-        .chain([Line::from(""), Line::from(Span::styled(" per pane  (e: switch to the admiral on its escalation · a: convene one to investigate it)", Style::default().add_modifier(Modifier::BOLD)))])
+        .chain([Line::from(""), Line::from(Span::styled(" per pane  (e: switch to the admiral on its escalation · a: convene one on it)", Style::default().add_modifier(Modifier::BOLD)))])
         .chain(PANE_KEYS.iter().map(|(pane, keys)| row(pane, keys)))
         .collect();
     let area = f.area();
