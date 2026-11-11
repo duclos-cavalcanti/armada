@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 # report.sh — render the fleet's spend as one self-contained HTML dashboard.
-#   usage: report.sh <project-dir> [--since <RFC3339|YYYY-MM-DD>] [<out.html>]
-# Reads only: the project's telemetry DB and ledger, read-only. Prints the dashboard's path, then
+#   usage: report.sh <project-dir> [--since <RFC3339|YYYY-MM-DD|all>] [<out.html>]
+# The window opens on the current UTC month's first day, unless --since moves it (`all`: the whole
+# record). Reads only: the project's telemetry DB and ledger, read-only. Prints the dashboard's path, then
 # its headline figures as JSON.
 set -euo pipefail
 
 die() { echo "report.sh: $*" >&2; exit 1; }
 
 main() {
-  [[ $# -ge 1 ]] || die "usage: report.sh <project-dir> [--since <RFC3339|YYYY-MM-DD>] [<out.html>]"
-  local proj=$1 since="" out="" here fleet data
+  [[ $# -ge 1 ]] || die "usage: report.sh <project-dir> [--since <RFC3339|YYYY-MM-DD|all>] [<out.html>]"
+  local proj=$1 since out="" here fleet data
+  since=$(date -u +%Y-%m-01)
   shift
   while [[ $# -gt 0 ]]; do
     case $1 in
-      --since) [[ $# -ge 2 ]] || die "--since needs a value"; since=$2; shift 2 ;;
+      --since) [[ $# -ge 2 ]] || die "--since needs a value"; since=$2; [[ $since != all ]] || since=""; shift 2 ;;
       *) out=$1; shift ;;
     esac
   done

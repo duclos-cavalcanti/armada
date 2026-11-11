@@ -3,7 +3,7 @@ description: >-
   Report the fleet's spend as one self-contained HTML dashboard, from its telemetry: the total, the
   last 24 h and 7 days, the cost per Done ticket, the cache hit rate, and USD by day, role (with its
   subagents' share), convoy, ticket and model. Read-only. For the shipwright, on the operator's order.
-argument-hint: "[projects/<p>] [--since <date>]"
+argument-hint: "[projects/<p>] [--since <date|all>]"
 allowed-tools: Bash(${CLAUDE_SKILL_DIR}/scripts/report.sh *)
 ---
 
@@ -15,8 +15,10 @@ One page on what the fleet has spent, from the telemetry fleetd collects off eve
 ## Run
 
 ```bash
-${CLAUDE_SKILL_DIR}/scripts/report.sh projects/<p> [--since <YYYY-MM-DD|RFC3339>] [<out.html>]
+${CLAUDE_SKILL_DIR}/scripts/report.sh projects/<p> [--since <YYYY-MM-DD|RFC3339|all>] [<out.html>]
 ```
+
+The window opens on the first of the current month (UTC). `--since` moves it to another date, and `--since all` covers the whole record.
 
 It prints the page's path (default `projects/<p>/exports/fleet-spend_<UTC date>.html`; a second
 run that day replaces it), then the headline figures as JSON. Open the page (`open <path>`).
