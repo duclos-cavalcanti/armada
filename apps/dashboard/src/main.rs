@@ -152,6 +152,8 @@ pub struct App {
     /// What the dashboard last said back (an action's reply, a yank's) and when: `ui` boxes it low
     /// over the body for a few seconds. Set only by `notify`.
     pub notice: Option<(action::Reply, Instant)>,
+    /// The failing health check last said (its time), so `notify` says each one once.
+    health_said: Option<String>,
     /// Where the action handler's replies arrive from its background thread.
     replies: (std::sync::mpsc::Sender<action::Reply>, std::sync::mpsc::Receiver<action::Reply>),
     /// The key help popup; `?` toggles it.
@@ -174,6 +176,7 @@ impl App {
             cursors: [0; Pane::COUNT],
             swapped: [false; Pane::COUNT],
             notice: None,
+            health_said: None,
             replies: std::sync::mpsc::channel(),
             help: false,
             yank_requested: None,
@@ -299,9 +302,21 @@ impl App {
         Some((pane.coordinate().to_string(), fields))
     }
 
-    /// Say something back to the operator: every reply the dashboard shows comes through here.
+    /// Say something back to the operator: every reply and error the dashboard shows comes through
+    /// here, on one line.
     fn notify(&mut self, said: action::Reply) {
-        self.notice = Some((said, Instant::now()));
+        let one_line = |s: String| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        self.notice = Some((said.map(one_line).map_err(one_line), Instant::now()));
+    }
+
+    /// Say a newly failed health check: it holds the lookouts until it passes (the Health tab stays red).
+    fn notify_health(&mut self) {
+        let Some(check) = &self.fleet.health else { return };
+        let Some(Err(why)) = ui::health(&self.fleet.health) else { return };
+        if self.health_said.as_ref() != Some(&check.created_at) {
+            self.health_said = Some(check.created_at.clone());
+            self.notify(Err(format!("health: {why} · lookouts held")));
+        }
     }
 
     fn move_active_cursor(&mut self, delta: isize) {
@@ -424,6 +439,7 @@ impl App {
     fn refresh(&mut self, force: bool) {
         if force || self.last_refresh.elapsed() >= Duration::from_secs(1) {
             self.fleet = Fleet::load(&self.project);
+            self.notify_health();
             self.last_refresh = Instant::now();
             for tab in TabId::all() {
                 for &pane in tab.panes() {

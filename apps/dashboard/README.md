@@ -46,8 +46,8 @@ Cycle with `Tab` / `S-Tab`:
   the title says whether fleetd is up. The footer flags a down fleetd from every tab.
 
 The **Health** tab's name is the health light: green while fleetd's last health check passed,
-yellow with a warning, red on a failure, when the footer says why and no lookout launches until the
-check passes. The tab strip's title is fleetd's mode as its last reconcile pass ran:
+yellow with a warning, red on a failure, when the notice says why (once) and no lookout launches
+until the check passes. The tab strip's title is fleetd's mode as its last reconcile pass ran:
 `dry_run=true` in red (it only plans), `dry_run=false` in green.
 
 ## Keys
@@ -73,8 +73,8 @@ check passes. The tab strip's title is fleetd's mode as its last reconcile pass 
 The pane titles name no keys: `?` lists the keys that work everywhere, then each pane's.
 
 The keys are fixed, never "smart": `enter` on a row whose session is down (or has none) opens
-nothing else — it fails. An action's reply, and a yank's, shows boxed at the bottom right for a few
-seconds, red on a failure.
+nothing else — it fails. An action's reply, a yank's, and a failed health check show boxed at the
+bottom right for a few seconds, on one line, red on a failure.
 
 ## Layout
 

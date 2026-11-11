@@ -148,7 +148,10 @@ fn git(checkout: &str) -> Vec<HealthCheck> {
 
     let about = "the checkout is on origin's default branch, fast-forwarded";
     if out.iter().all(|c| c.status == HealthStatus::Ok) {
-        out.push(verdict("Git", "follows-origin", about, HealthStatus::Fail, follow_origin(checkout)));
+        out.push(match follow_origin(checkout) {
+            Some((status, why)) => check("Git", "follows-origin", about, status, Some(why)),
+            None => check("Git", "follows-origin", about, HealthStatus::Ok, None),
+        });
     } else {
         // Only a guarded checkout with clean settings is moved.
         out.push(check("Git", "follows-origin", about, HealthStatus::Unset, Some("not run until the git checks above pass".into())));
@@ -157,28 +160,30 @@ fn git(checkout: &str) -> Vec<HealthCheck> {
 }
 
 /// Fast-forward the checkout to origin's default branch, or say what keeps it from following: another
-/// branch, an uncommitted change, a failed fetch, or a divergence. Never forces anything.
-fn follow_origin(checkout: &str) -> Option<String> {
+/// branch, an uncommitted change, or a divergence (a failure), or a failed fetch (a warning: the
+/// network, most likely; the next check retries). Never forces anything.
+fn follow_origin(checkout: &str) -> Option<(HealthStatus, String)> {
+    let fail = |why: String| Some((HealthStatus::Fail, why));
     let default = match run_git(checkout, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) {
         Ok(d) => d,
-        Err(_) => return Some("origin/HEAD doesn't resolve in the checkout: git remote set-head origin --auto".into()),
+        Err(_) => return fail("origin/HEAD doesn't resolve in the checkout: git remote set-head origin --auto".into()),
     };
     let branch = default.strip_prefix("origin/").unwrap_or(&default).to_string();
     match run_git(checkout, &["symbolic-ref", "--short", "HEAD"]) {
         Ok(b) if b == branch => {}
-        Ok(b) => return Some(format!("on {b}, not {branch}, so it can't follow {default}: git switch {branch}")),
-        Err(_) => return Some(format!("its HEAD is detached, so it can't follow {default}: git switch {branch}")),
+        Ok(b) => return fail(format!("on {b}, not {branch}, so it can't follow {default}: git switch {branch}")),
+        Err(_) => return fail(format!("its HEAD is detached, so it can't follow {default}: git switch {branch}")),
     }
     if run_git(checkout, &["status", "--porcelain", "--untracked-files=no"]).is_ok_and(|s| !s.is_empty()) {
-        return Some(format!("uncommitted changes, so it can't follow {default}: commit or discard them"));
+        return fail(format!("uncommitted changes, so it can't follow {default}: commit or discard them"));
     }
     let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
     if let Err(e) = run_git(checkout, &["fetch", "--quiet", "--no-tags", "origin", &refspec]) {
-        return Some(format!("can't fetch {default}: {e}"));
+        return Some((HealthStatus::Warn, format!("can't fetch {default}: {e}")));
     }
     run_git(checkout, &["merge", "--ff-only", "--quiet", &default])
         .err()
-        .map(|e| format!("its {branch} can't fast-forward to {default}, so it has diverged: {e}"))
+        .and_then(|e| fail(format!("its {branch} can't fast-forward to {default}, so it has diverged: {e}")))
 }
 
 // ── Project ─────────────────────────────────────────────────────────────────────────
@@ -224,7 +229,7 @@ fn refused(path: &Path) -> HealthCheck {
 fn run_git(checkout: &str, args: &[&str]) -> std::result::Result<String, String> {
     let out = Command::new("git").arg("-C").arg(checkout).args(args).output().map_err(|e| e.to_string())?;
     let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
-    if out.status.success() { Ok(text(&out.stdout)) } else { Err(text(&out.stderr)) }
+    if out.status.success() { Ok(text(&out.stdout)) } else { Err(crate::preflight::one_line(&out.stderr)) }
 }
 
 /// The `--settings` a lookout launches with: the command guard on its every Bash call.
@@ -305,6 +310,13 @@ pub(crate) mod tests {
         assert!(s == HealthStatus::Fail && d.contains("on other, not master"), "{d}");
         git(&["switch", "-q", "master"]);
         assert_eq!(status(&checks(&cfg), "follows-origin").0, HealthStatus::Ok, "back on master");
+
+        // Origin out of reach: a warning, on one line; it holds nothing.
+        let origin = run_git(&checkout, &["remote", "get-url", "origin"]).unwrap();
+        git(&["remote", "set-url", "origin", "/nowhere/at/all"]);
+        let (s, d) = status(&checks(&cfg), "follows-origin");
+        assert!(s == HealthStatus::Warn && d.contains("can't fetch origin/master") && !d.contains('\n'), "{d}");
+        git(&["remote", "set-url", "origin", &origin]);
 
         git(&["config", "user.name", "test"]);
         git(&["config", "core.worktree", "/nowhere/at/all"]);

@@ -270,17 +270,11 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         None => tick_summary(&app.fleet.tick),
     };
     let status = if app.fleet.fleetd_up { status } else { format!("fleetd down (see Log) · {status}") };
-    let body = format!(" {zoom}{status}  ·  ? keys");
-    let sick = match health(&app.fleet.health) {
-        Some(Err(why)) => Span::styled(format!(" health: {why} · lookouts held "), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        _ => Span::raw(""),
-    };
-    let line = Line::from(vec![sick, Span::styled(body, dim)]);
-    f.render_widget(Paragraph::new(line), area);
+    f.render_widget(Paragraph::new(Span::styled(format!(" {zoom}{status}  ·  ? keys"), dim)), area);
 }
 
 /// fleetd's last health check: passed, or missed (why); `None` before the first one.
-fn health(check: &Option<Event>) -> Option<Result<(), String>> {
+pub(crate) fn health(check: &Option<Event>) -> Option<Result<(), String>> {
     let p = &check.as_ref()?.payload;
     if p.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
         return Some(Ok(()));
