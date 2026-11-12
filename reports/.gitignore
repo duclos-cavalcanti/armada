@@ -1,0 +1,4 @@
+# The reports the skills write (convoy progress, fleet spend, …): reports/<project>/, served by
+# `make serve-notes`, never committed.
+/*
+!/.gitignore
