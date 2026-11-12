@@ -47,10 +47,12 @@ function pageFrontMatter({ title, description, summary }) {
 
 // Docusaurus watches each include for new files, and every folder under the docs root for
 // _category_ files: from the repo root, that walks projects/ (its worktrees and ~70GB of builds).
-// So watch only the repo's notes: a page new in a checkout shows on restart (edits reload anyway).
+// So watch only the repo's notes and the sidebar: a page new in a checkout shows on restart (edits
+// reload anyway).
 async function docs(context, options) {
   const plugin = await docsPlugin(context, options);
-  return { ...plugin, getPathsToWatch: () => notes.map((p) => path.join(repo, p)) };
+  const watched = [...notes.map((p) => path.join(repo, p)), path.resolve(context.siteDir, options.sidebarPath)];
+  return { ...plugin, getPathsToWatch: () => watched };
 }
 docs.validateOptions = validateOptions;
 
@@ -125,6 +127,7 @@ export default {
         // .claude/worktrees/ holds agents' worktrees: whole copies of the checkout.
         exclude: [...GlobExcludeDefault, '**/node_modules/**', '**/target/**', '**/dist/**', '**/.claude/worktrees/**'],
         routeBasePath: '/',
+        sidebarPath: './sidebars.js',
       },
     ],
     demoPackages,
