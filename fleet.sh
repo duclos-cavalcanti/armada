@@ -83,15 +83,24 @@ import() {
 # The repo's markdown and reports/'s pages as a wiki in the browser: Madness, in Docker (settings
 # in .madness.yml), the repo mounted read-only. Its search walks every folder on each query (its
 # exclude only trims the sidebar), so the heavy ones are hidden from it behind empty tmpfs mounts.
+# Of projects/, only each project's checkout shows (the product's docs), its builds still hidden.
 notes() {
-    local hide=() d
-    for d in projects target third-party apps/*/target \
+    local mounts=() d p b checkout
+    for d in projects target third-party apps crates harness hooks \
         demos/node_modules demos/*/node_modules demos/dist demos/*/dist; do
-        [[ -e $d ]] && hide+=(--tmpfs "/docs/$d")
+        [[ -e $d ]] && mounts+=(--tmpfs "/docs/$d")
+    done
+    for p in projects/*/; do
+        checkout=$(fleetc -C "$p" project 2>/dev/null) && [[ -d $checkout ]] || continue
+        d="/docs/$p$(basename "$checkout")"
+        mounts+=(-v "$checkout:$d:ro")
+        for b in target node_modules dist; do
+            [[ -d $checkout/$b ]] && mounts+=(--tmpfs "$d/$b")
+        done
     done
     echo "notes: http://localhost:5175"
     docker run --rm -it --name armada-notes -p 127.0.0.1:5175:3000 -v "$PWD":/docs:ro \
-        ${hide[@]+"${hide[@]}"} dannyben/madness:1.3.1 server
+        ${mounts[@]+"${mounts[@]}"} dannyben/madness:1.3.1 server
 }
 
 main() {
