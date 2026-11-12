@@ -15,7 +15,6 @@
 #   ./install.sh -u|--uninstall      uninstall (unstow) — the mirror of install
 #   ./install.sh --fleetc            build fleetc and put it on PATH (a claude install does this too)
 #   ./install.sh --hooks             link the kit's git hooks into each project's checkout ($FLEET_PROJECT, else all)
-#   ./install.sh --notes             fetch the Obsidian vault's Excalidraw plugin
 #   ./install.sh -h|--help           this help
 #
 # LAYOUT (repo root = source of truth):
@@ -175,18 +174,6 @@ link_hooks() {
     done
 }
 
-# ---- The Obsidian vault's Excalidraw plugin ----
-# Its code isn't tracked; its manifest.json is, and pins the version.
-notes() {
-    local dir="$REPO/.obsidian/plugins/obsidian-excalidraw-plugin" version f
-    version="$(jq -r .version "$dir/manifest.json")"
-    for f in main.js styles.css; do
-        curl -fsSL -o "$dir/$f" \
-            "https://github.com/zsviczian/obsidian-excalidraw-plugin/releases/download/$version/$f"
-    done
-    echo "excalidraw $version → $dir"
-}
-
 # ---- Direction drivers ----
 install() {
     check_prereqs
@@ -211,7 +198,7 @@ uninstall() {
     unstow_agents
 }
 
-usage() { sed -n '11,19p' "${BASH_SOURCE[0]}" | sed 's/^#[[:space:]]*//;s/^#//'; }
+usage() { sed -n '11,18p' "${BASH_SOURCE[0]}" | sed 's/^#[[:space:]]*//;s/^#//'; }
 
 main() {
     local mode=install
@@ -221,7 +208,6 @@ main() {
             -u|--uninstall)     mode=uninstall ;;
             --fleetc)           mode=install_fleetc ;;
             --hooks)            mode=link_hooks ;;
-            --notes)            mode=notes ;;
             -H|--harness)       HARNESS="${2:?--harness needs a value}"; shift ;;
             --home)             HOME_OVERRIDE="${2:?--home needs a value}"; shift ;;
             -h|--help)          usage; exit 0 ;;

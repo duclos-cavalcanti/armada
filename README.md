@@ -131,15 +131,14 @@ a burst of queued actions on the first live tick.
 
 ### 4. Notes (optional)
 
-The repo root is an Obsidian vault, with Excalidraw for drawings:
+The repo's markdown, as a wiki in the browser ([Madness](https://github.com/DannyBen/madness), in
+Docker; its settings are in `.madness.yml`):
 
 ```bash
-brew install --cask obsidian
-make notes                            # fetch the Excalidraw plugin, at the version its manifest pins
+make serve-notes                      # http://localhost:5175, until Ctrl-C
 ```
 
-Then pick the repo root under **Open folder as vault**. To upgrade Excalidraw, update it in Obsidian
-and commit its `manifest.json`; every clone follows on its next `make notes`.
+The drawings in `demos/draw/` are Excalidraw files: open them at [excalidraw.com](https://excalidraw.com).
 
 ---
 
@@ -153,7 +152,7 @@ armada/
 ├── skills/      the kit's skills, stowed to ~/.claude/skills/
 ├── local/       your own skills (local/skills/<name>/), stowed alike but never committed
 ├── .claude/     Claude config (settings, CLAUDE.md, scripts), stowed to ~/.claude/
-├── .obsidian/   the Obsidian vault's config (notes on the repo); `make notes` fetches its plugin
+├── .madness.yml the notes' settings: the repo's markdown as a wiki (`make serve-notes`)
 ├── harness/     apply.sh + gitignored per-deployment settings profiles
 ├── hooks/       the guards: git's ref guard (linked into each checkout by `install.sh --hooks`)
 │                and the lookouts' command guard (attached to each lookout by fleetd)

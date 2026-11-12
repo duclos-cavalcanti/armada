@@ -1,0 +1,12 @@
+# Madness (`make serve-notes`). Unset keys keep the defaults: `madness config new` lists them all.
+
+# Render with pandoc's GitHub-flavoured markdown: the default (redcarpet) leaves markdown inside
+# HTML blocks raw.
+renderer: pandoc
+
+# Sidebar as a collapsible tree of the whole repo, not just the current folder.
+nav_tree: true
+
+# Folders kept out of the sidebar. The default hides every all-lowercase folder, which is most of
+# this repo; these are the ones the Makefile also hides from the container.
+exclude: ['^(projects|target|third-party|node_modules|dist)$']
