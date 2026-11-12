@@ -687,17 +687,21 @@ fn launch(ledger: &Ledger, forge: &dyn Forge, l: Launch) -> Result<String> {
 
 /// One ship by iid — ours or an ally's — with its snapshot and the ref to fetch its head by.
 /// Post a lookout's review — a summary comment, or one finding as a resolvable thread — approving
-/// only an ally's MR: our own merge on the team's approvals, never on the fleet's own say.
+/// or requesting changes only on an ally's MR: our own merges on the team's approvals, never on the
+/// fleet's own say, and is held by its open threads.
 fn post_review(ledger: &Ledger, forge: &dyn Forge, cmd: &wire::ReviewPostCmd) -> Result<()> {
     if cmd.thread {
         return forge.post_thread(cmd.iid, &cmd.body);
     }
-    if cmd.approve {
+    if cmd.approve || cmd.request_changes {
         let ours = match ShipRepo::get_by_iid(ledger, cmd.iid)? {
             Some(ship) => reconcile::is_ours(ledger, &ship)?,
             None => false,
         };
-        anyhow::ensure!(!ours, "!{} is ours — a lookout never approves our own MR (post without --approve)", cmd.iid);
+        anyhow::ensure!(!ours, "!{} is ours — a lookout never approves our own MR, nor requests changes on it: post a thread", cmd.iid);
+    }
+    if cmd.request_changes {
+        return forge.request_changes(cmd.iid, &cmd.body);
     }
     forge.post_review(cmd.iid, &cmd.body, cmd.approve)
 }
@@ -1465,6 +1469,7 @@ mod tests {
         no_drafts: bool, // a forge plan without drafts
         closed: std::cell::RefCell<Vec<i64>>,
         noted: std::cell::RefCell<Vec<(i64, String)>>,
+        changes: std::cell::RefCell<Vec<i64>>, // the MRs it requested changes on
         state: Option<ShipState>, // what `snapshot` reports (None: Open)
         threads: i64,             // the open review threads `snapshot` reports
         paths: Vec<(i64, Vec<String>)>, // what `changed_paths` reports
@@ -1552,6 +1557,10 @@ mod tests {
         fn post_review(&self, iid: i64, body: &str, _: bool) -> Result<()> {
             self.noted.borrow_mut().push((iid, body.into()));
             Ok(())
+        }
+        fn request_changes(&self, iid: i64, body: &str) -> Result<()> {
+            self.changes.borrow_mut().push(iid);
+            self.post_review(iid, body, false)
         }
         fn open_mr(&self, d: &MrDraft) -> Result<String> {
             self.opened.borrow_mut().push(d.clone());
@@ -2029,10 +2038,24 @@ mod tests {
         let db = Ledger::in_memory().unwrap();
         sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]), "now").unwrap();
         our_ship(&db, "PROJ-1", 7);
-        let post = |iid, approve| wire::ReviewPostCmd { iid, body: "clean".into(), approve, thread: false };
+        let post = |iid, approve| wire::ReviewPostCmd { iid, body: "clean".into(), approve, thread: false, request_changes: false };
         let e = post_review(&db, &FakeForge::default(), &post(7, true)).unwrap_err().to_string();
         assert!(e.contains("never approves our own"), "{e}");
         post_review(&db, &FakeForge::default(), &post(7, false)).unwrap();
+    }
+
+    #[test]
+    fn a_lookout_requests_changes_only_on_an_allys_mr() {
+        let db = Ledger::in_memory().unwrap();
+        sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]), "now").unwrap();
+        our_ship(&db, "PROJ-1", 7);
+        let refuse = |iid| wire::ReviewPostCmd { iid, body: "refused: x".into(), approve: false, thread: false, request_changes: true };
+        let forge = FakeForge::default();
+        let e = post_review(&db, &forge, &refuse(7)).unwrap_err().to_string();
+        assert!(e.contains("nor requests changes"), "{e}");
+        post_review(&db, &forge, &refuse(77)).unwrap();
+        assert_eq!(*forge.changes.borrow(), vec![77], "only the ally's MR is held");
+        assert_eq!(forge.noted.borrow().len(), 1, "the comment rides with the request");
     }
 
     #[test]

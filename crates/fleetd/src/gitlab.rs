@@ -33,6 +33,17 @@ impl GlabForge {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
+    /// One GraphQL call (`what` names it in an error): the response, or the errors it reports.
+    fn graphql(&self, what: &str, query: &str) -> Result<serde_json::Value> {
+        let out = Command::new("glab").args(["api", "graphql", "-f", &format!("query={query}")]).output()?;
+        ensure!(out.status.success(), "glab api graphql ({what}) failed: {}", crate::preflight::one_line(&out.stderr));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout)?;
+        if let Some(errors) = v.get("errors") {
+            anyhow::bail!("glab api graphql ({what}): {errors}");
+        }
+        Ok(v)
+    }
+
     /// `glab api --paginate` for a list endpoint: it emits one JSON array per page,
     /// concatenated, so parse the stream of arrays and flatten into all elements.
     fn api_paginate(&self, path: &str) -> Result<Vec<serde_json::Value>> {
@@ -64,12 +75,7 @@ impl GlabForge {
                      pageInfo {{ hasNextPage endCursor }} nodes {{ {MR_FIELDS} }} }} }} }} }}"#,
                 self.project
             );
-            let out = Command::new("glab").args(["api", "graphql", "-f", &format!("query={query}")]).output()?;
-            ensure!(out.status.success(), "glab api graphql (MRs) failed: {}", crate::preflight::one_line(&out.stderr));
-            let v: serde_json::Value = serde_json::from_slice(&out.stdout)?;
-            if let Some(errors) = v.get("errors") {
-                anyhow::bail!("glab api graphql (MRs): {errors}");
-            }
+            let v = self.graphql("MRs", &query)?;
             let mrs = v
                 .pointer("/data/projects/nodes/0/mergeRequests")
                 .ok_or_else(|| anyhow!("glab api graphql: no project {}", self.project))?;
@@ -339,6 +345,20 @@ impl Forge for GlabForge {
         Ok(())
     }
 
+    /// The comment, then GitLab's change request (GraphQL, so no pending draft note of the fleet's user
+    /// is published with it): the MR's merge waits until that user approves it or lifts the request.
+    fn request_changes(&self, iid: i64, body: &str) -> Result<()> {
+        self.post_review(iid, body, false)?;
+        let query = format!(
+            r#"mutation {{ mergeRequestRequestChanges(input: {{ projectPath: "{}", iid: "{iid}" }}) {{ errors }} }}"#,
+            self.repo()?
+        );
+        let v = self.graphql("request changes", &query)?;
+        let errors = v.pointer("/data/mergeRequestRequestChanges/errors").and_then(|e| e.as_array());
+        ensure!(errors.is_some_and(|e| e.is_empty()), "!{iid}: GitLab refused the change request: {}", v["data"]);
+        Ok(())
+    }
+
     fn changed_paths(&self, iids: &[i64]) -> Result<Vec<(i64, Vec<String>)>> {
         let mut all = Vec::new();
         for chunk in iids.chunks(100) {
@@ -348,13 +368,7 @@ impl Forge for GlabForge {
                      nodes {{ iid diffStats {{ path }} }} }} }} }} }}"#,
                 self.project
             );
-            let out = Command::new("glab").args(["api", "graphql", "-f", &format!("query={query}")]).output()?;
-            ensure!(out.status.success(), "glab api graphql (diffStats) failed: {}", crate::preflight::one_line(&out.stderr));
-            let v: serde_json::Value = serde_json::from_slice(&out.stdout)?;
-            if let Some(errors) = v.get("errors") {
-                anyhow::bail!("glab api graphql (diffStats): {errors}");
-            }
-            all.extend(gql_changed_paths(&v));
+            all.extend(gql_changed_paths(&self.graphql("diffStats", &query)?));
         }
         Ok(all)
     }

@@ -154,6 +154,9 @@ pub struct ReviewPostCmd {
     /// Open the body as one resolvable review thread, not a comment.
     #[serde(default)]
     pub thread: bool,
+    /// Request changes with the comment: the forge holds the MR's merge until they're lifted.
+    #[serde(default)]
+    pub request_changes: bool,
 }
 
 /// Reply on one review thread, resolving it when `resolve` (`POST /reply`, `fleetc reply`).

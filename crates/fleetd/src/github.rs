@@ -251,6 +251,12 @@ impl Forge for GhForge {
         Ok(())
     }
 
+    /// One review that requests changes, its body the comment: the PR's merge waits on it where branch
+    /// protection requires reviews.
+    fn request_changes(&self, n: i64, body: &str) -> Result<()> {
+        self.gh(&["pr", "review", &n.to_string(), "--request-changes", "--body", body]).map(drop)
+    }
+
     fn changed_paths(&self, ns: &[i64]) -> Result<Vec<(i64, Vec<String>)>> {
         ns.iter()
             .map(|&n| {

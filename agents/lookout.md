@@ -66,7 +66,9 @@ refusal; escalate if you truly need more.
    route or name still counts. Each entry the MR builds is a must-fix, headed `refused: <id>`,
    with its why and its ruling:
    - **ours**: one thread each (`fleetc review-post --thread --body -`);
-   - **an ally's**: one comment, under `## Refused by design` (`fleetc review-post --body -`).
+   - **an ally's**: one comment, under `## Refused by design`, that requests changes
+     (`fleetc review-post --request-changes --body -`): its merge waits until the operator lifts
+     the request. Only a refused match requests changes; every other finding only comments.
 2. **Review it** with the project's review skill: `/$FLEET_REVIEW_SKILL <iid>` when
    `FLEET_REVIEW_SKILL` is set, else `/fleet-review`. It reviews the diff and posts its findings.
    Skip any approval step in it: approving is yours, in step 4. Keep its verdict, and make it

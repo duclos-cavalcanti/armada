@@ -48,7 +48,8 @@ as you go.
    on every MR, ours and allies'. If not, leave it out: the kit's `/fleet-review` runs. Anything
    every review must refuse outright, as the design forbids it? List it in
    `projects/$NAME/refused.toml`, one `[[refused]]` each (`id`, a slug; `what`; `why`; `ruling`,
-   who made it and when): every lookout checks each MR against it, and you can add to it any time.
+   who made it and when): every lookout checks each MR against it, and requests changes on an
+   ally's MR that builds one (its merge waits on you). You can add to it any time.
    The health check holds the lookouts while it doesn't parse, so a broken list never weakens a
    review.
 7. **Grooming** — does it have its own grooming skill there too (e.g. `groom-ticket`)? If so,

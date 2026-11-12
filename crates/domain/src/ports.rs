@@ -246,6 +246,11 @@ pub trait Forge {
     fn post_thread(&self, iid: i64, _body: &str) -> Result<()> {
         anyhow::bail!("!{iid}: this forge has no top-level review threads")
     }
+    /// Post one review comment on the MR and request changes on it, as the fleet's user: where the
+    /// forge blocks on it, the MR can't merge until that user approves it or lifts the request.
+    fn request_changes(&self, iid: i64, _body: &str) -> Result<()> {
+        anyhow::bail!("!{iid}: this forge can't request changes")
+    }
     /// The paths each MR changes, every iid at once where the forge allows (one query on GitLab):
     /// what a lookout's crossing check holds a review against, with no branch fetched.
     fn changed_paths(&self, _iids: &[i64]) -> Result<Vec<(i64, Vec<String>)>> {
