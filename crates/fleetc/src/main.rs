@@ -41,7 +41,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc sink     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>|--iid <N>]   (scuttle — hard teardown)\n  \
      fleetc send     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>|--iid <N>] <message>   (message into the cog's pane)\n  \
      fleetc rework   <KEY-N> [--hand]   (its ACs changed: back to a worker — or a hand — in its worktree, on its MR)\n  \
-     fleetc rounds   <KEY-N> [--reset]   (its open MR's review rounds — a sailor escalates at 10; --reset: back to 0, on the operator's ruling)\n  \
+     fleetc rounds   <KEY-N>   (its open MR's review rounds: the sailor sweeps on it so far)\n  \
      fleetc inspection <KEY-N> [--verdict confirm|refute --body <text|->]   (the latest verdict on its cog's escalation; with --verdict, record one — /fleet-inspect)\n  \
      fleetc escalations [--key <KEY-N>] [--case <N>]   (the cases of KEY's convoy, newest first: escalation → verdict → ruling; a cog reads only its own convoy's, before it escalates)\n  \
      fleetc ruling   --case <N> | --key <KEY-N>  --question <text> --answer <text|->   (the operator's ruling on a confirmed case, recorded then sent to its cog; --key: one with no escalation behind it)\n  \
@@ -450,30 +450,18 @@ fn rework(args: &[String]) -> Result<()> {
     submit("/rework", &wire::TicketRework { ticket: ticket_key(key, "rework")?, hand })
 }
 
-/// `fleetc rounds <KEY-N> [--reset]` — the review rounds (sailor sweeps) on the ticket's open MR,
-/// or, with `--reset`, back to 0: its sailors sweep on past the cap. Never a cog's to reset.
+/// `fleetc rounds <KEY-N>` — the review rounds (sailor sweeps) on the ticket's open MR.
 fn rounds(args: &[String]) -> Result<()> {
-    let usage = "usage: fleetc rounds <KEY-N> [--reset]";
-    let ticket = ticket_key(args.first().ok_or_else(|| anyhow!("{usage}"))?, "rounds")?;
-    match &args[1..] {
-        [] => {
-            use domain::ports::ShipRepo;
-            let ledger = ledger::Ledger::open_readonly(&project_dir().ledger())?;
-            let ship = ShipRepo::armada(&ledger)?
-                .into_iter()
-                .find(|s| s.ticket.as_ref().is_some_and(|t| t.0 == ticket) && s.ended_at.is_none())
-                .ok_or_else(|| anyhow!("{ticket} has no open MR"))?;
-            println!("!{} {} rounds", ship.iid, ship.rounds);
-            Ok(())
-        }
-        [flag] if flag == "--reset" => {
-            if in_cog() {
-                bail!("a cog doesn't reset its rounds — escalate, and the operator rules");
-            }
-            submit("/rounds/reset", &wire::RoundsReset { ticket })
-        }
-        _ => bail!("{usage}"),
-    }
+    use domain::ports::ShipRepo;
+    let [key] = args else { bail!("usage: fleetc rounds <KEY-N>") };
+    let ticket = ticket_key(key, "rounds")?;
+    let ledger = ledger::Ledger::open_readonly(&project_dir().ledger())?;
+    let ship = ShipRepo::armada(&ledger)?
+        .into_iter()
+        .find(|s| s.ticket.as_ref().is_some_and(|t| t.0 == ticket) && s.ended_at.is_none())
+        .ok_or_else(|| anyhow!("{ticket} has no open MR"))?;
+    println!("!{} {} rounds", ship.iid, ship.rounds);
+    Ok(())
 }
 
 /// `fleetc inspection <KEY-N> [--verdict confirm|refute --body <text|->]` — the latest verdict on

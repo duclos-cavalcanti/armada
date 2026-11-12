@@ -74,7 +74,6 @@ pub enum Command {
     Send { target: ControlTarget, message: String, reply: Reply }, // push an operator message to the cog's pane
     AnchorTicket { ticket: TicketKey, anchor: bool, reason: Option<String>, reply: Reply }, // hold everything on it, or release it
     Rework { ticket: TicketKey, hand: bool, reply: Reply }, // send it back down the line to a builder
-    ResetRounds { ticket: TicketKey, reply: Reply },         // its open MR's review rounds back to 0
     Inspect { ticket: TicketKey, verdict: Verdict, body: String, reply: Reply }, // a verdict on its cog's escalation
     Rule { case: Option<CaseId>, ticket: Option<TicketKey>, question: String, answer: String, reply: UrlReply }, // the operator's ruling → what it did
     GetPacket { ticket: TicketKey, reply: PacketReply }, // a read: the cog's composed work-packet
@@ -309,10 +308,6 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         }
         Command::Rework { ticket, hand, reply } => {
             let res = rework(ledger, tracker, forge, host, &ticket, hand).map_err(|e| format!("{e:#}"));
-            let _ = reply.send(res);
-        }
-        Command::ResetRounds { ticket, reply } => {
-            let res = reset_rounds(ledger, &ticket).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
         Command::Inspect { ticket, verdict, body, reply } => {
@@ -909,17 +904,6 @@ fn rule<H: SessionHost>(
     );
     host.send(&cog.tmux_session, &msg).with_context(|| format!("case #{}: ruled, but not delivered to {}", id.0, cog.tmux_session))?;
     Ok(format!("case #{}: ruled and sent to {}", id.0, cog.tmux_session))
-}
-
-/// Reset the review rounds of the ticket's open MR: back to 0, so its sailors sweep on past the cap
-/// (`sailor.md`'s ten). The operator's call, or the admiral's on their ruling; fleetc refuses a cog.
-fn reset_rounds(ledger: &Ledger, ticket: &TicketKey) -> Result<()> {
-    let ship = ShipRepo::armada(ledger)?
-        .into_iter()
-        .find(|s| s.ticket.as_ref() == Some(ticket) && s.ended_at.is_none())
-        .ok_or_else(|| anyhow!("{} has no open MR", ticket.0))?;
-    ShipRepo::reset_rounds(ledger, &ship.id, &now_rfc3339())?;
-    Ok(())
 }
 
 /// Rework a ticket whose ACs changed under its MR: send it back down the line. A worker re-enters
@@ -2309,37 +2293,6 @@ mod tests {
         assert!(TicketRepo::get(&db, &key).unwrap().is_none(), "not synced yet");
         ensure_ticket(&db, &FakeTracker::new(vec![tt("PROJ-9", TicketStatus::Todo)]), &key).unwrap();
         assert_eq!(TicketRepo::get(&db, &key).unwrap().unwrap().status, Some(TicketStatus::Todo));
-    }
-
-    #[test]
-    fn reset_rounds_takes_the_tickets_open_mr_back_to_zero_and_refuses_one_with_none() {
-        let db = Ledger::in_memory().unwrap();
-        let tracker = FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InQa)]);
-        sync::sync_board(&db, &tracker, "now").unwrap();
-        let key = TicketKey("PROJ-1".into());
-        let e = reset_rounds(&db, &key).unwrap_err().to_string();
-        assert!(e.contains("no open MR"), "{e}");
-
-        let ship = Ship {
-            id: ShipId(0),
-            ticket: Some(key.clone()),
-            iid: 7,
-            url: "u".into(),
-            target: "master".into(),
-            source: String::new(),
-            pilot: "me".into(),
-            created_at: "t".into(),
-            ended_at: None,
-            swept: None,
-            reviewed: None,
-            rounds: 0,
-        };
-        let id = ShipRepo::upsert(&db, &ship).unwrap();
-        for _ in 0..10 {
-            ShipRepo::count_round(&db, &id).unwrap();
-        }
-        reset_rounds(&db, &key).unwrap();
-        assert_eq!(ShipRepo::armada(&db).unwrap()[0].rounds, 0, "ten more sweeps before the cap");
     }
 
     #[test]

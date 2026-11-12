@@ -102,13 +102,6 @@ pub struct TicketRework {
     pub hand: bool,
 }
 
-/// Reset the review rounds of a ticket's open MR (`POST /rounds/reset`, `fleetc rounds <KEY> --reset`):
-/// back to 0, so its sailors sweep on past the cap. The operator's, or the admiral's on their ruling.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RoundsReset {
-    pub ticket: String,
-}
-
 /// A verdict on the escalation of a ticket's cog (`POST /inspection`, `fleetc inspection <KEY>`):
 /// `verdict` is `confirm` or `refute`, `body` the filled /fleet-inspect template.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

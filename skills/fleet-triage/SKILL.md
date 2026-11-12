@@ -34,7 +34,9 @@ And the deadlines from the tracker: the sprint's end, and each ticket's due date
 
 - **Proposals.** Each one: accept it into the convoy whose plan it serves (`--convoy`), drop it
   (a duplicate, obsolete, or out of every plan; cite which), or leave it for the admiral when it
-  needs real grooming first.
+  needs real grooming first. One whose why starts "Amend:" asks an edit to that ticket, written
+  in its comments: apply it (`fleetc ticket edit`, or `rework` if its MR is open), then drop the
+  proposal, unless the ticket should also join a convoy.
 - **Anchored tickets.** Re-judge each hold against its reason: the ruling it waited on is made, the
   blocker landed, the ticket has gone Done or Cancelled elsewhere. Then weigh it, leave it,
   `recall` it to the backlog, or `decommission` it. A hold that only waits on a blocker its edge

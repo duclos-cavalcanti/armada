@@ -61,9 +61,6 @@ Th `merge_status` is GitLab's authoritative merge-readiness — e.g.
 
 Do the work the snapshot calls for, this sweep only:
 
-- **`ship.rounds` ≥ 10** → **escalate first**, before any of the below: ten sweeps haven't
-  landed it, so the review isn't converging. Report `escalated` with
-  `--last-action "10 review rounds without converging"` and wait.
 - **`has_conflicts` or diverged from target** → `/fleet-rechart`.
 - **`open_threads > 0`** → `/fleet-parley` to answer review threads.
 - **`pipeline` failed** → `/fleet-repair`. If it fails the same way on the target branch and one

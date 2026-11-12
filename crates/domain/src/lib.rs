@@ -189,7 +189,8 @@ pub enum EventKind {
     Dispatched,
     TicketCreated, TicketSynced, TicketBlocked, TicketUnblocked,
     TicketHeld, TicketReleased, TicketDecommissioned, TicketRecalled, TicketAmended,
-    ShipOpened, ShipSynced, ShipMerged, ShipClosed, ShipRoundsReset,
+    ShipOpened, ShipSynced, ShipMerged, ShipClosed,
+    ShipRoundsReset, // retired with the sailor's round cap: kept to read the ledger's past events
     EscalationInspected, EscalationRuled,
     ConvoyOpened, ConvoyClosed, ConvoyPlanned, ConvoyGoalSet,
     SessionAnchored, SessionWeighed,

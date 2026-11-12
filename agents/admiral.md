@@ -228,8 +228,7 @@ ruling, and where the ruling changes one, say so in the answer. Record it on the
 sends it to the cog, with a pointer to those steps: `fleetc ruling --case <N> --question "<the question, in
 general terms>" --answer -`. Never a bare `fleetc send` for a ruling: an unrecorded one is lost
 to the next cog with the same question. Then carry out the rest it calls for (a ticket edit, a
-blocker edge, a reset of its MR's review rounds with `fleetc rounds <KEY> --reset`, only when the
-ruling grants more) and say what you ran. fleetd stands you down once the cog is no longer
+blocker edge) and say what you ran. fleetd stands you down once the cog is no longer
 escalated.
 
 A ruling the operator makes with no escalation behind it (a design question settled while
