@@ -30,19 +30,8 @@ serve-fleet: demos/fleet/node_modules  ## Serve the fleet viewer on :5173, until
 serve-slides: demos/node_modules       ## Serve the slides on :5174, until Ctrl-C
 	npm --prefix demos run dev -- --port 5174 --no-skills-check
 
-# The repo's markdown as a wiki in the browser (Madness, in Docker; settings in .madness.yml),
-# mounted read-only. Madness's search walks every folder on each query (its exclude only trims
-# the sidebar), so the heavy ones are hidden from it behind empty tmpfs mounts.
-NOTES_HIDE := $(wildcard projects target third-party apps/*/target \
-	demos/node_modules demos/*/node_modules demos/dist demos/*/dist)
-
-serve-notes:                     ## Serve the repo's markdown as a wiki on :5175, until Ctrl-C
-	@echo "serve-notes: http://localhost:5175"
-	docker run --rm -it --name armada-notes \
-		-p 127.0.0.1:5175:3000 \
-		-v "$(CURDIR)":/docs:ro \
-		$(foreach d,$(NOTES_HIDE),--tmpfs /docs/$(d)) \
-		dannyben/madness:1.3.1 server
+serve-notes:                     ## Serve the repo's markdown and reports/ as a wiki on :5175, until Ctrl-C
+	@./fleet.sh notes
 
 preflight:                       ## Check the project's setup: runtime state, checkout, forge + tracker CLIs, tmux + claude
 	@./fleet.sh preflight

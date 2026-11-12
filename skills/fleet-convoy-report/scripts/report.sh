@@ -10,8 +10,9 @@ die() { echo "report.sh: $*" >&2; exit 1; }
 main() {
   [[ $# -ge 2 ]] || die "usage: report.sh <project-dir> <convoy KEY|#N> [<out.html>]"
   local proj=$1 convoy=$2 out=${3:-}
-  local here ledger ctx key first led url now spend data
+  local here ledger ctx key first led url now spend data name
   here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  name=$(basename "$(cd "$proj" && pwd)")
   ledger="$proj/.fleet/ledger.db"
   [[ -f $ledger ]] || die "no ledger at $ledger (is $proj a fleet project?)"
 
@@ -32,12 +33,14 @@ main() {
   fi
 
   data=$(jq -n --argjson ctx "$ctx" --argjson led "$led" --argjson spend "$spend" --arg url "$url" --arg now "$now" \
-           --arg project "$(basename "$(cd "$proj" && pwd)")" -f "$here/summary.jq")
+           --arg project "$name" -f "$here/summary.jq")
 
   if [[ -z $out ]]; then
-    mkdir -p "$proj/exports"
-    # <convoy title>_<UTC date>.html, the title made a file name: lowercase, hyphenated.
-    out="$proj/exports/$(jq -r '.convoy.title // .convoy.key' <<<"$data" | tr '[:upper:]' '[:lower:]' \
+    # The repo's reports/, beside projects/: <convoy title>_<UTC date>.html, the title made a file
+    # name (lowercase, hyphenated).
+    out="$(cd "$proj/../.." && pwd)/reports/$name/convoys"
+    mkdir -p "$out"
+    out="$out/$(jq -r '.convoy.title // .convoy.key' <<<"$data" | tr '[:upper:]' '[:lower:]' \
           | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')_$(date -u +%Y-%m-%d).html"
   fi
   # `</` escaped so no ticket text can close the data's <script>; ENVIRON, as `awk -v` unescapes.

@@ -20,7 +20,7 @@ two runs on the same state give the same page.
 ${CLAUDE_SKILL_DIR}/scripts/report.sh projects/<p> <KEY|#N> [<out.html>]
 ```
 
-It prints the page's path (default `projects/<p>/exports/<convoy-title>_<UTC date>.html`; a
+It prints the page's path (default `reports/<p>/convoys/<convoy-title>_<UTC date>.html`; a
 second run that day replaces it), then the summary as JSON. Open the page (`open <path>`).
 
 - `scripts/report.sh` gathers: `fleetc context --convoy` (each ticket's status, open blockers, hold,

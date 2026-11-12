@@ -8,5 +8,9 @@ renderer: pandoc
 nav_tree: true
 
 # Folders kept out of the sidebar. The default hides every all-lowercase folder, which is most of
-# this repo; these are the ones the Makefile also hides from the container.
+# this repo; these are the ones fleet.sh also hides from the container.
 exclude: ['^(projects|target|third-party|node_modules|dist)$']
+
+# HTML pages in the sidebar and search too, for the reports in reports/. Madness can't hide a
+# single file, so the few other pages show as well (the report templates, the demos' viewers).
+expose_extensions: html

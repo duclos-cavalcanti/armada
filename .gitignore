@@ -11,6 +11,10 @@ LOOP.md
 # (install.sh stow_claude_global ignores it too).
 .claude/settings.local.json
 
+# The reports the skills write (convoy progress, fleet spend, …): reports/<project>/, served by
+# `make serve-notes`, never committed.
+/reports/
+
 # Rust workspace build output (the fleet crates + apps). Cargo.lock IS
 # committed (the workspace ships binaries).
 /target

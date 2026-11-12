@@ -10,7 +10,7 @@ die() { echo "report.sh: $*" >&2; exit 1; }
 
 main() {
   [[ $# -ge 1 ]] || die "usage: report.sh <project-dir> [--since <RFC3339|YYYY-MM-DD|all>] [<out.html>]"
-  local proj=$1 since out="" here fleet data
+  local proj=$1 since out="" here fleet data name
   since=$(date -u +%Y-%m-01)
   shift
   while [[ $# -gt 0 ]]; do
@@ -27,12 +27,14 @@ main() {
   data=$(sqlite3 -readonly "$fleet/telemetry.db" \
            "ATTACH 'file:$fleet/ledger.db?mode=ro' AS l" \
            ".parameter set :since \"'$since'\"" ".read $here/cost.sql")
-  data=$(jq --arg project "$(basename "$(cd "$proj" && pwd)")" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  name=$(basename "$(cd "$proj" && pwd)")
+  data=$(jq --arg project "$name" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
            '. + {project: $project, generated: $now}' <<<"$data")
 
   if [[ -z $out ]]; then
-    mkdir -p "$proj/exports"
-    out="$proj/exports/fleet-spend_$(date -u +%Y-%m-%d).html"
+    out="$(cd "$proj/../.." && pwd)/reports/$name/costs" # the repo's reports/, beside projects/
+    mkdir -p "$out"
+    out="$out/fleet-spend_$(date -u +%Y-%m-%d).html"
   fi
   # `</` escaped so no ticket text can close the data's <script>; ENVIRON, as `awk -v` unescapes.
   DATA=${data//<\//<\\/} awk '$0 == "__DATA__" { print ENVIRON["DATA"]; next } { print }' \

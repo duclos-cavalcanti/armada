@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# fleet.sh — start, stop and watch one project's fleet. `make` wraps it.
+# fleet.sh — start, stop and watch one project's fleet, and serve the repo's notes. `make` wraps it.
 #
-# Usage (the project comes from $FLEET_PROJECT):
+# Usage (the project comes from $FLEET_PROJECT; notes takes none):
 #   ./fleet.sh restart         build fleetd + reinstall fleetc, (re)start fleetd in the background
 #   ./fleet.sh run             restart, then open the dashboard
 #   ./fleet.sh stop            stop the project's fleetd (waits up to 5s for it to exit)
@@ -10,11 +10,12 @@
 #   ./fleet.sh preflight       check the setup: runtime state, checkout, forge + tracker CLIs, tmux + claude
 #   ./fleet.sh snapshot        snapshot the ledger to projects/<name>/exports/ (safe while running)
 #   ./fleet.sh import <file>   restore a ledger snapshot, path from the repo root (the fleet must be stopped)
+#   ./fleet.sh notes           serve the repo's markdown and reports/ as a wiki on :5175, until Ctrl-C
 set -euo pipefail
 
 PROJECT="${FLEET_PROJECT:-}"
 
-usage() { sed -n '5,12p' "${BASH_SOURCE[0]}" | sed 's/^#[[:space:]]*//;s/^#//'; }
+usage() { sed -n '5,13p' "${BASH_SOURCE[0]}" | sed 's/^#[[:space:]]*//;s/^#//'; }
 
 check() {
     local projects
@@ -79,10 +80,25 @@ import() {
     cargo run -q -p fleetc -- -C "projects/$PROJECT" import "${1:?import needs a snapshot: FILE=<snapshot>}"
 }
 
+# The repo's markdown and reports/'s pages as a wiki in the browser: Madness, in Docker (settings
+# in .madness.yml), the repo mounted read-only. Its search walks every folder on each query (its
+# exclude only trims the sidebar), so the heavy ones are hidden from it behind empty tmpfs mounts.
+notes() {
+    local hide=() d
+    for d in projects target third-party apps/*/target \
+        demos/node_modules demos/*/node_modules demos/dist demos/*/dist; do
+        [[ -e $d ]] && hide+=(--tmpfs "/docs/$d")
+    done
+    echo "notes: http://localhost:5175"
+    docker run --rm -it --name armada-notes -p 127.0.0.1:5175:3000 -v "$PWD":/docs:ro \
+        ${hide[@]+"${hide[@]}"} dannyben/madness:1.3.1 server
+}
+
 main() {
     cd "$(dirname "${BASH_SOURCE[0]}")" # `stop` matches on the relative paths above
     case "${1:-}" in
         run|restart|stop|dashboard|preflight|snapshot|import) check; "$@" ;;
+        notes) notes ;;
         -h|--help) usage ;;
         *) echo "fleet.sh: unknown verb '${1:-}'" >&2; usage >&2; exit 2 ;;
     esac

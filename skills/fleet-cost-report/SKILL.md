@@ -20,7 +20,7 @@ ${CLAUDE_SKILL_DIR}/scripts/report.sh projects/<p> [--since <YYYY-MM-DD|RFC3339|
 
 The window opens on the first of the current month (UTC). `--since` moves it to another date, and `--since all` covers the whole record.
 
-It prints the page's path (default `projects/<p>/exports/fleet-spend_<UTC date>.html`; a second
+It prints the page's path (default `reports/<p>/costs/fleet-spend_<UTC date>.html`; a second
 run that day replaces it), then the headline figures as JSON. Open the page (`open <path>`).
 
 - `scripts/cost.sql` is every figure, as one JSON object: the telemetry DB read-only, with the

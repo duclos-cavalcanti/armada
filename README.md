@@ -131,8 +131,8 @@ a burst of queued actions on the first live tick.
 
 ### 4. Notes (optional)
 
-The repo's markdown, as a wiki in the browser ([Madness](https://github.com/DannyBen/madness), in
-Docker; its settings are in `.madness.yml`):
+The repo's markdown and the skills' reports (`reports/`), as a wiki in the browser
+([Madness](https://github.com/DannyBen/madness), in Docker; its settings are in `.madness.yml`):
 
 ```bash
 make serve-notes                      # http://localhost:5175, until Ctrl-C
@@ -159,11 +159,13 @@ armada/
 ├── demos/       architecture decks (open-slide) + the fleet viewer (React Flow)
 ├── Brewfile     dependency manifest
 ├── install.sh   install / --uninstall (gates on Brewfile + stows + installs fleetc) / --hooks
-├── fleet.sh     start, stop and watch a project's fleet (`make` wraps it)
+├── fleet.sh     start, stop and watch a project's fleet, and serve the notes (`make` wraps it)
 ├── Makefile     one-word wrappers (run `make` for the cheat sheet)
 ├── TODO.md      the forward backlog
 ├── KNOWN_ISSUES.md  accepted edge cases + workarounds
-└── projects/    one folder per project: fleet.toml + .fleet/ state + checkout + impl/ (the ticket
-                 worktrees) + review/ (the lookouts' review worktrees)
-                 (gitignored, except the armada-test showcase's config + tickets)
+├── projects/    one folder per project: fleet.toml + .fleet/ state + checkout + impl/ (the ticket
+│                worktrees) + review/ (the lookouts' review worktrees)
+│                (gitignored, except the armada-test showcase's config + tickets)
+└── reports/     the skills' reports, one folder per project (convoy progress, fleet spend):
+                 gitignored, served by `make serve-notes`
 ```
