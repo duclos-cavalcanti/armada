@@ -39,6 +39,19 @@
   diff since it and whether the open threads are fixed, and raises nothing new on code a prior
   review passed (a correctness or security defect excepted). Measure cost per review for a day,
   then try the cheaper re-review: Sonnet and/or `effort: medium` on re-reviews, Opus on the first.
+- [ ] **Keep factory ids out of team-facing artifacts.** Escalation case numbers (`case #77`),
+  convoy numbers (`convoy #2`) and fleet roles leak into design docs, Jira bodies and MR replies,
+  and the team can't map them to anything. A merged Feature Design freezes with them: one design
+  carried 11 before merge, and another merged with one. Enforce it at three points:
+  - **Record a team anchor per case.** Have `fleetc ruling` take one (the MR thread and the date)
+    and send it to the cog with the ruling.
+  - **Tell the cogs.** The worker, sailor and admiral prompts and /fleet-parley say to cite a
+    ruling by its anchor and substance, never by case id.
+  - **Guard the outputs.** `fleetc ticket new|edit|comment`, `fleetc reply` and `fleetc launch`
+    refuse a body matching `case #\d+` or `convoy #\d+`, and /fleet-review flags them in a diff
+    as a should-fix.
+
+  The ledger, plans and case records keep the ids: they stay inside the factory.
 - [ ] **Record a ship's lifecycle as events.** `ShipOpened`, `ShipSynced`, `ShipMerged` and
   `ShipClosed` are event kinds nothing writes, so a merge leaves no history: counting merges per
   day reads `ships.ended_at` against the snapshot's `merged`. Append `ShipOpened` when a ship is
