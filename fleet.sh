@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# fleet.sh — start, stop and watch one project's fleet, and serve the repo's notes. `make` wraps it.
+# fleet.sh — start, stop and watch one project's fleet. `make` wraps it.
 #
-# Usage (the project comes from $FLEET_PROJECT; notes takes none):
+# Usage (the project comes from $FLEET_PROJECT):
 #   ./fleet.sh restart         build fleetd + reinstall fleetc, (re)start fleetd in the background
 #   ./fleet.sh run             restart, then open the dashboard
 #   ./fleet.sh stop            stop the project's fleetd (waits up to 5s for it to exit)
@@ -10,12 +10,11 @@
 #   ./fleet.sh preflight       check the setup: runtime state, checkout, forge + tracker CLIs, tmux + claude
 #   ./fleet.sh snapshot        snapshot the ledger to projects/<name>/exports/ (safe while running)
 #   ./fleet.sh import <file>   restore a ledger snapshot, path from the repo root (the fleet must be stopped)
-#   ./fleet.sh notes           serve the repo's markdown and reports/ as a wiki on :5175, until Ctrl-C
 set -euo pipefail
 
 PROJECT="${FLEET_PROJECT:-}"
 
-usage() { sed -n '5,13p' "${BASH_SOURCE[0]}" | sed 's/^#[[:space:]]*//;s/^#//'; }
+usage() { sed -n '5,12p' "${BASH_SOURCE[0]}" | sed 's/^#[[:space:]]*//;s/^#//'; }
 
 check() {
     local projects
@@ -80,34 +79,10 @@ import() {
     cargo run -q -p fleetc -- -C "projects/$PROJECT" import "${1:?import needs a snapshot: FILE=<snapshot>}"
 }
 
-# The repo's markdown and reports/'s pages as a wiki in the browser: Madness, in Docker (settings
-# in .madness.yml), the repo mounted read-only. Its search walks every folder on each query (its
-# exclude only trims the sidebar), so the heavy ones are hidden from it behind empty tmpfs mounts.
-# Of projects/, only each project's checkout shows (the product's docs), its builds still hidden.
-notes() {
-    local mounts=() d p b checkout
-    for d in projects target third-party apps crates harness hooks \
-        demos/node_modules demos/*/node_modules demos/dist demos/*/dist; do
-        [[ -e $d ]] && mounts+=(--tmpfs "/docs/$d")
-    done
-    for p in projects/*/; do
-        checkout=$(fleetc -C "$p" project 2>/dev/null) && [[ -d $checkout ]] || continue
-        d="/docs/$p$(basename "$checkout")"
-        mounts+=(-v "$checkout:$d:ro")
-        for b in target node_modules dist; do
-            [[ -d $checkout/$b ]] && mounts+=(--tmpfs "$d/$b")
-        done
-    done
-    echo "notes: http://localhost:5175"
-    docker run --rm -it --name armada-notes -p 127.0.0.1:5175:3000 -v "$PWD":/docs:ro \
-        ${mounts[@]+"${mounts[@]}"} dannyben/madness:1.3.1 server
-}
-
 main() {
     cd "$(dirname "${BASH_SOURCE[0]}")" # `stop` matches on the relative paths above
     case "${1:-}" in
         run|restart|stop|dashboard|preflight|snapshot|import) check; "$@" ;;
-        notes) notes ;;
         -h|--help) usage ;;
         *) echo "fleet.sh: unknown verb '${1:-}'" >&2; usage >&2; exit 2 ;;
     esac

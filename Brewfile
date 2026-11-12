@@ -22,7 +22,8 @@ brew "jira-cli"        # Jira CLI (ankitpokhrel/jira-cli) — fleetd's Jira trac
 
 # --- Demos (open-slide presentation decks under demos/) ---
 brew "node"            # Node.js + npm/npx — builds & serves the open-slide decks
-                       # (`cd demos && npm install && npm run dev`); also the tools/viz app.
+                       # (`cd demos && npm install && npm run dev`); also the tools/viz app
+                       # and the notes site (site/, `make serve`).
 
 # --- Optional analytics (mirrors .claude-otel/ recipe) ---
 # brew "duckdb"        # Parquet + SQL for usage / cost rollups

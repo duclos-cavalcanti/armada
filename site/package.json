@@ -1,0 +1,17 @@
+{
+  "name": "armada-notes",
+  "private": true,
+  "scripts": {
+    "start": "docusaurus start --no-open",
+    "build": "docusaurus build"
+  },
+  "dependencies": {
+    "@docusaurus/core": "3.10.2",
+    "@docusaurus/preset-classic": "3.10.2",
+    "@mdx-js/react": "3.1.1",
+    "@xyflow/react": "12.12.1",
+    "html-to-image": "1.11.13",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  }
+}

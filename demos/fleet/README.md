@@ -6,12 +6,10 @@ factory's own machinery (`fleetd` / `fleetc` / the `ledger` / the crew of cogs),
 router as `../architecture`, in the dark palette. The renderer
 (`src/Topology.jsx`, `src/obstacleRouter.js`, `src/theme.css`) is a byte-identical
 copy of the `architecture` viewer — only the graph data and the `kind` taxonomy
-differ. Tracked app (source only; `node_modules/` + `dist/` are gitignored).
+differ. Source only: the notes site (`site/`) serves it, on its own packages.
 
 ```bash
-cd demos/fleet
-npm install
-npm run dev          # Vite dev server → http://localhost:5173
+make serve           # → http://localhost:5175/fleet
 ```
 
 - `graphs/fleet/overview.json` — the fleet at a glance (the default view):

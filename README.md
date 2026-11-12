@@ -88,8 +88,7 @@ make stop FLEET_PROJECT=<name>        # stop that project's fleet daemon
 make dashboard FLEET_PROJECT=<name>   # build + run the TUI dashboard
 make snapshot FLEET_PROJECT=<name>    # snapshot the project's ledger → projects/<name>/exports/<name>-<UTC stamp>.db
 make import FILE=<snapshot> FLEET_PROJECT=<name>   # restore a ledger snapshot (the fleet must be stopped)
-make serve-fleet                      # serve the fleet viewer on :5173, until Ctrl-C
-make serve-slides                     # serve the slides on :5174, until Ctrl-C
+make slides                           # serve the slides on :5174, until Ctrl-C
 ```
 
 `export FLEET_PROJECT=<name>` once per shell and the `FLEET_PROJECT=` on each target can go.
@@ -131,11 +130,13 @@ a burst of queued actions on the first live tick.
 
 ### 4. Notes (optional)
 
-The repo's markdown and the skills' reports (`reports/`), as a wiki in the browser
-([Madness](https://github.com/DannyBen/madness), in Docker; its settings are in `.madness.yml`):
+The repo's markdown and each project's checkout's (the product's docs), as a
+[Docusaurus](https://docusaurus.io) site in the browser, with the fleet viewer at `/fleet` and the
+skills' reports (`reports/`) at `/reports/`. The site is `site/`; what it reads is in its
+`docusaurus.config.js`:
 
 ```bash
-make serve-notes                      # http://localhost:5175, until Ctrl-C
+make serve                            # http://localhost:5175, until Ctrl-C; reloads as pages change
 ```
 
 The drawings in `demos/draw/` are Excalidraw files: open them at [excalidraw.com](https://excalidraw.com).
@@ -152,14 +153,14 @@ armada/
 ├── skills/      the kit's skills, stowed to ~/.claude/skills/
 ├── local/       your own skills (local/skills/<name>/), stowed alike but never committed
 ├── .claude/     Claude config (settings, CLAUDE.md, scripts), stowed to ~/.claude/
-├── .madness.yml the notes' settings: the repo's markdown as a wiki (`make serve-notes`)
 ├── harness/     apply.sh + gitignored per-deployment settings profiles
 ├── hooks/       the guards: git's ref guard (linked into each checkout by `install.sh --hooks`)
 │                and the lookouts' command guard (attached to each lookout by fleetd)
-├── demos/       architecture decks (open-slide) + the fleet viewer (React Flow)
+├── demos/       architecture decks (open-slide) + the fleet viewer's source (React Flow; served at /fleet by the notes)
+├── site/        the notes: a Docusaurus site over the repo's markdown + the fleet viewer (`make serve`)
 ├── Brewfile     dependency manifest
 ├── install.sh   install / --uninstall (gates on Brewfile + stows + installs fleetc) / --hooks
-├── fleet.sh     start, stop and watch a project's fleet, and serve the notes (`make` wraps it)
+├── fleet.sh     start, stop and watch a project's fleet (`make` wraps it)
 ├── Makefile     one-word wrappers (run `make` for the cheat sheet)
 ├── TODO.md      the forward backlog
 ├── KNOWN_ISSUES.md  accepted edge cases + workarounds
@@ -167,5 +168,5 @@ armada/
 │                worktrees) + review/ (the lookouts' review worktrees)
 │                (gitignored, except the armada-test showcase's config + tickets)
 └── reports/     the skills' reports, one folder per project (convoy progress, fleet spend):
-                 gitignored, served by `make serve-notes`
+                 gitignored, served by `make serve`
 ```

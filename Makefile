@@ -3,14 +3,14 @@
 # The kit is the fleet: one self-ticking daemon (fleetd) + its client (fleetc).
 # `install.sh` gates the Brewfile, stows agents/skills (+ the .claude config) and installs fleetc;
 # `fleet.sh` builds + runs a project's fleet. A project is a folder, projects/<name>/ (its
-# fleet.toml + .fleet/ state + checkout): every fleet target takes FLEET_PROJECT=<name> (only help / install / uninstall / serve-* don't). Run from
+# fleet.toml + .fleet/ state + checkout): every fleet target takes FLEET_PROJECT=<name> (only help / install / uninstall / serve / slides don't). Run from
 # the repo: `make <target> FLEET_PROJECT=<name>` — or `export FLEET_PROJECT=<name>` once per shell.
 #
 # `make` with no target prints the help summary.
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install uninstall serve-fleet serve-slides serve-notes preflight run restart stop dashboard snapshot import
+.PHONY: help install uninstall serve slides preflight run restart stop dashboard snapshot import
 
 help:                            ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / { printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -21,17 +21,15 @@ install:                         ## Install the kit (Brewfile + stow) and fleetc
 uninstall:                       ## Uninstall the kit and remove fleetc
 	./install.sh --uninstall
 
-demos/node_modules demos/fleet/node_modules:
+demos/node_modules site/node_modules:
 	npm ci --prefix $(@D)
 
-serve-fleet: demos/fleet/node_modules  ## Serve the fleet viewer on :5173, until Ctrl-C
-	npm --prefix demos/fleet run dev -- --port 5173
-
-serve-slides: demos/node_modules       ## Serve the slides on :5174, until Ctrl-C
+slides: demos/node_modules             ## Serve the slides on :5174, until Ctrl-C
 	npm --prefix demos run dev -- --port 5174 --no-skills-check
 
-serve-notes:                     ## Serve the repo's markdown and reports/ as a wiki on :5175, until Ctrl-C
-	@./fleet.sh notes
+# The dev server holds every page (~800, with the product's docs) in memory: room past node's 4GB.
+serve: site/node_modules               ## Serve the notes (markdown, fleet viewer, reports/) on :5175, until Ctrl-C
+	NODE_OPTIONS=--max-old-space-size=8192 npm --prefix site start -- --port 5175
 
 preflight:                       ## Check the project's setup: runtime state, checkout, forge + tracker CLIs, tmux + claude
 	@./fleet.sh preflight

@@ -21,5 +21,10 @@ LOOP.md
 !/harness/profiles/example.json
 /example_claude/
 
+# The notes site (site/, `make serve`): its packages and builds.
+/site/node_modules/
+/site/build/
+/site/.docusaurus/
+
 # Work-only skill (publishes to an internal site behind SSO) — kept locally, not in the kit.
 /skills/fleet-publish/

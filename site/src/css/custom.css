@@ -1,0 +1,23 @@
+/* The theme: the fleet viewer's dark palette (demos/fleet/src/theme.css) over Infima's CSS variables
+   (https://infima.dev). Dark only, as the fleet viewer is: its stylesheet also sets the page's
+   background, once it has loaded. */
+
+/* html[…]: as specific as Infima's own dark defaults (#1b1b1d), so these win. */
+html[data-theme='dark'] {
+  --ifm-background-color: #0d1117;
+  --ifm-background-surface-color: #161b22;
+  --ifm-navbar-background-color: #161b22;
+  --ifm-font-color-base: #e6edf3;
+  --ifm-color-emphasis-300: #30363d;
+  --ifm-toc-border-color: #30363d;
+  --ifm-hr-background-color: #30363d;
+  --ifm-code-background: #161b22;
+
+  --ifm-color-primary: #58a6ff;
+  --ifm-color-primary-dark: #3894ff;
+  --ifm-color-primary-darker: #288bff;
+  --ifm-color-primary-darkest: #006ff0;
+  --ifm-color-primary-light: #78b8ff;
+  --ifm-color-primary-lighter: #88c1ff;
+  --ifm-color-primary-lightest: #b8daff;
+}
