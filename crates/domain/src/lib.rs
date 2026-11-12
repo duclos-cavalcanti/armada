@@ -788,6 +788,60 @@ pub struct Ruling {
     pub ruled_at: Timestamp,
 }
 
+/// The project's memory: the operator's standing decisions, kept in the ledger. Written only through
+/// `fleetc memory set`, in this shape as TOML (`[[refused]]`, `[[ruling]]`); read through fleetc.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Memory {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refused: Vec<Refused>,
+    #[serde(default, rename = "ruling", skip_serializing_if = "Vec::is_empty")]
+    pub rulings: Vec<StandingRuling>,
+}
+
+/// What no MR may build, ours or an ally's: every lookout refuses a match.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Refused {
+    pub id: String,
+    pub what: String,
+    pub why: String,
+    pub ruling: String,
+}
+
+/// How every cog answers a situation that keeps coming back: `fleetc escalations` shows it before any
+/// case, so none is escalated again.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StandingRuling {
+    pub id: String,
+    pub when: String,
+    pub then: String,
+    pub why: String,
+    pub ruling: String,
+}
+
+impl Memory {
+    /// Each entry whole: an `id` of lowercase letters, digits and dashes, used once across both
+    /// lists, and every field said.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let mut ids = std::collections::HashSet::new();
+        let refused = self.refused.iter().map(|r| (&r.id, vec![("what", &r.what), ("why", &r.why), ("ruling", &r.ruling)]));
+        let rulings = self.rulings.iter().map(|r| (&r.id, vec![("when", &r.when), ("then", &r.then), ("why", &r.why), ("ruling", &r.ruling)]));
+        for (id, fields) in refused.chain(rulings) {
+            anyhow::ensure!(
+                !id.is_empty() && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
+                "id {id:?}: lowercase letters, digits and dashes only"
+            );
+            anyhow::ensure!(ids.insert(id), "id {id:?} is used twice");
+            for (field, text) in fields {
+                anyhow::ensure!(!text.trim().is_empty(), "{id}: its {field} is empty");
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Case {
     /// Where the case stands, given its latest verdict: `open` (not inspected yet), `refuted` (its
     /// way out went to the cog), `confirmed` (awaiting a ruling), `ruled`, `unruled` (its cog moved
@@ -1427,5 +1481,27 @@ mod upstream_tests {
         let mut path: Vec<String> = upstream(&TicketKey("P-4".into()), &board).into_iter().map(|k| k.0).collect();
         path.sort();
         assert_eq!(path, ["P-1", "P-2", "P-3", "P-4", "P-5", "Q-1"], "through another convoy, never past the goal");
+    }
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+
+    fn refused(id: &str) -> Refused {
+        Refused { id: id.into(), what: "a batch create".into(), why: "one at a time".into(), ruling: "operator".into() }
+    }
+
+    #[test]
+    fn a_memory_is_valid_only_when_each_entry_is_whole() {
+        let ruling = StandingRuling { id: "rev-race".into(), when: "master took the revs".into(), then: "re-stamp".into(), why: "bookkeeping".into(), ruling: "operator".into() };
+        let ok = Memory { refused: vec![refused("batch-create")], rulings: vec![ruling.clone()] };
+        assert!(ok.validate().is_ok());
+        assert!(Memory::default().validate().is_ok(), "an empty memory");
+        let twice = Memory { refused: vec![refused("rev-race")], rulings: vec![ruling.clone()] };
+        assert!(twice.validate().is_err(), "an id twice, across both lists");
+        assert!(Memory { refused: vec![refused("Batch create")], rulings: vec![] }.validate().is_err(), "not a slug");
+        let blank = StandingRuling { then: " ".into(), ..ruling };
+        assert!(Memory { refused: vec![], rulings: vec![blank] }.validate().is_err(), "an empty then");
     }
 }

@@ -13,7 +13,7 @@ use crate::tmux::TmuxHost;
 use crate::{context, now_rfc3339, reconcile, sync, Snapshot};
 use anyhow::{anyhow, bail, Context, Result};
 use domain::ports::{
-    CaseRepo, ConvoyRepo, EventLog, Forge, LookoutRepo, OrderRepo, ProposalRepo, ReportRepo, SessionHost, SessionRepo,
+    CaseRepo, ConvoyRepo, EventLog, Forge, LookoutRepo, MemoryRepo, OrderRepo, ProposalRepo, ReportRepo, SessionHost, SessionRepo,
     InspectionRepo, ShipRepo, TicketRepo, Tracker,
 };
 use domain::{
@@ -76,6 +76,8 @@ pub enum Command {
     Rework { ticket: TicketKey, hand: bool, reply: Reply }, // send it back down the line to a builder
     Inspect { ticket: TicketKey, verdict: Verdict, body: String, reply: Reply }, // a verdict on its cog's escalation
     Rule { case: Option<CaseId>, ticket: Option<TicketKey>, question: String, answer: String, reply: UrlReply }, // the operator's ruling → what it did
+    Remember { memory: domain::Memory, reply: UrlReply }, // set entries of the project's memory → what it holds
+    Forget { id: String, reply: UrlReply },               // drop one → what it holds
     GetPacket { ticket: TicketKey, reply: PacketReply }, // a read: the cog's composed work-packet
     GetConvoyView { convoy: ConvoyKey, reply: ConvoyReply }, // a read: the captain's convoy slice
     GetReview { iid: i64, reply: ReviewReply }, // a read: an MR's fresh review surface (forge)
@@ -165,7 +167,6 @@ pub fn run(
                 review_skill: cfg.review_skill.clone(),
                 groom_skill: cfg.groom_skill.clone(),
                 assess_skill: cfg.assess_skill.clone(),
-                refused: Some(cfg.refused.clone()),
             };
             let cogs = snapshot.lock().unwrap().clone();
             match reconcile::tick(&ledger, tracker.as_ref(), &host, forge.as_ref(), &cogs, &cfg.project.path, &levers) {
@@ -316,6 +317,14 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         }
         Command::Rule { case, ticket, question, answer, reply } => {
             let res = rule(ledger, host, case, ticket, question, answer).map_err(|e| format!("{e:#}"));
+            let _ = reply.send(res);
+        }
+        Command::Remember { memory, reply } => {
+            let res = remember(ledger, &memory).map_err(|e| format!("{e:#}"));
+            let _ = reply.send(res);
+        }
+        Command::Forget { id, reply } => {
+            let res = MemoryRepo::forget(ledger, &id, &now_rfc3339()).and_then(|_| held(ledger, &format!("dropped {id}"))).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
         Command::GetPacket { ticket, reply } => {
@@ -865,6 +874,19 @@ fn inspect(ledger: &Ledger, ticket: &TicketKey, verdict: Verdict, body: String) 
     let case = ledger.open_case(&session.id)?.ok_or_else(|| anyhow!("{}: its escalation has no open case", ticket.0))?;
     let i = Inspection { session: session.id, case: Some(case.id), reported_at: report.reported_at, verdict, body, inspected_at: now_rfc3339() };
     InspectionRepo::inspect(ledger, &i)
+}
+
+/// Set entries of the project's memory, each checked whole first: a bad edit changes nothing.
+fn remember(ledger: &Ledger, memory: &domain::Memory) -> Result<String> {
+    memory.validate()?;
+    let n = MemoryRepo::remember(ledger, memory, &now_rfc3339())?;
+    held(ledger, &format!("{n} set"))
+}
+
+/// What the memory holds now, after `done`.
+fn held(ledger: &Ledger, done: &str) -> Result<String> {
+    let m = MemoryRepo::memory(ledger)?;
+    Ok(format!("{done}: the memory holds {} refused, {} standing rulings", m.refused.len(), m.rulings.len()))
 }
 
 /// Rule on a confirmed case: record the ruling, then hand it to the cog still escalated on it, so no
@@ -1439,7 +1461,6 @@ mod tests {
         review_skill: None,
         groom_skill: None,
         assess_skill: None,
-        refused: None,
     };
     use domain::ports::EventLog;
     use domain::*;
@@ -1901,7 +1922,7 @@ mod tests {
     #[test]
     fn each_change_in_health_is_recorded_once_for_the_dashboards_light() {
         let (dir, checkout, _) = crate::git::fixture::checkout("tick-health", &[]);
-        let cfg = crate::health::tests::cfg(&dir, &checkout);
+        let cfg = crate::health::tests::cfg(&checkout);
         let db = Ledger::in_memory().unwrap();
         let mut last = None;
         let checks = |db: &Ledger| db.events_of(EventKind::HealthChecked).unwrap();

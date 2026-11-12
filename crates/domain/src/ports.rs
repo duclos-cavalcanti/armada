@@ -164,6 +164,17 @@ pub trait CaseRepo {
     fn rule_alone(&self, ticket: &TicketKey, ruling: &Ruling) -> Result<CaseId>;
 }
 
+/// The project's memory: the operator's standing decisions, each entry kept with its history.
+pub trait MemoryRepo {
+    /// The memory as it stands: every live entry, oldest first.
+    fn memory(&self) -> Result<Memory>;
+    /// Add or update each entry, by id: a changed one retires the version it replaces; an unchanged
+    /// one is left as it is. Returns how many it set.
+    fn remember(&self, m: &Memory, at: &str) -> Result<usize>;
+    /// Retire the entry `id`. Errs if there is no such live entry.
+    fn forget(&self, id: &str, at: &str) -> Result<()>;
+}
+
 pub trait ProposalRepo {
     fn propose(&self, p: &Proposal) -> Result<ProposalId>;
     fn get(&self, id: &ProposalId) -> Result<Option<Proposal>>;

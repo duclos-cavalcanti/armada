@@ -91,6 +91,7 @@ fn handle(
         (Some("POST"), Some("/rework")) => handle_rework(&request, cmds),
         (Some("POST"), Some("/inspection")) => handle_inspection(&request, cmds),
         (Some("POST"), Some("/ruling")) => handle_ruling(&request, cmds),
+        (Some("POST"), Some("/memory")) => handle_memory(&request, cmds),
         (Some("GET"), Some(p)) if p.starts_with("/packet") => handle_packet(cmds, p),
         (Some("GET"), Some(p)) if p.starts_with("/review") => handle_review(cmds, p),
         (Some("POST"), Some(p)) if p.starts_with("/rebase") => handle_rebase(cmds, p),
@@ -916,6 +917,38 @@ fn handle_ruling(request: &str, cmds: &Sender<Command>) -> String {
     }
 }
 
+/// `POST /memory` — set entries of the project's memory from the operator's TOML, or drop one
+/// (`fleetc memory set` / `drop`). The TOML is parsed and checked whole here: a bad edit changes nothing.
+fn handle_memory(request: &str, cmds: &Sender<Command>) -> String {
+    let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+    let dto: wire::MemoryCmd = match serde_json::from_str(body) {
+        Ok(d) => d,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
+    };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    let cmd = match dto {
+        wire::MemoryCmd::Set { toml } => {
+            let memory: domain::Memory = match toml::from_str(&toml) {
+                Ok(m) => m,
+                Err(e) => return http_response("400 Bad Request", "text/plain", &format!("not the memory's format: {e}")),
+            };
+            if let Err(e) = memory.validate() {
+                return http_response("400 Bad Request", "text/plain", &format!("{e:#}"));
+            }
+            Command::Remember { memory, reply: reply_tx }
+        }
+        wire::MemoryCmd::Drop { id } => Command::Forget { id, reply: reply_tx },
+    };
+    if cmds.send(cmd).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(text)) => http_response("200 OK", "text/plain", &text),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
 /// `POST /rework` — send a ticket back down the line to a builder (`fleetc rework`).
 fn handle_rework(request: &str, cmds: &Sender<Command>) -> String {
     let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
@@ -1114,6 +1147,8 @@ mod tests {
                     | Command::Recall { reply, .. }
                     | Command::RemoveFromConvoy { reply, .. }
                     | Command::Rule { reply, .. }
+                    | Command::Remember { reply, .. }
+                    | Command::Forget { reply, .. }
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::LinkTicket { reply, .. }
                     | Command::EditTicket { reply, .. }
@@ -1183,6 +1218,8 @@ mod tests {
                     | Command::Recall { reply, .. }
                     | Command::RemoveFromConvoy { reply, .. }
                     | Command::Rule { reply, .. }
+                    | Command::Remember { reply, .. }
+                    | Command::Forget { reply, .. }
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::LinkTicket { reply, .. }
                     | Command::EditTicket { reply, .. }
@@ -1244,6 +1281,40 @@ mod tests {
         assert!(post(r#"{"from_ticket":"nope","proposed":{"new":{"title":"Fix X","kind":"bug","description":"…"}}}"#).contains("400"));
         assert!(post(r#"{"proposed":{"new":{"title":" ","kind":"bug","description":"…"}}}"#).contains("400"));
         assert!(post(r#"{"proposed":{"existing":{"ticket":"PROJ-7","why":" "}}}"#).contains("400"));
+        let _ = std::fs::remove_file(&sock);
+    }
+
+    #[test]
+    fn post_memory_relays_a_whole_edit_and_rejects_a_bad_one_at_the_edge() {
+        let (tx, rx) = std::sync::mpsc::channel::<Command>();
+        std::thread::spawn(move || {
+            for cmd in rx {
+                match cmd {
+                    Command::Remember { memory, reply } => { let _ = reply.send(Ok(format!("set {}", memory.refused[0].id))); }
+                    Command::Forget { id, reply } => { let _ = reply.send(Ok(format!("dropped {id}"))); }
+                    _ => {}
+                }
+            }
+        });
+        let sock = spawn_server(Arc::new(Mutex::new(Vec::new())), tx, "memory");
+        let post = |cmd: &wire::MemoryCmd| {
+            let body = serde_json::to_string(cmd).unwrap();
+            roundtrip(&sock, format!("POST /memory HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes())
+        };
+        let set = |toml: &str| post(&wire::MemoryCmd::Set { toml: toml.into() });
+        let entry = "[[refused]]\nid = \"batch\"\nwhat = \"a batch create\"\nwhy = \"one at a time\"\nruling = \"operator\"\n";
+        assert!(set(entry).ends_with("set batch"));
+        assert!(post(&wire::MemoryCmd::Drop { id: "batch".into() }).ends_with("dropped batch"));
+        for (bad, why) in [
+            ("[[refused]\n", "not TOML"),
+            (&format!("{entry}{entry}") as &str, "an id twice"),
+            (&entry.replace("one at a time", " "), "an empty why"),
+            (&entry.replace("ruling = \"operator\"\n", ""), "no ruling"),
+            (&format!("{entry}owner = \"x\"\n"), "an unknown field"),
+            (&entry.replace("[[refused]]", "[[refuse]]"), "an unknown table"),
+        ] {
+            assert!(set(bad).contains("400"), "{why}");
+        }
         let _ = std::fs::remove_file(&sock);
     }
 

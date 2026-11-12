@@ -40,7 +40,7 @@ Cycle with `Tab` / `S-Tab`:
 - **Board** — the sprint tickets, with the Convoys and Proposals panes again (the same panes as
   on Fleet).
 - **Health** — fleetd's health check, check by check, grouped (Kit, Git, Project Skills, Project
-  Worktrees, Project Memory): `✓` ok, `!` a warning (lights the dashboard only), `✗` a failure
+  Worktrees): `✓` ok, `!` a warning (lights the dashboard only), `✗` a failure
   (holds the lookouts), `–` nothing to check; what each checks, faded, and why one isn't ok with
   its fix. Below, every change of state, newest first. The title says when it last ran.
 - **Log** — fleetd's log (`.fleet/fleetd.log`), newest first, warnings yellow and errors red;

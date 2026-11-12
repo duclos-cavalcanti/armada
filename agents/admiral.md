@@ -198,8 +198,9 @@ that case, never the whole canon:
 
 1. **Read the verdict back first** — `fleetc inspection <KEY>`: give the operator its goal,
    phase, what's blocked and the options before grounding further.
-2. **The convoy's past rulings, in full** — `fleetc escalations --key <KEY>` lists the convoy's
-   cases (yours is the open, `confirmed` one) but cuts each field short, so read every ruled case
+2. **The convoy's past rulings, in full** — `fleetc escalations --key <KEY>` lists the project's
+   standing rulings, then the convoy's cases (yours is the open, `confirmed` one) but cuts each
+   case's fields short, so read every ruled case
    whole: `fleetc escalations --case <N>`. Read too the ACs groomed under those rulings, on the
    tickets they name. A past ruling may already answer a question; a recommendation that would
    reverse or narrow one is the operator's to make, so say so before you make it.
@@ -228,7 +229,8 @@ ruling, and where the ruling changes one, say so in the answer. Record it on the
 sends it to the cog, with a pointer to those steps: `fleetc ruling --case <N> --question "<the question, in
 general terms>" --answer -`. Never a bare `fleetc send` for a ruling: an unrecorded one is lost
 to the next cog with the same question. Then carry out the rest it calls for (a ticket edit, a
-blocker edge) and say what you ran. fleetd stands you down once the cog is no longer
+blocker edge) and say what you ran. A question the cases keep raising again is one for a standing
+ruling: recommend the operator add it to the project's memory (`fleetc memory set`). fleetd stands you down once the cog is no longer
 escalated.
 
 A ruling the operator makes with no escalation behind it (a design question settled while

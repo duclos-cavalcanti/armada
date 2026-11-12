@@ -48,9 +48,6 @@ pub struct Config {
     /// before it's dispatched (the captain) and when it's groomed (`/fleet-groom-convoy`), so Ready
     /// means one thing in both. Unset = `/fleet-ready-done` alone.
     pub assess_skill: Option<String>,
-    /// The project's refused list (`wire::Project::refused`): a path, not a setting.
-    #[serde(skip)]
-    pub refused: std::path::PathBuf,
     /// Reconcile mode: false (default, post-cutover) = apply the plan through the ports — fleetd
     /// drives the line; true = compute + log only, execute nothing (the parity look, opt in via
     /// `FLEET_DRY_RUN=true`). Flip via config/env, no recompile.
@@ -149,7 +146,6 @@ impl Default for Config {
             review_skill: None,
             groom_skill: None,
             assess_skill: None,
-            refused: std::path::PathBuf::new(),
             dry_run: false,
             active_secs: domain::LIVENESS_ACTIVE_SECS,
             quiet_secs: domain::LIVENESS_QUIET_SECS,
@@ -200,7 +196,6 @@ impl Config {
             c.otel_addr = v;
         }
         c.project.path = resolve_project(&c.project.path, &project.root);
-        c.refused = project.refused();
         let tickets = c.tracker.path.as_deref().unwrap_or("tickets");
         c.tracker.path = Some(resolve_project(tickets, &project.root));
         c.validate()?;
@@ -263,44 +258,6 @@ pub(crate) fn parse_bool(s: &str) -> Option<bool> {
         "0" | "false" | "no" | "off" => Some(false),
         _ => None,
     }
-}
-
-/// One thing no MR may build, ours or an ally's (`refused.toml`, one `[[refused]]` each): every
-/// lookout refuses a match as a must-fix, citing its `id`.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Refused {
-    pub id: String,
-    pub what: String,
-    pub why: String,
-    /// The ruling it rests on: who made it, and when (or its case).
-    pub ruling: String,
-}
-
-/// Read the project's refused list, each entry whole: an id of lowercase letters, digits and dashes,
-/// used once, and every field said. A list that isn't is an error, never a shorter list.
-pub fn refused_list(path: &std::path::Path) -> Result<Vec<Refused>> {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct File {
-        #[serde(default)]
-        refused: Vec<Refused>,
-    }
-    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let file: File = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-    let mut ids = std::collections::HashSet::new();
-    for r in &file.refused {
-        ensure!(
-            !r.id.is_empty() && r.id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
-            "id {:?}: lowercase letters, digits and dashes only",
-            r.id
-        );
-        ensure!(ids.insert(r.id.as_str()), "id {:?} is used twice", r.id);
-        for (field, value) in [("what", &r.what), ("why", &r.why), ("ruling", &r.ruling)] {
-            ensure!(!value.trim().is_empty(), "{}: its {field} is empty", r.id);
-        }
-    }
-    Ok(file.refused)
 }
 
 #[cfg(test)]

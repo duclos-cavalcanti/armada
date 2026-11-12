@@ -671,8 +671,6 @@ pub struct Levers {
     pub review_skill: Option<String>,
     /// The project's grooming skill, handed to each admiral in `FLEET_GROOM_SKILL`.
     pub groom_skill: Option<String>,
-    /// The project's refused list, handed to each lookout in `FLEET_REFUSED` while the file exists.
-    pub refused: Option<std::path::PathBuf>,
     /// The project's readiness check, handed to each captain and admiral in `FLEET_ASSESS_SKILL`.
     pub assess_skill: Option<String>,
 }
@@ -745,7 +743,7 @@ fn execute<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
         Action::LaunchCaptain { convoy } => launch_captain(ledger, host, project, convoy, levers.assess_skill.as_deref()),
         Action::StandDownCaptain { convoy } => stand_down_captain(ledger, host, convoy),
         Action::LaunchSailor { ticket } => launch_sailor(ledger, forge, host, ticket),
-        Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, project, *iid, levers.review_skill.as_deref(), levers.refused.as_deref()),
+        Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, project, *iid, levers.review_skill.as_deref()),
         Action::StandDownLookout { session } => stand_down_lookout(ledger, host, project, &SessionId(*session)),
         Action::LaunchAdmiral { ticket } => {
             launch_admiral(ledger, host, project, ticket, &[("FLEET_GROOM_SKILL", levers.groom_skill.as_deref()), ("FLEET_ASSESS_SKILL", levers.assess_skill.as_deref())])
@@ -1326,8 +1324,8 @@ fn launch_sailor<H: SessionHost, F: Forge + ?Sized>(
 /// LaunchLookout — review ONE ship, picked by reconcile. Fresh-poll it, berth a review worktree at its
 /// head (`review/<iid>`, detached, beside the checkout, its target fetched), mark it
 /// `reviewed = head_sha` (the head this review covers), then launch a lookout there with the MR's iid
-/// in `FLEET_SHIP`, the project's review skill, if it names one, in `FLEET_REVIEW_SKILL`, the refused
-/// list, while there is one, in `FLEET_REFUSED`, and its command guard as `--settings`. Ours or an ally's alike: the lookout reads exactly the commit under
+/// in `FLEET_SHIP`, the project's review skill, if it names one, in `FLEET_REVIEW_SKILL`, and its
+/// command guard as `--settings`. Ours or an ally's alike: the lookout reads exactly the commit under
 /// review, in a tree no cog owns, with the review skill and doctrine of that head. Named for the MR's
 /// ticket when it carries one, else its iid. A tmux
 /// session of that name already up (another MR on the same ticket) waits its turn; a lookout already
@@ -1339,7 +1337,6 @@ fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
     project: &str,
     iid: i64,
     review_skill: Option<&str>,
-    refused: Option<&Path>,
 ) -> Result<()> {
     let ship = ledger
         .armada()?
@@ -1382,11 +1379,7 @@ fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
 
     // fleet.toml's skill name is the operator's, but it rides a shell line: keep it to a plain name.
     let skill = review_skill.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric() || "-_:".contains(c)));
-    let mut env = skill.map(|s| format!("FLEET_REVIEW_SKILL={s} ")).unwrap_or_default();
-    // The operator's refused list, while there is one: the lookout reads it fresh at each review.
-    if let Some(path) = refused.filter(|p| p.is_file()) {
-        env.push_str(&format!("FLEET_REFUSED='{}' ", path.to_string_lossy().replace('\'', r"'\''")));
-    }
+    let env = skill.map(|s| format!("FLEET_REVIEW_SKILL={s} ")).unwrap_or_default();
     // Its command guard rides in as `--settings`, on this launch only: no global config changes.
     let guard = crate::health::lookout_settings().replace('\'', r"'\''");
     let cmd = format!("{env}FLEET_SHIP={iid} {} --settings '{guard}'", launch_cmd("lookout", Launch::Fresh(&hid)));
@@ -1554,7 +1547,6 @@ mod tests {
         review_skill: None,
         groom_skill: None,
         assess_skill: None,
-        refused: None,
     };
     const DRY: Levers = Levers { dry_run: true, ..LIVE };
     use domain::ports::EventLog;
@@ -3051,21 +3043,17 @@ mod tests {
         let host = FakeHost::new();
 
         *forge.snapshot.borrow_mut() = Some(forge_ship(7, &sha));
-        let refused = dir.join("refused.toml");
-        std::fs::write(&refused, "- `POST /v1/batch`: one at a time\n").unwrap();
-        launch_lookout(&db, &forge, &host, &project, 7, Some("mr-review"), Some(&refused)).unwrap();
+        launch_lookout(&db, &forge, &host, &project, 7, Some("mr-review")).unwrap();
         let (name, cwd, cmd) = host.spawned.borrow()[0].clone();
         assert_eq!(name, "lookout-PROJ-1");
         assert_eq!(Path::new(&cwd), dir.join("review/7"), "ours too: berthed, not in its worker's worktree");
-        let want = format!("FLEET_REVIEW_SKILL=mr-review FLEET_REFUSED='{}' FLEET_SHIP=7 claude ", refused.display());
-        assert!(cmd.starts_with(&want), "the refused list rides along while it exists: {cmd}");
+        assert!(cmd.starts_with("FLEET_REVIEW_SKILL=mr-review FLEET_SHIP=7 claude "), "{cmd}");
 
         *forge.snapshot.borrow_mut() = Some(forge_ship(77, &sha));
-        let none = dir.join("absent.md");
-        launch_lookout(&db, &forge, &host, &project, 77, Some("x; rm -rf /"), Some(&none)).unwrap();
+        launch_lookout(&db, &forge, &host, &project, 77, Some("x; rm -rf /")).unwrap();
         let (_, cwd, cmd) = host.spawned.borrow()[1].clone();
         assert_eq!(Path::new(&cwd), dir.join("review/77"), "an ally's: berthed, not in the checkout");
-        assert!(cmd.starts_with("FLEET_SHIP=77 "), "no plain name, no refused file: neither reaches the shell: {cmd}");
+        assert!(cmd.starts_with("FLEET_SHIP=77 "), "no plain name: it never reaches the shell: {cmd}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

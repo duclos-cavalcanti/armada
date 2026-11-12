@@ -91,8 +91,8 @@ Do the work the snapshot calls for, this sweep only:
   merge directly; `sleeping` says only "this sweep is done."
 - **Stuck** (a rebase conflict you can't resolve, reviewer pushback needing
   design direction, CI infra that retry won't fix) → **first read your convoy's cases**,
-  `fleetc escalations`: each past escalation, its verdict and its ruling, newest first
-  (`--case <N>` reads one in full). A ruling, or a REFUTE's way out, that answers your question
+  `fleetc escalations`: the standing rulings, then each past escalation, its verdict and its
+  ruling, newest first (`--case <N>` reads one in full). A ruling, or a REFUTE's way out, that answers your question
   is yours: apply it, cite it (`case #N`) in your reply or commit, and finish the sweep. One that
   nearly fits doesn't stop you escalating, but name it and say why it doesn't fit. Your own case
   still awaiting its answer (you were restarted mid-escalation) → don't report again; wait (a

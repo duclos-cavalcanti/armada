@@ -87,9 +87,9 @@ voice only the judgment calls it can't see from outside:
   push, and report **Review** again: the new head is reviewed before you conclude.
 - **Escalated** — blocked beyond self-help (a choice that isn't reversible, an upstream you
   cannot clear, a review still not clean on its last round). **First read your convoy's
-  cases**, `fleetc escalations`: each past escalation, its verdict and its ruling, newest first
-  (`--case <N>` reads one in full). A ruling, or a REFUTE's way out, that answers your question is
-  yours: apply it, cite it (`case #N`) in your commit or reply, and carry on. One that nearly
+  cases**, `fleetc escalations`: the standing rulings, then each past escalation, its verdict and
+  its ruling, newest first (`--case <N>` reads one in full). A ruling, or a REFUTE's way out,
+  that answers your question is yours: apply it, cite it (`case #N`) in your commit or reply, and carry on. One that nearly
   fits doesn't stop you escalating, but name it and say why it doesn't fit. Your own case still
   awaiting its answer (you were restarted mid-escalation) → don't report again; wait (a report
   would only join it, and fleetc says so). Otherwise commit + push

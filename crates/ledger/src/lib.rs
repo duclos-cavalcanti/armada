@@ -7,8 +7,8 @@
 
 use anyhow::Result;
 use domain::ports::{
-    CaseRepo, ConvoyRepo, EventLog, InspectionRepo, LookoutRepo, OrderRepo, ProposalRepo, ReportRepo, SessionRepo,
-    ShipRepo, TicketRepo,
+    CaseRepo, ConvoyRepo, EventLog, InspectionRepo, LookoutRepo, MemoryRepo, OrderRepo, ProposalRepo, ReportRepo,
+    SessionRepo, ShipRepo, TicketRepo,
 };
 use domain::*;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -944,6 +944,31 @@ mod tests {
             anchored_at: None,
             ship: None,
         }
+    }
+
+    #[test]
+    fn the_memory_sets_by_id_keeps_its_order_and_its_history() {
+        let db = Ledger::in_memory().unwrap();
+        let refused = |id: &str, why: &str| Refused { id: id.into(), what: "a batch create".into(), why: why.into(), ruling: "operator".into() };
+        let ruling = StandingRuling { id: "rev-race".into(), when: "master took the revs".into(), then: "re-stamp".into(), why: "bookkeeping".into(), ruling: "operator".into() };
+        let first = Memory { refused: vec![refused("batch", "one at a time"), refused("tenant", "operators live home")], rulings: vec![ruling.clone()] };
+        assert_eq!(db.remember(&first, "t1").unwrap(), 3);
+        assert_eq!(db.memory().unwrap(), first);
+
+        let edit = Memory { refused: vec![refused("batch", "each governed alone")], rulings: vec![ruling.clone()] };
+        assert_eq!(db.remember(&edit, "t2").unwrap(), 1, "only the changed entry; the rest stand");
+        let now = db.memory().unwrap();
+        assert_eq!(now.refused.iter().map(|r| (r.id.as_str(), r.why.as_str())).collect::<Vec<_>>(), [("batch", "each governed alone"), ("tenant", "operators live home")], "updated in its place");
+
+        db.forget("tenant", "t3").unwrap();
+        assert!(db.forget("tenant", "t4").is_err(), "already gone");
+        assert_eq!(db.memory().unwrap().refused.len(), 1);
+        let versions: i64 = db.conn.query_row("SELECT COUNT(*) FROM memory", [], |r| r.get(0)).unwrap();
+        assert_eq!(versions, 4, "every version kept");
+
+        let bad = Memory { refused: vec![], rulings: vec![StandingRuling { then: " ".into(), ..ruling }] };
+        assert!(db.remember(&bad, "t5").is_err(), "the schema refuses an empty then");
+        assert_eq!(db.memory().unwrap().rulings[0].then, "re-stamp", "and keeps the memory as it was");
     }
 
     #[test]
@@ -2063,6 +2088,69 @@ impl ProposalRepo for Ledger {
         let mut stmt = self.conn.prepare("SELECT * FROM proposals WHERE ended_at IS NULL ORDER BY id")?;
         let rows = stmt.query_map([], row_to_proposal)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+}
+
+// ── memory (the operator's standing decisions) ───────────────────────────────────
+
+/// One memory entry as its row holds it: (id, kind, what, when, then, why, ruling).
+type MemoryRow = (String, &'static str, Option<String>, Option<String>, Option<String>, String, String);
+
+fn memory_rows(m: &Memory) -> Vec<MemoryRow> {
+    let t = |s: &str| s.trim().to_string();
+    let refused = m.refused.iter().map(|r| (t(&r.id), "refused", Some(t(&r.what)), None, None, t(&r.why), t(&r.ruling)));
+    let rulings = m.rulings.iter().map(|r| (t(&r.id), "ruling", None, Some(t(&r.when)), Some(t(&r.then)), t(&r.why), t(&r.ruling)));
+    refused.chain(rulings).collect()
+}
+
+impl MemoryRepo for Ledger {
+    fn memory(&self) -> Result<Memory> {
+        // Each entry where it was first set, so updating one doesn't move it.
+        let mut stmt = self.conn.prepare(
+            "SELECT kind, id, what, \"when\", \"then\", why, ruling FROM memory m WHERE ended_at IS NULL
+             ORDER BY (SELECT MIN(seq) FROM memory f WHERE f.id = m.id)",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut m = Memory::default();
+        while let Some(r) = rows.next()? {
+            let (kind, id, why, ruling): (String, String, String, String) = (r.get(0)?, r.get(1)?, r.get(5)?, r.get(6)?);
+            match kind.as_str() {
+                "refused" => m.refused.push(Refused { id, what: r.get(2)?, why, ruling }),
+                _ => m.rulings.push(StandingRuling { id, when: r.get(3)?, then: r.get(4)?, why, ruling }),
+            }
+        }
+        Ok(m)
+    }
+
+    fn remember(&self, m: &Memory, at: &str) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut set = 0;
+        for row in memory_rows(m) {
+            let live: Option<MemoryRow> = tx
+                .query_row(
+                    "SELECT id, kind, what, \"when\", \"then\", why, ruling FROM memory WHERE id = ?1 AND ended_at IS NULL",
+                    params![row.0],
+                    |r| Ok((r.get(0)?, if r.get::<_, String>(1)? == "refused" { "refused" } else { "ruling" }, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+                )
+                .optional()?;
+            if live.as_ref() == Some(&row) {
+                continue;
+            }
+            tx.execute("UPDATE memory SET ended_at = ?2 WHERE id = ?1 AND ended_at IS NULL", params![row.0, at])?;
+            tx.execute(
+                "INSERT INTO memory(id, kind, what, \"when\", \"then\", why, ruling, set_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![row.0, row.1, row.2, row.3, row.4, row.5, row.6, at],
+            )?;
+            set += 1;
+        }
+        tx.commit()?;
+        Ok(set)
+    }
+
+    fn forget(&self, id: &str, at: &str) -> Result<()> {
+        let n = self.conn.execute("UPDATE memory SET ended_at = ?2 WHERE id = ?1 AND ended_at IS NULL", params![id, at])?;
+        anyhow::ensure!(n == 1, "no entry {id:?} in the memory");
+        Ok(())
     }
 }
 

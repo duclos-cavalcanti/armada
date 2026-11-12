@@ -224,6 +224,28 @@ CREATE TABLE IF NOT EXISTS proposals (
     CHECK (accepted_as IS NULL OR ended_at IS NOT NULL)  -- accepted ⇒ ended
 );
 
+-- The project's memory (domain::Memory): the operator's standing decisions, written only through
+-- `fleetc memory set` / `drop`. `refused`: what no MR may build. `ruling`: how every cog answers a
+-- situation that keeps coming back. A row is one version of an entry: setting it again ends the
+-- version it replaces, dropping it ends it, so its history stays. ended_at NULL = live, one per id.
+CREATE TABLE IF NOT EXISTS memory (
+    seq        INTEGER PRIMARY KEY,
+    id         TEXT NOT NULL CHECK (length(id) > 0 AND id NOT GLOB '*[^a-z0-9-]*'),
+    kind       TEXT NOT NULL CHECK (kind IN ('refused','ruling')),
+    what       TEXT,                                  -- refused: what no MR may build
+    "when"     TEXT,                                  -- ruling: the situation
+    "then"     TEXT,                                  -- ruling: what every cog does
+    why        TEXT NOT NULL CHECK (length(trim(why)) > 0),
+    ruling     TEXT NOT NULL CHECK (length(trim(ruling)) > 0),  -- what it rests on
+    set_at     TEXT NOT NULL,
+    ended_at   TEXT,
+    CHECK (coalesce(CASE kind
+                WHEN 'refused' THEN length(trim(what)) > 0 AND "when" IS NULL AND "then" IS NULL
+                ELSE length(trim("when")) > 0 AND length(trim("then")) > 0 AND what IS NULL
+           END, 0))                                   -- each kind its own fields (coalesce: a NULL check would pass)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS one_live_memory ON memory(id) WHERE ended_at IS NULL;
+
 -- Live config: a KV mirror of fleet.toml's overridable levers (the cadences, dry_run,
 -- the liveness thresholds). An ABSENT key falls through to fleet.toml/default — the
 -- absence IS the precedence (defaults < toml < settings < env). fleetd reads these live

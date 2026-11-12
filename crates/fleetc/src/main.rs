@@ -43,8 +43,9 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc rework   <KEY-N> [--hand]   (its ACs changed: back to a worker — or a hand — in its worktree, on its MR)\n  \
      fleetc rounds   <KEY-N>   (its open MR's review rounds: the sailor sweeps on it so far)\n  \
      fleetc inspection <KEY-N> [--verdict confirm|refute --body <text|->]   (the latest verdict on its cog's escalation; with --verdict, record one — /fleet-inspect)\n  \
-     fleetc escalations [--key <KEY-N>] [--case <N>]   (the cases of KEY's convoy, newest first: escalation → verdict → ruling; a cog reads only its own convoy's, before it escalates)\n  \
+     fleetc escalations [--key <KEY-N>] [--case <N>]   (the project's standing rulings, then the cases of KEY's convoy, newest first: escalation → verdict → ruling; a cog reads only its own convoy's, before it escalates)\n  \
      fleetc ruling   --case <N> | --key <KEY-N>  --question <text> --answer <text|->   (the operator's ruling on a confirmed case, recorded then sent to its cog; --key: one with no escalation behind it)\n  \
+     fleetc memory   [refused | rulings] | set --file <path|-> | drop <id>   (the project's memory, as TOML: what no MR may build, and the standing rulings; set adds or updates entries by id, drop retires one — the operator's)\n  \
      fleetc decommission <KEY-N> --reason <why> [--yes]   (withdraw it for good: close its MR, cancel it with the reason, reap its cogs + worktree)\n  \
      fleetc recall   <KEY-N> --reason <why> [--weigh] [--yes]   (forget its work: close its MR, end its cogs, discard its worktree; back to the backlog, anchored, or with --weigh dispatched again once its blockers clear)\n  \
      fleetc packet   [<KEY-N>]        (the cog's work-packet: order + ship + ticket)\n  \
@@ -112,6 +113,7 @@ fn run() -> Result<()> {
         Some("inspection") => inspection(&args[1..]),
         Some("escalations") => escalations(&args[1..]),
         Some("ruling") => ruling(&args[1..]),
+        Some("memory") => memory(&args[1..]),
         Some("rework") => rework(&args[1..]),
         Some("rounds") => rounds(&args[1..]),
         Some("packet") => packet(&args[1..]),
@@ -501,9 +503,9 @@ fn print_inspection(ticket: &str) -> Result<()> {
     Ok(())
 }
 
-/// `fleetc escalations [--key <KEY-N>] [--case <N>]` — the cases of KEY's convoy, newest first: each
-/// escalation, its verdict and its ruling, the precedent a cog reads before it escalates. A cog reads
-/// only its own convoy's (an omitted key is its own ticket, a captain's its convoy); `--case` shows one
+/// `fleetc escalations [--key <KEY-N>] [--case <N>]` — the project's standing rulings, then the
+/// cases of KEY's convoy, newest first: each escalation, its verdict and its ruling, the precedent
+/// a cog reads before it escalates. A cog reads only its own convoy's (an omitted key is its own ticket, a captain's its convoy); `--case` shows one
 /// in full. Read off the ledger.
 fn escalations(args: &[String]) -> Result<()> {
     use domain::ports::{CaseRepo, TicketRepo};
@@ -555,6 +557,9 @@ fn escalations(args: &[String]) -> Result<()> {
     if !in_scope(&convoy, &ticket) {
         return Err(outside(ticket.0));
     }
+    // The standing rulings answer before any case, in every convoy.
+    let rulings = domain::Memory { rulings: domain::ports::MemoryRepo::memory(&ledger)?.rulings, ..Default::default() };
+    println!("{}", render_memory(&rulings, Part::Rulings)?);
     let cases = ledger.cases(convoy.as_ref(), &ticket)?;
     if cases.is_empty() {
         match &convoy {
@@ -640,6 +645,62 @@ fn ruling(args: &[String]) -> Result<()> {
         bail!("{usage}");
     }
     post_and_print("/ruling", &wire::RulingCmd { case, ticket, question, answer })
+}
+
+/// `fleetc memory [refused | rulings] | set --file <path|-> | drop <id>` — the project's memory: the
+/// operator's standing decisions, kept by fleetd in the ledger. Printed as the TOML it's written in
+/// (all of it, or one part), so an edit is print, change, set. `set` adds or updates its entries by
+/// id, all or none; `drop` retires one. Anyone reads it; the operator writes it, never a cog.
+fn memory(args: &[String]) -> Result<()> {
+    let usage = "usage: fleetc memory [refused | rulings] | set --file <path|-> | drop <id>";
+    let write = |cmd: wire::MemoryCmd| {
+        if in_cog() {
+            bail!("a cog doesn't write the memory — propose it, or escalate, and the operator writes it");
+        }
+        post_and_print("/memory", &cmd)
+    };
+    let read = |part: Part| -> Result<()> {
+        let db = project_dir().ledger();
+        let ledger = ledger::Ledger::open_readonly(&db).map_err(|_| anyhow!("no ledger yet ({db})"))?;
+        print!("{}", render_memory(&domain::ports::MemoryRepo::memory(&ledger)?, part)?);
+        Ok(())
+    };
+    match args {
+        [] => read(Part::All),
+        [p] if p == "refused" => read(Part::Refused),
+        [p] if p == "rulings" => read(Part::Rulings),
+        [set, f, path] if set == "set" && f == "--file" => {
+            let toml = if path == "-" { body_text(path.clone())? } else { std::fs::read_to_string(path).map_err(|e| anyhow!("{path}: {e}"))? };
+            write(wire::MemoryCmd::Set { toml })
+        }
+        [drop, id] if drop == "drop" => write(wire::MemoryCmd::Drop { id: id.clone() }),
+        _ => bail!("{usage}"),
+    }
+}
+
+/// Which part of the memory to print.
+#[derive(Clone, Copy, PartialEq)]
+enum Part {
+    All,
+    Refused,
+    Rulings,
+}
+
+/// The memory as the TOML it's written in, each part under a comment saying what it is, so a reader
+/// (a lookout, a stuck cog) needs nothing else, and the print sets back as it is.
+fn render_memory(m: &domain::Memory, part: Part) -> Result<String> {
+    let mut out = Vec::new();
+    if part != Part::Rulings {
+        let refused = domain::Memory { refused: m.refused.clone(), ..Default::default() };
+        let head = "# Refused: what no MR may build, ours or an ally's. Every lookout refuses a match, by intent.";
+        out.push(if refused.refused.is_empty() { format!("{head}\n# Nothing is refused.\n") } else { format!("{head}\n\n{}", toml::to_string_pretty(&refused)?) });
+    }
+    if part != Part::Refused {
+        let rulings = domain::Memory { rulings: m.rulings.clone(), ..Default::default() };
+        let head = "# Standing rulings: how every cog answers a situation that keeps coming back, before any case.";
+        out.push(if rulings.rulings.is_empty() { format!("{head}\n# None yet.\n") } else { format!("{head}\n\n{}", toml::to_string_pretty(&rulings)?) });
+    }
+    Ok(out.join("\n"))
 }
 
 /// `fleetc decommission <KEY-N> --reason <why> [--yes]` — withdraw a ticket from the fleet for good:
@@ -1793,6 +1854,25 @@ fn cost(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_memory_prints_as_the_toml_it_sets_back_from() {
+        let refused = "[[refused]]\nid = \"batch-create\"\nwhat = \"`POST /v1/batch`, or any batch create.\"\nwhy = \"One at a time.\"\nruling = \"Operator, 2026-11-09.\"\n";
+        let mut m: domain::Memory = toml::from_str(refused).unwrap();
+        m.rulings.push(domain::StandingRuling {
+            id: "rev-race".into(),
+            when: "Master took the \"Rev N\" rows.".into(),
+            then: "Re-stamp:\nas your own fix.".into(),
+            why: "Bookkeeping.".into(),
+            ruling: "Operator.".into(),
+        });
+        let all = render_memory(&m, Part::All).unwrap();
+        assert_eq!(toml::from_str::<domain::Memory>(&all).unwrap(), m, "it sets back as it is");
+        let rulings = render_memory(&m, Part::Rulings).unwrap();
+        assert!(rulings.contains("[[ruling]]") && !rulings.contains("[[refused]]"));
+        let none = render_memory(&domain::Memory::default(), Part::All).unwrap();
+        assert!(none.contains("Nothing is refused") && toml::from_str::<domain::Memory>(&none).unwrap() == domain::Memory::default());
+    }
 
     #[test]
     fn full_dump_heads_every_table_and_cuts_the_event_log() {

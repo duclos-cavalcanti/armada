@@ -122,6 +122,15 @@ pub struct RulingCmd {
     pub answer: String,
 }
 
+/// An edit to the project's memory (`POST /memory`): entries to add or update by id, as the TOML the
+/// operator writes (`[[refused]]`, `[[ruling]]`; `fleetc memory set`), or one entry to drop.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryCmd {
+    Set { toml: String },
+    Drop { id: String },
+}
+
 /// Launch a ship — open the MR for the branch checked out in `worktree` (`POST /launch`). The
 /// target is `target`, else the ticket's order fork base, else origin's default branch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -333,12 +342,6 @@ impl Project {
     /// fleetd's log — one line per event; the previous run's is kept as `fleetd.log.1`.
     pub fn log(&self) -> std::path::PathBuf {
         self.runtime().join("fleetd.log")
-    }
-    /// `refused.toml` — what the operator refuses outright, one `[[refused]]` each (id, what, why,
-    /// ruling): every lookout checks each MR against it. The operator's to write, beside fleet.toml;
-    /// none = nothing refused.
-    pub fn refused(&self) -> std::path::PathBuf {
-        self.root.join("refused.toml")
     }
 }
 

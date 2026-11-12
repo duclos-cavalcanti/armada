@@ -46,12 +46,13 @@ as you go.
 6. **Review** — does the project have its own review skill, in the checkout's
    `.claude/skills/` (e.g. `mr-review`)? If so, `review_skill = "<name>"`: every lookout runs it
    on every MR, ours and allies'. If not, leave it out: the kit's `/fleet-review` runs. Anything
-   every review must refuse outright, as the design forbids it? List it in
-   `projects/$NAME/refused.toml`, one `[[refused]]` each (`id`, a slug; `what`; `why`; `ruling`,
-   who made it and when): every lookout checks each MR against it, and requests changes on an
-   ally's MR that builds one (its merge waits on you). You can add to it any time.
-   The health check holds the lookouts while it doesn't parse, so a broken list never weakens a
-   review.
+   every review must refuse outright, as the design forbids it? Once fleetd is up, put it in the
+   project's memory: `fleetc memory set --file -`, one `[[refused]]` each (`id`, a slug; `what`;
+   `why`; `ruling`, who made it and when). Every lookout checks each MR against it, and requests
+   changes on an ally's MR that builds one (its merge waits on you). The memory also holds the
+   standing rulings, how every cog answers a situation that keeps coming back (`[[ruling]]`:
+   `id`, `when`, `then`, `why`, `ruling`), so it isn't escalated again; they grow from your
+   rulings. `fleetc memory` prints it all, in the format it's set in.
 7. **Grooming** — does it have its own grooming skill there too (e.g. `groom-ticket`)? If so,
    `groom_skill = "<name>"`: an admiral runs it on each ticket it grooms. And a
    read-only readiness check (e.g. `assess-ticket`)? If so, `assess_skill = "<name>"`: captains run

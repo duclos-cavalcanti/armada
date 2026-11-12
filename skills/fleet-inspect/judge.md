@@ -24,7 +24,7 @@ fail a check by definition.
 Gather it yourself; your dispatcher's read of it is not evidence:
 
 ```bash
-fleetc escalations --key <KEY>           # the escalation (its open case) and the convoy's past cases
+fleetc escalations --key <KEY>           # the standing rulings, the escalation (its open case) and the convoy's past cases
 fleetc escalations --case <N>            # one case in full: what was asked, the verdict, the ruling
 fleetc ticket <KEY>                      # the goal and its ACs
 fleetc packet <KEY>                      # order (its worktree, fork base), MR, open blockers
@@ -40,8 +40,8 @@ operator, CONFIRM the whole and put the in-lane part under **Prepared**, as step
 partial fix shipped now moves the head and can redefine the open questions, and the ruling may
 change how that part is done, so both go to the cog at once, when the operator rules.
 
-**Precedent first.** The convoy's past cases are its precedent. A ruling or a REFUTE's way out
-that answers this escalation is a REFUTE: cite it (`case #N`), and the cog's way out is to apply
+**Precedent first.** The standing rulings, then the convoy's past cases, are its precedent. A
+ruling or a REFUTE's way out that answers this escalation is a REFUTE: cite it (`case #N`), and the cog's way out is to apply
 it. Never refute against a ruling: it outranks your reading. An open CONFIRM on the same question
 (another cog's) makes this a CONFIRM that names it, so the operator rules once for both.
 

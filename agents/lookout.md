@@ -60,9 +60,9 @@ refusal; escalate if you truly need more.
   threads are its work: it answers each, and can't conclude while one is open.
 - **An ally's**: an MR we don't own. You review it and comment; its author answers.
 
-1. **Check it against the refused list**, when `FLEET_REFUSED` is set: read that file. It lists
-   what the operator refuses outright, one `[[refused]]` each: its `id`, `what` is refused, `why`,
-   and the `ruling` it rests on. Judge by intent, not by name: the same capability under another
+1. **Check it against the refused list**: `fleetc memory refused`. It lists what the operator
+   refuses outright, one `[[refused]]` each: its `id`, `what` is refused, `why`, and the `ruling`
+   it rests on. Judge by intent, not by name: the same capability under another
    route or name still counts. Each entry the MR builds is a must-fix, headed `refused: <id>`,
    with its why and its ruling:
    - **ours**: one thread each (`fleetc review-post --thread --body -`);
