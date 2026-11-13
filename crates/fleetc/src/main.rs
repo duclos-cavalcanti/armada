@@ -44,7 +44,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc rounds   <KEY-N>   (its open MR's review rounds: the sailor sweeps on it so far)\n  \
      fleetc inspection <KEY-N> [--verdict confirm|refute --body <text|->]   (the latest verdict on its cog's escalation; with --verdict, record one — /fleet-inspect)\n  \
      fleetc escalations [--key <KEY-N>] [--case <N>]   (the project's standing rulings, then the cases of KEY's convoy, newest first: escalation → verdict → ruling; a cog reads only its own convoy's, before it escalates)\n  \
-     fleetc ruling   --case <N> | --key <KEY-N>  --question <text> --answer <text|->   (the operator's ruling on a confirmed case, recorded then sent to its cog; --key: one with no escalation behind it, sent to the worker or sailor on its ticket)\n  \
+     fleetc ruling   <KEY-N> --question <text> --answer <text|->   (the operator's ruling: on the ticket's confirmed escalation, or on its own; recorded, then sent to the worker or sailor on it; refused while the escalation awaits its inspection)\n  \
      fleetc memory   [refused | rulings] | set --file <path|-> | drop <id>   (the project's memory, as TOML: what no MR may build, and the standing rulings; set adds or updates entries by id, drop retires one — the operator's)\n  \
      fleetc decommission <KEY-N> --reason <why> [--yes]   (withdraw it for good: close its MR, cancel it with the reason, reap its cogs + worktree)\n  \
      fleetc recall   <KEY-N> --reason <why> [--weigh] [--yes]   (forget its work: close its MR, end its cogs, discard its worktree; back to the backlog, anchored, or with --weigh dispatched again once its blockers clear)\n  \
@@ -618,34 +618,29 @@ fn render_case(c: &domain::Case, verdict: Option<&domain::Inspection>, full: boo
     out
 }
 
-/// `fleetc ruling --case <N> | --key <KEY-N> --question <text> --answer <text|->` — the operator's
-/// ruling on a confirmed case: fleetd records it, then sends it to the cog still escalated on it, so
-/// no ruling reaches a cog unrecorded. `--question` is the case's question in general terms, so a
-/// later case can cite it. `--key` instead of `--case` records a ruling with no escalation behind it, and sends it to the
-/// worker or sailor on that ticket, if one is.
-/// The operator's call (the admiral carries it out); never a cog's.
+/// `fleetc ruling <KEY-N> --question <text> --answer <text|->` — the operator's ruling on a ticket:
+/// fleetd records it on the ticket's confirmed escalation, or on its own with none, then sends it to
+/// the worker or sailor on the ticket, so no ruling reaches a cog unrecorded. Refused while the
+/// escalation awaits its inspection. `--question` is the question in general terms, so a later case
+/// can cite it. The operator's call (the admiral carries it out); never a cog's.
 fn ruling(args: &[String]) -> Result<()> {
     if in_cog() {
         bail!("a cog doesn't rule — it escalates, and the operator rules");
     }
-    let usage = "usage: fleetc ruling --case <N> | --key <KEY-N> --question <text> --answer <text|->";
-    let (mut case, mut ticket, mut question, mut answer) = (None, None, None, None);
-    let mut it = args.iter();
+    let usage = "usage: fleetc ruling <KEY-N> --question <text> --answer <text|->";
+    let ticket = ticket_key(args.first().ok_or_else(|| anyhow!("{usage}"))?, "ruling")?;
+    let (mut question, mut answer) = (None, None);
+    let mut it = args[1..].iter();
     while let Some(flag) = it.next() {
         let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
         match flag.as_str() {
-            "--case" => case = Some(take()?.trim_start_matches('#').parse::<i64>().map_err(|_| anyhow!("--case takes a case number"))?),
-            "--key" => ticket = Some(ticket_key(&take()?, "ruling")?),
             "--question" => question = Some(take()?),
             "--answer" => answer = Some(body_text(take()?)?),
             _ => bail!("{usage}"),
         }
     }
     let (Some(question), Some(answer)) = (question, answer) else { bail!("{usage}") };
-    if case.is_some() == ticket.is_some() {
-        bail!("{usage}");
-    }
-    post_and_print("/ruling", &wire::RulingCmd { case, ticket, question, answer })
+    post_and_print("/ruling", &wire::RulingCmd { ticket, question, answer })
 }
 
 /// `fleetc memory [refused | rulings] | set --file <path|-> | drop <id>` — the project's memory: the

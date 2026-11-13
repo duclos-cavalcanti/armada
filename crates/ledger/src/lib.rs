@@ -737,9 +737,7 @@ fn track_case(tx: &Connection, r: &Report) -> Result<()> {
     let question = r.last_action.as_deref().unwrap_or("").trim();
     let open: Option<(i64, bool)> = tx
         .query_row(
-            "SELECT c.id, c.ruling IS NOT NULL
-                 OR (SELECT verdict FROM inspections WHERE case_id = c.id ORDER BY id DESC LIMIT 1) IS 'refute'
-             FROM cases c WHERE c.session_id = ?1 AND c.settled_at IS NULL",
+            &format!("SELECT c.id, {ANSWERED} FROM cases c WHERE c.session_id = ?1 AND c.settled_at IS NULL"),
             params![r.session.0],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -1925,6 +1923,10 @@ fn row_to_inspection(r: &rusqlite::Row) -> rusqlite::Result<Inspection> {
 
 const CASE_SELECT: &str = "SELECT c.*, s.kind FROM cases c LEFT JOIN sessions s ON s.id = c.session_id";
 
+/// A case is answered once ruled, or once its latest verdict is a REFUTE (its way out is the answer).
+const ANSWERED: &str =
+    "(c.ruling IS NOT NULL OR (SELECT verdict FROM inspections WHERE case_id = c.id ORDER BY id DESC LIMIT 1) IS 'refute')";
+
 fn row_to_case(r: &rusqlite::Row) -> rusqlite::Result<Case> {
     let ruling = match r.get::<_, Option<String>>("ruling")? {
         Some(answer) => Some(Ruling { question: r.get("ruling_question")?, answer, ruled_at: r.get("ruled_at")? }),
@@ -1952,6 +1954,11 @@ impl CaseRepo for Ledger {
 
     fn case(&self, id: &CaseId) -> Result<Option<Case>> {
         Ok(self.conn.query_row(&format!("{CASE_SELECT} WHERE c.id = ?1"), params![id.0], row_to_case).optional()?)
+    }
+
+    fn pending_case(&self, ticket: &TicketKey) -> Result<Option<Case>> {
+        let sql = format!("{CASE_SELECT} WHERE c.ticket = ?1 AND c.settled_at IS NULL AND NOT {ANSWERED} ORDER BY c.id DESC LIMIT 1");
+        Ok(self.conn.query_row(&sql, params![ticket.0], row_to_case).optional()?)
     }
 
     fn cases(&self, convoy: Option<&ConvoyKey>, ticket: &TicketKey) -> Result<Vec<Case>> {
@@ -2388,6 +2395,7 @@ mod repo_tests {
         escalate(&db, &id, "stuck", "t1");
         db.end(&id, "t2").unwrap();
         assert_eq!(db.open_case(&id).unwrap(), None);
+        assert_eq!(db.pending_case(&TicketKey("PROJ-1".into())).unwrap(), None, "settled: nothing awaits");
         assert_eq!(db.cases(None, &TicketKey("PROJ-1".into())).unwrap()[0].settled_at.as_deref(), Some("t2"));
     }
 
@@ -2397,12 +2405,18 @@ mod repo_tests {
         let id = db.start(&worker_on("PROJ-1")).unwrap().unwrap();
         escalate(&db, &id, "which auth?", "t1");
         let case = db.open_case(&id).unwrap().unwrap();
+        let key = TicketKey("PROJ-1".into());
+        let pending = |db: &Ledger| db.pending_case(&key).unwrap().map(|c| c.id);
+        assert_eq!(pending(&db), Some(case.id.clone()), "awaiting its answer");
         let ruling = Ruling { question: "Which auth does an admin route take?".into(), answer: "Rev 4's".into(), ruled_at: "t5".into() };
         assert!(db.rule(&case.id, &ruling).is_err(), "not inspected yet");
         verdict_on(&db, &case, Verdict::Refute);
+        assert_eq!(pending(&db), None, "a REFUTE answers it");
         assert!(db.rule(&case.id, &ruling).is_err(), "refuted: the cog's own way out, no ruling");
         verdict_on(&db, &case, Verdict::Confirm);
+        assert_eq!(pending(&db), Some(case.id.clone()), "confirmed: awaiting its ruling");
         db.rule(&case.id, &ruling).unwrap();
+        assert_eq!(pending(&db), None, "a ruling answers it");
         assert!(db.rule(&case.id, &ruling).is_err(), "ruled once");
         let ruled = db.case(&case.id).unwrap().unwrap();
         assert_eq!((ruled.ruling.as_ref(), ruled.settled_at.as_ref()), (Some(&ruling), None), "it settles when its cog moves on");
@@ -2412,6 +2426,7 @@ mod repo_tests {
         let alone = db.case(&alone).unwrap().unwrap();
         assert_eq!((alone.session, alone.settled_at.as_deref(), alone.question.as_str()), (None, Some("t5"), ruling.question.as_str()));
         assert!(db.rule_alone(&TicketKey("PROJ-404".into()), &ruling).is_err(), "not on the board");
+        assert_eq!(pending(&db), None, "a ruling alone awaits nothing");
         assert_eq!(db.events_of(EventKind::EscalationRuled).unwrap().len(), 2);
     }
 

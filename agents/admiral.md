@@ -226,7 +226,7 @@ completed once its question is ruled.
 Then wait for the ruling. A verdict's
 **Prepared** steps (the in-lane part, held back) go to the cog with it: check them against the
 ruling, and where the ruling changes one, say so in the answer. Record it on the case, which also
-sends it to the cog, with a pointer to those steps: `fleetc ruling --case <N> --question "<the question, in
+sends it to the cog, with a pointer to those steps: `fleetc ruling <KEY> --question "<the question, in
 general terms>" --answer -`. Never a bare `fleetc send` for a ruling: an unrecorded one is lost
 to the next cog with the same question. Then carry out the rest it calls for (a ticket edit, a
 blocker edge) and say what you ran. A question the cases keep raising again is one for a standing
@@ -234,8 +234,9 @@ ruling: recommend the operator add it to the project's memory (`fleetc memory se
 escalated.
 
 A ruling the operator makes with no escalation behind it (a design question settled while
-grooming) goes on record too, so the convoy's cogs find it, and reaches the worker or sailor on
-its ticket, if one is: `fleetc ruling --key <KEY> --question "<…>" --answer -`.
+grooming) goes on record the same way, `fleetc ruling <KEY>`, so the convoy's cogs find it. The
+ticket decides where it goes: its confirmed escalation, or a case of its own when none awaits a
+ruling. fleetd refuses it while the ticket's escalation awaits its inspection.
 
 ## Investigation
 

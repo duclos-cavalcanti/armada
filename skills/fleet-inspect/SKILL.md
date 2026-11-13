@@ -50,6 +50,6 @@ In a chat with the operator (the admiral), show them the verdict too. Then:
   ```
 - **CONFIRM** → send nothing; the escalation stands with the operator, and fleetd convenes an
   admiral on it (`admiral-<KEY>`) for them to rule with. Their ruling goes on the case
-  (`fleetc ruling --case <N>`), which sends it to the cog and keeps it for the convoy's next one. A
+  (`fleetc ruling <KEY>`), which sends it to the cog and keeps it for the convoy's next one. A
   CONFIRM's recommendation is beyond your lane by definition (an amendment that changes behaviour,
   the plan, a ticket outside your convoy): propose it to the operator rather than taking it.

@@ -153,6 +153,8 @@ pub trait CaseRepo {
     /// cases (`ReportRepo::record`); ending the session settles its open one.
     fn open_case(&self, session: &SessionId) -> Result<Option<Case>>;
     fn case(&self, id: &CaseId) -> Result<Option<Case>>;
+    /// The ticket's escalation awaiting its answer: open, neither ruled nor REFUTEd.
+    fn pending_case(&self, ticket: &TicketKey) -> Result<Option<Case>>;
     /// A convoy's cases, newest first; with no convoy, the cases on `ticket` raised outside any.
     fn cases(&self, convoy: Option<&ConvoyKey>, ticket: &TicketKey) -> Result<Vec<Case>>;
     /// The case's latest verdict; `None` = not inspected yet.

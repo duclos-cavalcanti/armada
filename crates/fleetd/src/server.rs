@@ -890,23 +890,20 @@ fn handle_inspection(request: &str, cmds: &Sender<Command>) -> String {
     }
 }
 
-/// `POST /ruling` — the operator's ruling on a confirmed case (recorded, then sent to its cog), or one
-/// with no escalation behind it, sent to the worker or sailor on its ticket (`fleetc ruling`).
+/// `POST /ruling` — the operator's ruling on a ticket: on its confirmed escalation, or standing alone
+/// (`fleetc ruling`).
 fn handle_ruling(request: &str, cmds: &Sender<Command>) -> String {
     let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
     let dto: wire::RulingCmd = match serde_json::from_str(body) {
         Ok(d) => d,
         Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
     };
-    let ticket = match dto.ticket.as_deref().map(parse_ticket).transpose() {
+    let ticket = match parse_ticket(&dto.ticket) {
         Ok(t) => t,
         Err(r) => return r,
     };
-    if dto.case.is_some() == ticket.is_some() {
-        return http_response("400 Bad Request", "text/plain", "a ruling names its case or, with no escalation behind it, its ticket");
-    }
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    let cmd = Command::Rule { case: dto.case.map(domain::CaseId), ticket, question: dto.question, answer: dto.answer, reply: reply_tx };
+    let cmd = Command::Rule { ticket, question: dto.question, answer: dto.answer, reply: reply_tx };
     if cmds.send(cmd).is_err() {
         return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
     }

@@ -75,7 +75,7 @@ pub enum Command {
     AnchorTicket { ticket: TicketKey, anchor: bool, reason: Option<String>, reply: Reply }, // hold everything on it, or release it
     Rework { ticket: TicketKey, hand: bool, reply: Reply }, // send it back down the line to a builder
     Inspect { ticket: TicketKey, verdict: Verdict, body: String, reply: Reply }, // a verdict on its cog's escalation
-    Rule { case: Option<CaseId>, ticket: Option<TicketKey>, question: String, answer: String, reply: UrlReply }, // the operator's ruling → what it did
+    Rule { ticket: TicketKey, question: String, answer: String, reply: UrlReply }, // the operator's ruling → what it did
     Remember { memory: domain::Memory, reply: UrlReply }, // set entries of the project's memory → what it holds
     Forget { id: String, reply: UrlReply },               // drop one → what it holds
     GetPacket { ticket: TicketKey, reply: PacketReply }, // a read: the cog's composed work-packet
@@ -315,8 +315,8 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let res = inspect(ledger, &ticket, verdict, body).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
-        Command::Rule { case, ticket, question, answer, reply } => {
-            let res = rule(ledger, host, case, ticket, question, answer).map_err(|e| format!("{e:#}"));
+        Command::Rule { ticket, question, answer, reply } => {
+            let res = rule(ledger, host, ticket, question, answer).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
         Command::Remember { memory, reply } => {
@@ -889,38 +889,27 @@ fn held(ledger: &Ledger, done: &str) -> Result<String> {
     Ok(format!("{done}: the memory holds {} refused, {} standing rulings", m.refused.len(), m.rulings.len()))
 }
 
-/// Rule on a confirmed case: record the ruling, then hand it to the cog still escalated on it, so no
-/// ruling reaches a cog unrecorded. With no case, a ruling with no escalation behind it, on `ticket`:
-/// recorded, then handed to the worker or sailor working that ticket, if one is.
-fn rule<H: SessionHost>(
-    ledger: &Ledger,
-    host: &H,
-    case: Option<CaseId>,
-    ticket: Option<TicketKey>,
-    question: String,
-    answer: String,
-) -> Result<String> {
+/// The operator's ruling on a ticket, recorded before it's sent, so no ruling reaches a cog
+/// unrecorded. The ticket's escalation awaiting its answer takes it once the lookout has CONFIRMed
+/// it; with none, it stands alone. Either way it goes to the worker or sailor on the ticket, if one
+/// is. Nothing is ruled while the lookout is still judging.
+fn rule<H: SessionHost>(ledger: &Ledger, host: &H, ticket: TicketKey, question: String, answer: String) -> Result<String> {
     anyhow::ensure!(!question.trim().is_empty() && !answer.trim().is_empty(), "a ruling has a question and an answer");
     let ruling = Ruling { question: question.trim().into(), answer: answer.trim().into(), ruled_at: now_rfc3339() };
-    let (id, live, on, unsent) = match case {
-        Some(id) => {
-            ledger.rule(&id, &ruling)?;
-            let case = ledger.case(&id)?.ok_or_else(|| anyhow!("case #{} vanished", id.0))?;
-            let live = match (&case.session, &case.settled_at) {
-                (Some(s), None) => SessionRepo::get(ledger, s)?.filter(|s| s.ended_at.is_none()),
-                _ => None,
-            };
-            (id, live, "your escalation", "its cog has moved on".to_string())
+    let pending = ledger.pending_case(&ticket)?;
+    if let Some(case) = &pending {
+        anyhow::ensure!(ledger.verdict(&case.id)?.is_some(), "case #{} awaits its inspection: a captain inspects it first (/fleet-inspect)", case.id.0);
+    }
+    let (id, on) = match pending {
+        Some(case) => {
+            ledger.rule(&case.id, &ruling)?;
+            (case.id, "your escalation")
         }
-        None => {
-            let ticket = ticket.ok_or_else(|| anyhow!("a ruling names its case, or the ticket it's on"))?;
-            let id = ledger.rule_alone(&ticket, &ruling)?;
-            let live = live_cogs_on(ledger, &ticket)?.into_iter().find(|s| matches!(s.kind, CrewKind::Worker | CrewKind::Sailor));
-            (id, live, "your ticket", format!("no worker or sailor is on {}", ticket.0))
-        }
+        None => (ledger.rule_alone(&ticket, &ruling)?, "your ticket"),
     };
-    let Some(cog) = live else {
-        return Ok(format!("case #{}: ruled; {unsent}, so it's recorded only", id.0));
+    let cog = live_cogs_on(ledger, &ticket)?.into_iter().find(|s| matches!(s.kind, CrewKind::Worker | CrewKind::Sailor));
+    let Some(cog) = cog else {
+        return Ok(format!("case #{}: ruled; no worker or sailor is on {}, so it's recorded only", id.0, ticket.0));
     };
     // One line: the pane takes a newline as Enter. The ruling in full is on the case, and so is the
     // verdict's prepared part, which goes with it: the cog gets the whole solution at once.
@@ -2780,20 +2769,25 @@ mod tests {
     }
 
     #[test]
-    fn a_ruling_is_recorded_then_sent_to_its_escalated_cog() {
+    fn a_ruling_goes_on_the_tickets_confirmed_escalation_or_stands_alone() {
         let (db, id) = db_with_live_worker();
         let host = FakeHost::new();
         let key = TicketKey("PROJ-1".into());
+        let ruling = |text: &str| rule(&db, &host, key.clone(), "Q?".into(), text.into());
         let state = CogState::Worker(WorkerState::Escalated);
         ReportRepo::record(&db, &Report { session: id.clone(), state, last_action: Some("which auth?".into()), reported_at: "t1".into() }).unwrap();
         let case = db.open_case(&id).unwrap().expect("raised");
-        assert!(rule(&db, &host, Some(case.id.clone()), None, "Which auth?".into(), "Rev 4's.".into()).is_err(), "not confirmed yet");
+
+        // In triage: nothing is ruled while the lookout is still judging.
+        let err = ruling("Rev 4's.").unwrap_err().to_string();
+        assert!(err.contains(&format!("case #{} awaits its inspection", case.id.0)), "{err}");
         assert!(host.sent.borrow().is_empty(), "nothing reaches the cog unrecorded");
 
+        // Confirmed: the ruling goes on the escalation, and to its cog.
         inspect(&db, &key, Verdict::Confirm, "**Verdict:** CONFIRM — the operator's".into()).unwrap();
-        let said = rule(&db, &host, Some(case.id.clone()), None, "Which auth does an admin route take?".into(), "Rev 4's.\nAll of them.".into()).unwrap();
-        assert!(said.contains("sent to worker-PROJ-1"), "{said}");
-        assert_eq!(*host.sent.borrow(), vec!["worker-PROJ-1".to_string()]);
+        let said = ruling("Rev 4's.\nAll of them.").unwrap();
+        assert!(said.contains(&format!("case #{}: ruled and sent to worker-PROJ-1", case.id.0)), "{said}");
+        assert!(host.said.borrow()[0].starts_with("⚖ Ruling on your escalation"), "{}", host.said.borrow()[0]);
         assert!(!host.said.borrow()[0].contains("prepared"), "no prepared part: {}", host.said.borrow()[0]);
         assert_eq!(db.case(&case.id).unwrap().unwrap().ruling.unwrap().answer, "Rev 4's.\nAll of them.", "recorded in full");
 
@@ -2802,21 +2796,20 @@ mod tests {
         ReportRepo::record(&db, &Report { session: id.clone(), state, last_action: None, reported_at: "t2".into() }).unwrap();
         let state = CogState::Worker(WorkerState::Escalated);
         ReportRepo::record(&db, &Report { session: id.clone(), state, last_action: Some("which key?".into()), reported_at: "t3".into() }).unwrap();
-        let next = db.open_case(&id).unwrap().unwrap();
         inspect(&db, &key, Verdict::Confirm, "**Verdict:** CONFIRM — x\n- **Prepared:** answer threads 4, 7".into()).unwrap();
-        rule(&db, &host, Some(next.id.clone()), None, "Which key?".into(), "The seat's.".into()).unwrap();
+        ruling("The seat's.").unwrap();
         let said = host.said.borrow()[1].clone();
         assert!(said.contains("The seat's.") && said.contains("the verdict's prepared steps"), "{said}");
 
-        // A ruling with no escalation behind it reaches the worker on its ticket; with none, it's recorded only.
-        let alone = rule(&db, &host, None, Some(key.clone()), "Q?".into(), "A.".into()).unwrap();
+        // Its escalation answered, the next ruling stands alone and still reaches the worker; with none, it's recorded only.
+        let alone = ruling("A.").unwrap();
         assert!(alone.contains("sent to worker-PROJ-1"), "{alone}");
         assert!(host.said.borrow()[2].starts_with("⚖ Ruling on your ticket (case #"), "{}", host.said.borrow()[2]);
         SessionRepo::end(&db, &id, "t4").unwrap();
-        let alone = rule(&db, &host, None, Some(key), "Q?".into(), "A.".into()).unwrap();
+        let alone = ruling("A.").unwrap();
         assert!(alone.contains("no worker or sailor is on PROJ-1, so it's recorded only"), "{alone}");
         assert_eq!(host.sent.borrow().len(), 3);
-        assert!(rule(&db, &host, None, None, "Q?".into(), " ".into()).is_err(), "a ruling has an answer");
+        assert!(ruling(" ").is_err(), "a ruling has an answer");
     }
 
     fn worker_target() -> ControlTarget {
