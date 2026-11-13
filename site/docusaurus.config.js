@@ -56,6 +56,19 @@ async function docs(context, options) {
 }
 docs.validateOptions = validateOptions;
 
+// The sidebar is the file tree: each page by its file name, each folder by its own. Docusaurus
+// labels a page by its title and a folder by its README's.
+async function fileTree({ defaultSidebarItemsGenerator, ...args }) {
+  const file = new Map(args.docs.map((d) => [d.id, path.basename(d.source)]));
+  const relabel = (items) => items.map((item) => {
+    if (item.type === 'doc') return { ...item, label: file.get(item.id) };
+    if (item.type !== 'category') return item;
+    const folder = item.link?.type === 'doc' ? path.basename(path.dirname(item.link.id)) : item.label;
+    return { ...item, label: folder, items: relabel(item.items) };
+  });
+  return relabel(await defaultSidebarItemsGenerator(args));
+}
+
 // The fleet viewer (demos/fleet) imports its packages by name: resolve them from site/, so the page
 // runs on the site's React, not on a second copy from demos/fleet/node_modules.
 function demoPackages(context) {
@@ -128,6 +141,7 @@ export default {
         exclude: [...GlobExcludeDefault, '**/node_modules/**', '**/target/**', '**/dist/**', '**/.claude/worktrees/**'],
         routeBasePath: '/',
         sidebarPath: './sidebars.js',
+        sidebarItemsGenerator: fileTree,
       },
     ],
     demoPackages,
