@@ -44,7 +44,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc rounds   <KEY-N>   (its open MR's review rounds: the sailor sweeps on it so far)\n  \
      fleetc inspection <KEY-N> [--verdict confirm|refute --body <text|->]   (the latest verdict on its cog's escalation; with --verdict, record one — /fleet-inspect)\n  \
      fleetc escalations [--key <KEY-N>] [--case <N>]   (the project's standing rulings, then the cases of KEY's convoy, newest first: escalation → verdict → ruling; a cog reads only its own convoy's, before it escalates)\n  \
-     fleetc ruling   --case <N> | --key <KEY-N>  --question <text> --answer <text|->   (the operator's ruling on a confirmed case, recorded then sent to its cog; --key: one with no escalation behind it)\n  \
+     fleetc ruling   --case <N> | --key <KEY-N>  --question <text> --answer <text|->   (the operator's ruling on a confirmed case, recorded then sent to its cog; --key: one with no escalation behind it, sent to the worker or sailor on its ticket)\n  \
      fleetc memory   [refused | rulings] | set --file <path|-> | drop <id>   (the project's memory, as TOML: what no MR may build, and the standing rulings; set adds or updates entries by id, drop retires one — the operator's)\n  \
      fleetc decommission <KEY-N> --reason <why> [--yes]   (withdraw it for good: close its MR, cancel it with the reason, reap its cogs + worktree)\n  \
      fleetc recall   <KEY-N> --reason <why> [--weigh] [--yes]   (forget its work: close its MR, end its cogs, discard its worktree; back to the backlog, anchored, or with --weigh dispatched again once its blockers clear)\n  \
@@ -621,7 +621,8 @@ fn render_case(c: &domain::Case, verdict: Option<&domain::Inspection>, full: boo
 /// `fleetc ruling --case <N> | --key <KEY-N> --question <text> --answer <text|->` — the operator's
 /// ruling on a confirmed case: fleetd records it, then sends it to the cog still escalated on it, so
 /// no ruling reaches a cog unrecorded. `--question` is the case's question in general terms, so a
-/// later case can cite it. `--key` instead of `--case` records a ruling with no escalation behind it.
+/// later case can cite it. `--key` instead of `--case` records a ruling with no escalation behind it, and sends it to the
+/// worker or sailor on that ticket, if one is.
 /// The operator's call (the admiral carries it out); never a cog's.
 fn ruling(args: &[String]) -> Result<()> {
     if in_cog() {

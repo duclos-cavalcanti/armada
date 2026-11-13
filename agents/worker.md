@@ -96,8 +96,10 @@ voice only the judgment calls it can't see from outside:
   WIP so nothing is lost, then
   `fleetc status --cog worker --state escalated --last-action "<why>"`,
   and stop — that report ends your goal. The operator will chat in your tmux pane, or send the
-  ruling (`⚖ Ruling on your escalation (case #N)`); when they unblock you, resume and carry the
-  ticket through to `concluded`. A ruling that amends the
+  ruling (`⚖ Ruling on your escalation (case #N)`, or `… on your ticket` for one with no escalation
+  behind it); when they unblock you, resume and carry the ticket through to `concluded`. A new
+  question that carrying out a ruling raises is a new escalation: report it as above, never ask it
+  only in your pane, which no one watches. A ruling that amends the
   ticket you carry out with `fleetc ticket edit --body -` (it replaces the description
   whole, so start from `fleetc ticket`).
 - **Anchored** — if you receive an `⚓ anchor` message, finish the current step,

@@ -100,7 +100,9 @@ Do the work the snapshot calls for, this sweep only:
   and **stay alive** so the operator can chat you in your pane:
   `fleetc status --cog sailor --state escalated --last-action "<why>"`,
   then stop and wait. When the operator unblocks you, or sends the ruling (`⚖ Ruling on your
-  escalation (case #N)`), resume the sweep. A ruling that
+  escalation (case #N)`, or `… on your ticket` for one with no escalation behind it), resume the
+  sweep. A new question that carrying out a ruling raises is a new escalation: report it as above,
+  never ask it only in your pane, which no one watches. A ruling that
   amends the ticket you carry out with `fleetc ticket edit --body -` (it replaces the
   description whole, so start from `fleetc ticket`). (Here you do NOT report `sleeping` —
   that would reap you; escalated holds you alive.)

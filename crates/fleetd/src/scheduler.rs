@@ -890,7 +890,8 @@ fn held(ledger: &Ledger, done: &str) -> Result<String> {
 }
 
 /// Rule on a confirmed case: record the ruling, then hand it to the cog still escalated on it, so no
-/// ruling reaches a cog unrecorded. With no case, a ruling with no escalation behind it, on `ticket`.
+/// ruling reaches a cog unrecorded. With no case, a ruling with no escalation behind it, on `ticket`:
+/// recorded, then handed to the worker or sailor working that ticket, if one is.
 fn rule<H: SessionHost>(
     ledger: &Ledger,
     host: &H,
@@ -901,19 +902,25 @@ fn rule<H: SessionHost>(
 ) -> Result<String> {
     anyhow::ensure!(!question.trim().is_empty() && !answer.trim().is_empty(), "a ruling has a question and an answer");
     let ruling = Ruling { question: question.trim().into(), answer: answer.trim().into(), ruled_at: now_rfc3339() };
-    let Some(id) = case else {
-        let ticket = ticket.ok_or_else(|| anyhow!("a ruling names its case, or the ticket it's on"))?;
-        let id = ledger.rule_alone(&ticket, &ruling)?;
-        return Ok(format!("case #{}: ruled on {}", id.0, ticket.0));
-    };
-    ledger.rule(&id, &ruling)?;
-    let case = ledger.case(&id)?.ok_or_else(|| anyhow!("case #{} vanished", id.0))?;
-    let live = match (&case.session, &case.settled_at) {
-        (Some(s), None) => SessionRepo::get(ledger, s)?.filter(|s| s.ended_at.is_none()),
-        _ => None,
+    let (id, live, on, unsent) = match case {
+        Some(id) => {
+            ledger.rule(&id, &ruling)?;
+            let case = ledger.case(&id)?.ok_or_else(|| anyhow!("case #{} vanished", id.0))?;
+            let live = match (&case.session, &case.settled_at) {
+                (Some(s), None) => SessionRepo::get(ledger, s)?.filter(|s| s.ended_at.is_none()),
+                _ => None,
+            };
+            (id, live, "your escalation", "its cog has moved on".to_string())
+        }
+        None => {
+            let ticket = ticket.ok_or_else(|| anyhow!("a ruling names its case, or the ticket it's on"))?;
+            let id = ledger.rule_alone(&ticket, &ruling)?;
+            let live = live_cogs_on(ledger, &ticket)?.into_iter().find(|s| matches!(s.kind, CrewKind::Worker | CrewKind::Sailor));
+            (id, live, "your ticket", format!("no worker or sailor is on {}", ticket.0))
+        }
     };
     let Some(cog) = live else {
-        return Ok(format!("case #{}: ruled; its cog has moved on, so it's recorded only", id.0));
+        return Ok(format!("case #{}: ruled; {unsent}, so it's recorded only", id.0));
     };
     // One line: the pane takes a newline as Enter. The ruling in full is on the case, and so is the
     // verdict's prepared part, which goes with it: the cog gets the whole solution at once.
@@ -921,7 +928,7 @@ fn rule<H: SessionHost>(
     let prepared = ledger.verdict(&id)?.and_then(|v| v.prepared()).is_some();
     let then = if prepared { "carry it out with the verdict's prepared steps, as this ruling amends them" } else { "carry it out" };
     let msg = format!(
-        "⚖ Ruling on your escalation (case #{}): {answer} — {then}, then report your state. In full: fleetc escalations --case {}",
+        "⚖ Ruling on {on} (case #{}): {answer} — {then}, then report your state. In full: fleetc escalations --case {}",
         id.0, id.0
     );
     host.send(&cog.tmux_session, &msg).with_context(|| format!("case #{}: ruled, but not delivered to {}", id.0, cog.tmux_session))?;
@@ -2801,9 +2808,14 @@ mod tests {
         let said = host.said.borrow()[1].clone();
         assert!(said.contains("The seat's.") && said.contains("the verdict's prepared steps"), "{said}");
 
+        // A ruling with no escalation behind it reaches the worker on its ticket; with none, it's recorded only.
+        let alone = rule(&db, &host, None, Some(key.clone()), "Q?".into(), "A.".into()).unwrap();
+        assert!(alone.contains("sent to worker-PROJ-1"), "{alone}");
+        assert!(host.said.borrow()[2].starts_with("⚖ Ruling on your ticket (case #"), "{}", host.said.borrow()[2]);
+        SessionRepo::end(&db, &id, "t4").unwrap();
         let alone = rule(&db, &host, None, Some(key), "Q?".into(), "A.".into()).unwrap();
-        assert!(alone.contains("ruled on PROJ-1"), "{alone}");
-        assert_eq!(host.sent.borrow().len(), 2, "a ruling with no escalation has no cog to send to");
+        assert!(alone.contains("no worker or sailor is on PROJ-1, so it's recorded only"), "{alone}");
+        assert_eq!(host.sent.borrow().len(), 3);
         assert!(rule(&db, &host, None, None, "Q?".into(), " ".into()).is_err(), "a ruling has an answer");
     }
 

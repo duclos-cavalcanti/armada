@@ -234,8 +234,8 @@ ruling: recommend the operator add it to the project's memory (`fleetc memory se
 escalated.
 
 A ruling the operator makes with no escalation behind it (a design question settled while
-grooming) goes on record too, so the convoy's cogs find it: `fleetc ruling --key <KEY> --question
-"<…>" --answer -`.
+grooming) goes on record too, so the convoy's cogs find it, and reaches the worker or sailor on
+its ticket, if one is: `fleetc ruling --key <KEY> --question "<…>" --answer -`.
 
 ## Investigation
 

@@ -891,7 +891,7 @@ fn handle_inspection(request: &str, cmds: &Sender<Command>) -> String {
 }
 
 /// `POST /ruling` — the operator's ruling on a confirmed case (recorded, then sent to its cog), or one
-/// with no escalation behind it (`fleetc ruling`).
+/// with no escalation behind it, sent to the worker or sailor on its ticket (`fleetc ruling`).
 fn handle_ruling(request: &str, cmds: &Sender<Command>) -> String {
     let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
     let dto: wire::RulingCmd = match serde_json::from_str(body) {

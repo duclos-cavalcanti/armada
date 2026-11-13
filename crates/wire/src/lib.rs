@@ -112,7 +112,7 @@ pub struct InspectionCmd {
 }
 
 /// The operator's ruling (`POST /ruling`, `fleetc ruling`): on a confirmed `case`, recorded and sent
-/// to its cog; or, with only a `ticket`, a ruling with no escalation behind it. `question` is the
+/// to its cog; or, with only a `ticket`, a ruling with no escalation behind it, sent to the worker or sailor on it. `question` is the
 /// case's question in general terms, so a later case can cite it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RulingCmd {
