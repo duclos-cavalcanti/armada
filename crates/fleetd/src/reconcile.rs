@@ -17,6 +17,8 @@
 //! - heal:     a Dead WARM cog (worker/hand) that didn't deliberately stop — a crash → respawn.
 //! - stand_down: a Dead COLD cog (sailor) — its one-shot watch is over → end the session so the
 //!   sweep trigger can re-launch on the next change (a crash looks identical; it re-fires too).
+//! - anchor:   a sailor due on a ticket that needed `max_rulings` of the operator's rulings since
+//!   it was last weighed → anchored for the operator instead; a weigh restarts the count.
 //! - lookout:   one cog per ALLIED ship under review (not ours), up to `lookouts` at once. An allied
 //!   open ship whose code changed since its last review (head_sha ≠ reviewed) → launch a lookout on
 //!   it, oldest MR first (fleetd marks it reviewed at dispatch); it reviews its one ship and reports
@@ -54,6 +56,7 @@ pub enum Action {
     LaunchCaptain { convoy: String },          // active convoy with a pass of work + no live captain → launch
     StandDownCaptain { convoy: String },       // captain finished its pass / convoy gone → end its session
     LaunchSailor { ticket: String },           // open ship changed since last sweep → launch a sailor
+    Anchor { ticket: String, rulings: u64 },   // a sailor due, but the ticket needed max_rulings rulings → hold it for the operator
     LaunchLookout { iid: i64 },                // an ally's ship changed, or a worker asked review of ours → launch a lookout on it
     StandDownLookout { session: i64 },         // a lookout finished its review (or its ship sank) → end its session
     LaunchAdmiral { ticket: String },          // a confirmed escalation with no admiral since its verdict → convene one
@@ -63,7 +66,7 @@ pub enum Action {
 /// liveness). Pure (reads only). `cogs` carry liveness for the heal/terminal checks; `stacks` is
 /// the forge's capability (`Forge::stacks`) — without it, no STACKED spawn and no BLOCK.
 pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Result<Vec<Action>> {
-    let &Levers { captain_sleep_secs, admirals, lookouts, self_lookouts, review_settle_secs, .. } = levers;
+    let &Levers { captain_sleep_secs, admirals, lookouts, self_lookouts, review_settle_secs, max_rulings, .. } = levers;
     let mut actions = Vec::new();
 
     // DISPATCH — iterate the order queue (intent). Spawn a CLEAN (all blockers terminal) ticket OR
@@ -130,6 +133,9 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
             // a reviewer mid-review, and a sweep now would answer them and move the head under the
             // rest. It waits for the threads to hold still, unless a conflict or a red pipeline needs
             // the sailor at once.
+            // And capped: a ticket that needed `max_rulings` of the operator's rulings since it was
+            // last weighed gets no further sailor. It's anchored for the operator instead, who
+            // re-scopes, recalls or decommissions it, or weighs it to go on (restarting the count).
             let auto = OrderRepo::get(ledger, tkey)?.is_some_and(|o| o.auto_impl && o.worktree_path.is_some());
             let ticket = TicketRepo::get(ledger, tkey)?;
             let held = ticket.as_ref().is_some_and(|t| t.held);
@@ -143,7 +149,12 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
             let urgent = snap.has_conflicts || snap.pipeline == Some(PipelineStatus::Failed);
             let settled = urgent || rested(ledger.threads_changed_at(&ship.id)?.as_deref(), review_settle_secs);
             if auto && !held && !todo && !live_sailor && !live_builder && settled && (needs_work(&snap, blocked) || changed) {
-                actions.push(Action::LaunchSailor { ticket: tkey.0.clone() });
+                let rulings = ledger.rulings_since_weigh(tkey)?;
+                actions.push(if rulings >= max_rulings {
+                    Action::Anchor { ticket: tkey.0.clone(), rulings }
+                } else {
+                    Action::LaunchSailor { ticket: tkey.0.clone() }
+                });
             }
         }
     }
@@ -668,6 +679,8 @@ pub struct Levers {
     pub review_rounds: u64,
     /// How long an MR's review threads must hold still before a sailor answers them.
     pub review_settle_secs: u64,
+    /// The operator's rulings a ticket may need, since it was last weighed, before its sailors stop.
+    pub max_rulings: u64,
     pub review_skill: Option<String>,
     /// The project's grooming skill, handed to each admiral in `FLEET_GROOM_SKILL`.
     pub groom_skill: Option<String>,
@@ -743,6 +756,7 @@ fn execute<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
         Action::LaunchCaptain { convoy } => launch_captain(ledger, host, project, convoy, levers.assess_skill.as_deref()),
         Action::StandDownCaptain { convoy } => stand_down_captain(ledger, host, convoy),
         Action::LaunchSailor { ticket } => launch_sailor(ledger, forge, host, ticket),
+        Action::Anchor { ticket, rulings } => anchor(ledger, ticket, *rulings),
         Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, project, *iid, levers.review_skill.as_deref()),
         Action::StandDownLookout { session } => stand_down_lookout(ledger, host, project, &SessionId(*session)),
         Action::LaunchAdmiral { ticket } => {
@@ -1101,6 +1115,15 @@ fn review_wake<H: SessionHost, F: Forge + ?Sized>(
         last_action: Some(format!("woken: review round {round} ({open} open threads)")),
         reported_at: now_rfc3339(),
     })
+}
+
+/// Anchor — a ticket that needed `rulings` of the operator's rulings since it was last weighed
+/// gets no further sailor: held off the line, the reason on its `TicketHeld` event, until the
+/// operator weighs it. No cog is live on it (the plan's gate), so holding the ticket is all.
+fn anchor(ledger: &Ledger, ticket: &str, rulings: u64) -> Result<()> {
+    let reason = format!("needed {rulings} rulings since it was last weighed: re-scope, recall or decommission it, or weigh it to go on");
+    tracing::warn!("anchor {ticket}: {reason}");
+    TicketRepo::set_held(ledger, &TicketKey(ticket.to_string()), true, Some(&reason), &now_rfc3339())
 }
 
 /// StandDown — the cold-loop counterpart to heal: a cold cog (sailor) whose host process is gone
@@ -1544,6 +1567,7 @@ mod tests {
         self_lookouts: -1,
         review_rounds: 5,
         review_settle_secs: 0,
+        max_rulings: 6,
         review_skill: None,
         groom_skill: None,
         assess_skill: None,
@@ -2647,6 +2671,28 @@ mod tests {
         let snap = ShipRepo::snapshot(&db, &s.id).unwrap().unwrap();
         db.set_swept(&s.id, Some(&ship_fingerprint(&snap, false))).unwrap();
         assert!(plan(&db, &[], true, &LIVE).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_ticket_that_needed_max_rulings_is_anchored_instead_of_sailed() {
+        let db = db();
+        ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
+        order_wt(&db, "PROJ-1", true, Some("/wt/PROJ-1"));
+        ship(&db, 10, "PROJ-1", ShipState::Open);
+        let key = TicketKey("PROJ-1".into());
+        let rule = || db.rule_alone(&key, &Ruling { question: "q".into(), answer: "a".into(), ruled_at: now_rfc3339() }).unwrap();
+        let capped = Levers { max_rulings: 2, ..LIVE };
+        let launch = vec![Action::LaunchSailor { ticket: "PROJ-1".into() }];
+
+        rule();
+        assert_eq!(plan(&db, &[], true, &capped).unwrap(), launch, "1 of 2 rulings: sail on");
+        rule();
+        assert_eq!(plan(&db, &[], true, &capped).unwrap(), vec![Action::Anchor { ticket: "PROJ-1".into(), rulings: 2 }]);
+        anchor(&db, "PROJ-1", 2).unwrap();
+        assert!(TicketRepo::get(&db, &key).unwrap().unwrap().held);
+        assert!(plan(&db, &[], true, &capped).unwrap().is_empty(), "anchored: the operator's now");
+        TicketRepo::set_held(&db, &key, false, None, &now_rfc3339()).unwrap(); // `fleetc weigh`
+        assert_eq!(plan(&db, &[], true, &capped).unwrap(), launch, "weighed: the count restarts");
     }
 
     #[test]

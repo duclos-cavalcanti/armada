@@ -37,6 +37,9 @@ pub struct Config {
     /// How long an MR's review threads must hold still before a sailor answers them, so a reviewer
     /// mid-review isn't answered (and the head moved) under them. 0 = answer at once.
     pub review_settle_secs: u64,
+    /// Rulings a ticket may need from the operator, since it was last weighed, before its sailors
+    /// stop: at that many, reconcile anchors it for the operator instead of launching another.
+    pub max_rulings: u64,
     /// The project's own review skill (its name, e.g. `mr-review`, run as `/<name> <iid>` from the
     /// project's `.claude/skills/`), which every lookout runs. Unset = the kit's `/fleet-review`.
     pub review_skill: Option<String>,
@@ -143,6 +146,7 @@ impl Default for Config {
             self_lookouts: -1,
             review_rounds: 5,
             review_settle_secs: 300,
+            max_rulings: 6,
             review_skill: None,
             groom_skill: None,
             assess_skill: None,

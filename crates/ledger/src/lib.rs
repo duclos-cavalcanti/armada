@@ -2006,6 +2006,16 @@ impl CaseRepo for Ledger {
         tx.commit()?;
         Ok(id)
     }
+
+    fn rulings_since_weigh(&self, ticket: &TicketKey) -> Result<u64> {
+        let n: i64 = self.conn.query_row(
+            "SELECT count(*) FROM cases WHERE ticket = ?1 AND ruled_at > COALESCE((SELECT max(created_at) FROM events
+                 WHERE entity_kind = ?2 AND entity_ref = ?1 AND kind = ?3), '')",
+            params![ticket.0, EntityKind::Ticket.as_str(), EventKind::TicketReleased.as_str()],
+            |r| r.get(0),
+        )?;
+        Ok(n as u64)
+    }
 }
 
 /// The `EscalationRuled` event of a ruling, in its txn.
@@ -2428,6 +2438,23 @@ mod repo_tests {
         assert!(db.rule_alone(&TicketKey("PROJ-404".into()), &ruling).is_err(), "not on the board");
         assert_eq!(pending(&db), None, "a ruling alone awaits nothing");
         assert_eq!(db.events_of(EventKind::EscalationRuled).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn rulings_since_weigh_counts_the_operators_rulings_and_a_weigh_restarts_it() {
+        let db = Ledger::in_memory().unwrap();
+        TicketRepo::upsert(&db, &bare_ticket("PROJ-1")).unwrap();
+        let key = TicketKey("PROJ-1".into());
+        let rule = |at: &str| db.rule_alone(&key, &Ruling { question: "q".into(), answer: "a".into(), ruled_at: at.into() }).unwrap();
+        rule("2026-01-01T00:00:01Z");
+        rule("2026-01-01T00:00:02Z");
+        assert_eq!(db.rulings_since_weigh(&key).unwrap(), 2);
+        TicketRepo::set_held(&db, &key, true, Some("cap"), "2026-01-01T00:00:03Z").unwrap();
+        assert_eq!(db.rulings_since_weigh(&key).unwrap(), 2, "an anchor restarts nothing");
+        TicketRepo::set_held(&db, &key, false, None, "2026-01-01T00:00:04Z").unwrap();
+        assert_eq!(db.rulings_since_weigh(&key).unwrap(), 0, "the operator weighed it");
+        rule("2026-01-01T00:00:05Z");
+        assert_eq!(db.rulings_since_weigh(&key).unwrap(), 1);
     }
 
     #[test]

@@ -75,6 +75,9 @@ pub fn self_lookouts(cfg: &Config, l: &Ledger) -> i64 {
 pub fn review_rounds(cfg: &Config, l: &Ledger) -> u64 {
     resolve_u64(l, None, "review_rounds", cfg.review_rounds)
 }
+pub fn max_rulings(cfg: &Config, l: &Ledger) -> u64 {
+    resolve_u64(l, None, "max_rulings", cfg.max_rulings)
+}
 pub fn dry_run(cfg: &Config, l: &Ledger) -> bool {
     resolve_bool(l, Some("FLEET_DRY_RUN"), "dry_run", cfg.dry_run)
 }
@@ -131,6 +134,7 @@ const LEVERS: &[Lever] = &[
     Lever { key: "self_lookouts", env: None, ty: Ty::I64 },
     Lever { key: "review_rounds", env: None, ty: Ty::U64 },
     Lever { key: "review_settle_secs", env: None, ty: Ty::U64 },
+    Lever { key: "max_rulings", env: None, ty: Ty::U64 },
     Lever { key: "dry_run", env: Some("FLEET_DRY_RUN"), ty: Ty::Bool },
     Lever { key: "active_secs", env: Some("FLEET_ACTIVE_SECS"), ty: Ty::I64 },
     Lever { key: "quiet_secs", env: Some("FLEET_QUIET_SECS"), ty: Ty::I64 },
@@ -193,6 +197,7 @@ fn value_of(cfg: &Config, l: &Ledger, key: &str) -> String {
         "self_lookouts" => self_lookouts(cfg, l).to_string(),
         "review_rounds" => review_rounds(cfg, l).to_string(),
         "review_settle_secs" => review_settle_secs(cfg, l).to_string(),
+        "max_rulings" => max_rulings(cfg, l).to_string(),
         "dry_run" => dry_run(cfg, l).to_string(),
         "active_secs" => thresholds(cfg, l).active_secs.to_string(),
         "quiet_secs" => thresholds(cfg, l).quiet_secs.to_string(),

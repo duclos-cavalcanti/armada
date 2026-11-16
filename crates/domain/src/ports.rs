@@ -164,6 +164,8 @@ pub trait CaseRepo {
     fn rule(&self, id: &CaseId, ruling: &Ruling) -> Result<()>;
     /// Record a ruling with no escalation behind it, on `ticket`: a new case, settled at once.
     fn rule_alone(&self, ticket: &TicketKey, ruling: &Ruling) -> Result<CaseId>;
+    /// The rulings the operator made on `ticket` since it was last weighed: how often it needed them.
+    fn rulings_since_weigh(&self, ticket: &TicketKey) -> Result<u64>;
 }
 
 /// The project's memory: the operator's standing decisions, each entry kept with its history.

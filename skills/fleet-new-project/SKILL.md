@@ -92,6 +92,7 @@ lookouts           = 3
 self_lookouts      = -1                # lookouts on our own MRs, apart from the allies': -1 = no cap
 review_rounds      = 5
 review_settle_secs = 300               # how long an MR's review threads hold still before a sailor answers them
+max_rulings        = 6                 # the operator's rulings a ticket may need, since last weighed, before it's anchored
 # review_skill     = "<name>"          # the project's own review skill; unset = /fleet-review
 # groom_skill      = "<name>"          # the project's own grooming skill; unset = /fleet-ready-done
 # assess_skill     = "<name>"          # its read-only readiness check, run before dispatch; unset = /fleet-ready-done
