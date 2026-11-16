@@ -205,10 +205,14 @@ impl App {
         self.cursors[pane as usize]
     }
 
-    /// The orders a dispatch pane lists: the workers' (auto-implemented), or the hands' (manual).
+    /// The orders a dispatch pane lists: the workers' (auto-implemented), or the hands' (manual), in
+    /// convoy order: convoy #1's first, then #2's, …, a ticket in no open convoy last; oldest first
+    /// within each.
     pub fn orders(&self, pane: Pane) -> Vec<&source::OrderRow> {
         let hands = pane == Pane::HandOrders;
-        self.fleet.dispatched.iter().filter(|o| o.order.auto_impl != hands).collect()
+        let mut orders: Vec<_> = self.fleet.dispatched.iter().filter(|o| o.order.auto_impl != hands).collect();
+        orders.sort_by_key(|o| self.fleet.convoy_of(Some(&o.order.ticket)).unwrap_or(i64::MAX));
+        orders
     }
 
     pub fn len(&self, pane: Pane) -> usize {

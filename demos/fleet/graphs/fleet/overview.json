@@ -207,7 +207,7 @@
             { "key": "self_lookouts", "meta": "-1", "informs": "Lookouts reviewing our own MRs at once, apart from the allies' cap." },
             { "key": "review_rounds", "meta": "5", "informs": "Review rounds a worker gets on its MR; past them with threads open, it escalates." },
             { "key": "review_settle_secs", "meta": "300", "informs": "How long an MR's threads must hold still before a sailor answers them (0 = at once)." },
-            { "key": "max_rulings", "meta": "6", "informs": "The operator's rulings a ticket may need, since it was last weighed, before it's anchored instead of sailed." }
+            { "key": "max_rulings", "meta": "6", "informs": "The operator's rulings a ticket may need, since it was last weighed, before it's anchored and escalated to them." }
           ]},
           { "section": "project skills · opt", "rows": [
             { "key": "review_skill", "meta": "opt", "informs": "The project's own review skill, which every lookout runs (unset = /fleet-review)." },

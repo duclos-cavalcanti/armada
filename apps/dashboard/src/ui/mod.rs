@@ -164,13 +164,20 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             },
             Some(header(&[
                 ("Ticket", 12),
+                ("Convoy", 7),
                 ("Crew", 7),
                 ("Phase", 15),
                 ("Status", 12),
                 ("Age", 6),
                 ("Waiting on", 0),
             ])),
-            app.orders(pane).into_iter().map(order_row).collect(),
+            app.orders(pane)
+                .into_iter()
+                .map(|o| {
+                    let t = Some(&o.order.ticket);
+                    order_row(o, ticket_convoy_cell(f.convoy_of(t), f.on_path(t)))
+                })
+                .collect(),
         ),
         Pane::Impl | Pane::Hands => (
             if pane == Pane::Impl {
@@ -219,7 +226,8 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 .map(|r| {
                     let admiral = r.ship.ticket.as_ref().is_some_and(|t| f.admirals.contains(t));
                     let t = r.ship.ticket.as_ref();
-                    landing_row(r, r.sailor.as_ref().is_some_and(|s| f.is_up(s)), ticket_convoy_cell(f.convoy_of(t), f.on_path(t)), admiral)
+                    let held = t.is_some_and(|t| f.held_reasons.contains_key(&t.0));
+                    landing_row(r, r.sailor.as_ref().is_some_and(|s| f.is_up(s)), ticket_convoy_cell(f.convoy_of(t), f.on_path(t)), admiral, held)
                 })
                 .collect(),
         ),
@@ -285,7 +293,7 @@ pub(crate) fn health(check: &Option<Event>) -> Option<Result<(), String>> {
 
 // ── the line, by phase ───────────────────────────────────────────────────────────
 
-fn order_row(o: &OrderRow) -> Line<'static> {
+fn order_row(o: &OrderRow, convoy: (String, usize, Style)) -> Line<'static> {
     let crew = if o.order.auto_impl { "worker" } else { "hand" };
     let status = o.status.map(|s| s.as_str().to_string()).unwrap_or_else(|| "—".into());
     let mut waiting = Vec::new();
@@ -304,6 +312,7 @@ fn order_row(o: &OrderRow) -> Line<'static> {
     };
     cells(vec![
         (o.order.ticket.0.clone(), 12, Style::default()),
+        convoy,
         (crew.into(), 7, Style::default()),
         (o.phase.as_str().into(), 15, phase_style),
         (status, 12, Style::default()),
@@ -333,11 +342,13 @@ fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>, convoy: (String, us
     ])
 }
 
-fn landing_row(r: &LandingRow, up: bool, convoy: (String, usize, Style), admiral: bool) -> Line<'static> {
+fn landing_row(r: &LandingRow, up: bool, convoy: (String, usize, Style), admiral: bool, held: bool) -> Line<'static> {
     let snap = r.snapshot.as_ref();
-    // An ended sailor's last word stays visible, dimmed: the ship is at rest.
+    // An ended sailor's last word stays visible, dimmed: the ship is at rest. An anchored ticket
+    // shows ⚓ before it, whatever its sailor last said: no sailor sweeps it until it's weighed.
     let sailor = crate::source::sailor_label(r.sailor.as_ref());
-    let sailor_style = if r.live { state_style(&sailor) } else { dim() };
+    let sailor_style = if held { state_style("anchored") } else if r.live { state_style(&sailor) } else { dim() };
+    let sailor = if held { format!("⚓ {sailor}") } else { sailor };
     let age = r.sailor.as_ref().and_then(|s| s.age_secs);
     let live = if r.live { live_cell(r.sailor.as_ref().and_then(|s| s.liveness.as_deref()), up) } else { ("—".into(), 7, dim()) };
     let pipe = pipeline(snap);

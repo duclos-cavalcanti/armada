@@ -939,7 +939,8 @@ fn held(ledger: &Ledger, done: &str) -> Result<String> {
 /// The operator's ruling on a ticket, recorded before it's sent, so no ruling reaches a cog
 /// unrecorded. The ticket's escalation awaiting its answer takes it once the lookout has CONFIRMed
 /// it; with none, it stands alone. Either way it goes to the worker or sailor on the ticket, if one
-/// is. Nothing is ruled while the lookout is still judging.
+/// is. Nothing is ruled while the lookout is still judging. A ruling on the ruling cap's escalation
+/// weighs the ticket too: its sailor goes on, and the count restarts.
 fn rule<H: SessionHost>(ledger: &Ledger, host: &H, ticket: TicketKey, question: String, answer: String) -> Result<String> {
     anyhow::ensure!(!question.trim().is_empty() && !answer.trim().is_empty(), "a ruling has a question and an answer");
     let ruling = Ruling { question: question.trim().into(), answer: answer.trim().into(), ruled_at: now_rfc3339() };
@@ -950,6 +951,9 @@ fn rule<H: SessionHost>(ledger: &Ledger, host: &H, ticket: TicketKey, question: 
     let (id, on) = match pending {
         Some(case) => {
             ledger.rule(&case.id, &ruling)?;
+            if ledger.verdict(&case.id)?.is_some_and(|v| v.body == reconcile::CAP_VERDICT) {
+                TicketRepo::set_held(ledger, &ticket, false, None, &now_rfc3339())?;
+            }
             (case.id, "your escalation")
         }
         None => (ledger.rule_alone(&ticket, &ruling)?, "your ticket"),
@@ -2839,6 +2843,23 @@ mod tests {
         .unwrap()
         .unwrap();
         (db, id)
+    }
+
+    #[test]
+    fn a_ruling_on_the_ruling_caps_escalation_weighs_the_ticket() {
+        let (db, id) = db_with_live_worker();
+        let host = FakeHost::new();
+        let key = TicketKey("PROJ-1".into());
+        TicketRepo::set_held(&db, &key, true, Some("needed 6 rulings"), &now_rfc3339()).unwrap();
+        let state = CogState::Worker(WorkerState::Escalated);
+        let question = Some("PROJ-1 needed 6 of your rulings".into());
+        ReportRepo::record(&db, &Report { session: id, state, last_action: question, reported_at: now_rfc3339() }).unwrap();
+        inspect(&db, &key, Verdict::Confirm, reconcile::CAP_VERDICT.into()).unwrap();
+
+        rule(&db, &host, key.clone(), "How does it go on?".into(), "Split the docs out.".into()).unwrap();
+        assert!(!TicketRepo::get(&db, &key).unwrap().unwrap().held, "weighed: its cog goes on");
+        assert_eq!(db.rulings_since_weigh(&key).unwrap(), 0, "the count restarts");
+        assert!(host.said.borrow()[0].contains("Split the docs out."), "{}", host.said.borrow()[0]);
     }
 
     #[test]

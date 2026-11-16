@@ -17,8 +17,9 @@
 //! - heal:     a Dead WARM cog (worker/hand) that didn't deliberately stop — a crash → respawn.
 //! - stand_down: a Dead COLD cog (sailor) — its one-shot watch is over → end the session so the
 //!   sweep trigger can re-launch on the next change (a crash looks identical; it re-fires too).
-//! - anchor:   a sailor due on a ticket that needed `max_rulings` of the operator's rulings since
-//!   it was last weighed → anchored for the operator instead; a weigh restarts the count.
+//! - capped:   a sailor due on a ticket that needed `max_rulings` of the operator's rulings since
+//!   it was last weighed → anchored and escalated to the operator: its sailor stands by for the
+//!   ruling, which weighs the ticket (restarting the count) and goes to it.
 //! - lookout:   one cog per ALLIED ship under review (not ours), up to `lookouts` at once. An allied
 //!   open ship whose code changed since its last review (head_sha ≠ reviewed) → launch a lookout on
 //!   it, oldest MR first (fleetd marks it reviewed at dispatch); it reviews its one ship and reports
@@ -56,7 +57,7 @@ pub enum Action {
     LaunchCaptain { convoy: String },          // active convoy with a pass of work + no live captain → launch
     StandDownCaptain { convoy: String },       // captain finished its pass / convoy gone → end its session
     LaunchSailor { ticket: String },           // open ship changed since last sweep → launch a sailor
-    Anchor { ticket: String, rulings: u64 },   // a sailor due, but the ticket needed max_rulings rulings → hold it for the operator
+    Capped { ticket: String, rulings: u64 },   // a sailor due, but the ticket needed max_rulings rulings → anchor + escalate it
     LaunchLookout { iid: i64 },                // an ally's ship changed, or a worker asked review of ours → launch a lookout on it
     StandDownLookout { session: i64 },         // a lookout finished its review (or its ship sank) → end its session
     LaunchAdmiral { ticket: String },          // a confirmed escalation with no admiral since its verdict → convene one
@@ -134,8 +135,8 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
             // rest. It waits for the threads to hold still, unless a conflict or a red pipeline needs
             // the sailor at once.
             // And capped: a ticket that needed `max_rulings` of the operator's rulings since it was
-            // last weighed gets no further sailor. It's anchored for the operator instead, who
-            // re-scopes, recalls or decommissions it, or weighs it to go on (restarting the count).
+            // last weighed gets no sweep. It's anchored and escalated to the operator instead, its
+            // sailor standing by for the ruling (see `capped`).
             let auto = OrderRepo::get(ledger, tkey)?.is_some_and(|o| o.auto_impl && o.worktree_path.is_some());
             let ticket = TicketRepo::get(ledger, tkey)?;
             let held = ticket.as_ref().is_some_and(|t| t.held);
@@ -151,7 +152,7 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
             if auto && !held && !todo && !live_sailor && !live_builder && settled && (needs_work(&snap, blocked) || changed) {
                 let rulings = ledger.rulings_since_weigh(tkey)?;
                 actions.push(if rulings >= max_rulings {
-                    Action::Anchor { ticket: tkey.0.clone(), rulings }
+                    Action::Capped { ticket: tkey.0.clone(), rulings }
                 } else {
                     Action::LaunchSailor { ticket: tkey.0.clone() }
                 });
@@ -755,8 +756,8 @@ fn execute<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
         Action::StandDown { ticket, kind } => stand_down(ledger, host, ticket, kind),
         Action::LaunchCaptain { convoy } => launch_captain(ledger, host, project, convoy, levers.assess_skill.as_deref()),
         Action::StandDownCaptain { convoy } => stand_down_captain(ledger, host, convoy),
-        Action::LaunchSailor { ticket } => launch_sailor(ledger, forge, host, ticket),
-        Action::Anchor { ticket, rulings } => anchor(ledger, ticket, *rulings),
+        Action::LaunchSailor { ticket } => launch_sailor(ledger, forge, host, ticket, None).map(drop),
+        Action::Capped { ticket, rulings } => capped(ledger, forge, host, ticket, *rulings),
         Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, project, *iid, levers.review_skill.as_deref()),
         Action::StandDownLookout { session } => stand_down_lookout(ledger, host, project, &SessionId(*session)),
         Action::LaunchAdmiral { ticket } => {
@@ -1117,13 +1118,33 @@ fn review_wake<H: SessionHost, F: Forge + ?Sized>(
     })
 }
 
-/// Anchor — a ticket that needed `rulings` of the operator's rulings since it was last weighed
-/// gets no further sailor: held off the line, the reason on its `TicketHeld` event, until the
-/// operator weighs it. No cog is live on it (the plan's gate), so holding the ticket is all.
-fn anchor(ledger: &Ledger, ticket: &str, rulings: u64) -> Result<()> {
-    let reason = format!("needed {rulings} rulings since it was last weighed: re-scope, recall or decommission it, or weigh it to go on");
+/// The verdict fleetd records on a capped ticket's escalation itself: the cap is a count, with no
+/// cog's reasoning for a captain to inspect. The operator's ruling on it weighs the ticket.
+pub(crate) const CAP_VERDICT: &str =
+    "CONFIRM, by fleetd: the ruling cap is a count, with no reasoning to inspect. Rule how the ticket goes on.";
+
+/// Capped — a sailor came due on a ticket that needed `rulings` of the operator's rulings since it
+/// was last weighed. It's anchored (⚓) and escalated instead of swept: a sailor launches standing by,
+/// fleetd records its escalation (opening the case) and CONFIRMs it, so it reaches the operator and
+/// an admiral at once. The operator's ruling weighs the ticket and goes to that sailor.
+fn capped<H: SessionHost, F: Forge + ?Sized>(ledger: &Ledger, forge: &F, host: &H, ticket: &str, rulings: u64) -> Result<()> {
+    let tkey = TicketKey(ticket.to_string());
+    let reason = format!("needed {rulings} rulings since it was last weighed: escalated for your ruling");
     tracing::warn!("anchor {ticket}: {reason}");
-    TicketRepo::set_held(ledger, &TicketKey(ticket.to_string()), true, Some(&reason), &now_rfc3339())
+    TicketRepo::set_held(ledger, &tkey, true, Some(&reason), &now_rfc3339())?;
+    let brief = format!(
+        "fleetd escalated {ticket} for you: it needed {rulings} of the operator's rulings since it was last weighed. Don't sweep and don't report: wait for the operator's ruling, then carry it out."
+    );
+    let Some(session) = launch_sailor(ledger, forge, host, ticket, Some(&brief))? else { return Ok(()) };
+    let question = format!(
+        "{ticket} needed {rulings} of your rulings since it was last weighed (max_rulings): rule how it goes on, and its sailor carries it out; or recall or decommission it."
+    );
+    let at = now_rfc3339();
+    let escalated = CogState::Sailor(domain::SailorState::Escalated);
+    ReportRepo::record(ledger, &Report { session: session.clone(), state: escalated, last_action: Some(question), reported_at: at.clone() })?;
+    let case = ledger.open_case(&session)?.map(|c| c.id);
+    let verdict = Inspection { session, case, reported_at: at.clone(), verdict: Verdict::Confirm, body: CAP_VERDICT.into(), inspected_at: at };
+    domain::ports::InspectionRepo::inspect(ledger, &verdict)
 }
 
 /// StandDown — the cold-loop counterpart to heal: a cold cog (sailor) whose host process is gone
@@ -1288,14 +1309,16 @@ pub(crate) fn fresh_snapshot<F: Forge + ?Sized>(ledger: &Ledger, forge: &F, ship
 
 /// LaunchSailor — the cold-loop sweep: fresh-poll this one ship so the sailor's packet carries
 /// current state, record the fingerprint we dispatched against (`swept`), then launch a one-shot
-/// sailor in the ship's worktree (off the order, which outlives the reaped worker). The
-/// `one_live_crew_per_ticket` lock makes a duplicate a benign skip.
+/// sailor in the ship's worktree (off the order, which outlives the reaped worker), `brief` its
+/// first prompt if given. The `one_live_crew_per_ticket` lock makes a duplicate a benign skip
+/// (`None`); a launch returns its session.
 fn launch_sailor<H: SessionHost, F: Forge + ?Sized>(
     ledger: &Ledger,
     forge: &F,
     host: &H,
     ticket: &str,
-) -> Result<()> {
+    brief: Option<&str>,
+) -> Result<Option<SessionId>> {
     let tkey = TicketKey(ticket.to_string());
     let ship = ledger
         .armada()?
@@ -1330,10 +1353,16 @@ fn launch_sailor<H: SessionHost, F: Forge + ?Sized>(
         },
     )? {
         Some(id) => id,
-        None => return Ok(()), // a live sailor already holds the lock — benign skip
+        None => return Ok(None), // a live sailor already holds the lock — benign skip
     };
 
-    host.spawn(&sailor_tmux, Path::new(&worktree), &ticket_launch_cmd("sailor", ticket, Launch::Fresh(&hid)))?;
+    // A brief rides in as the session's first prompt, after the agent's own (`initialPrompt`).
+    let cmd = ticket_launch_cmd("sailor", ticket, Launch::Fresh(&hid));
+    let cmd = match brief {
+        Some(b) => format!("{cmd} '{}'", b.replace('\'', r"'\''")),
+        None => cmd,
+    };
+    host.spawn(&sailor_tmux, Path::new(&worktree), &cmd)?;
     ledger.append(
         &now_rfc3339(),
         EventKind::SessionStarted,
@@ -1341,7 +1370,7 @@ fn launch_sailor<H: SessionHost, F: Forge + ?Sized>(
         &session_id.0.to_string(),
         &serde_json::json!({ "ticket": ticket, "kind": "sailor" }),
     )?;
-    Ok(())
+    Ok(Some(session_id))
 }
 
 /// LaunchLookout — review ONE ship, picked by reconcile. Fresh-poll it, berth a review worktree at its
@@ -2677,25 +2706,53 @@ mod tests {
     }
 
     #[test]
-    fn a_ticket_that_needed_max_rulings_is_anchored_instead_of_sailed() {
+    fn a_ticket_that_needed_max_rulings_is_anchored_and_escalated_instead_of_sailed() {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
         order_wt(&db, "PROJ-1", true, Some("/wt/PROJ-1"));
         ship(&db, 10, "PROJ-1", ShipState::Open);
         let key = TicketKey("PROJ-1".into());
         let rule = || db.rule_alone(&key, &Ruling { question: "q".into(), answer: "a".into(), ruled_at: now_rfc3339() }).unwrap();
-        let capped = Levers { max_rulings: 2, ..LIVE };
-        let launch = vec![Action::LaunchSailor { ticket: "PROJ-1".into() }];
+        let cap_2 = Levers { max_rulings: 2, admirals: 1, ..LIVE };
 
         rule();
-        assert_eq!(plan(&db, &[], true, &capped).unwrap(), launch, "1 of 2 rulings: sail on");
+        assert_eq!(plan(&db, &[], true, &cap_2).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-1".into() }], "1 of 2: sail on");
         rule();
-        assert_eq!(plan(&db, &[], true, &capped).unwrap(), vec![Action::Anchor { ticket: "PROJ-1".into(), rulings: 2 }]);
-        anchor(&db, "PROJ-1", 2).unwrap();
-        assert!(TicketRepo::get(&db, &key).unwrap().unwrap().held);
-        assert!(plan(&db, &[], true, &capped).unwrap().is_empty(), "anchored: the operator's now");
-        TicketRepo::set_held(&db, &key, false, None, &now_rfc3339()).unwrap(); // `fleetc weigh`
-        assert_eq!(plan(&db, &[], true, &capped).unwrap(), launch, "weighed: the count restarts");
+        assert_eq!(plan(&db, &[], true, &cap_2).unwrap(), vec![Action::Capped { ticket: "PROJ-1".into(), rulings: 2 }]);
+
+        let (forge, host) = (FakeForge::new(), FakeHost::new());
+        let s = db.armada().unwrap().into_iter().find(|s| s.iid == 10).unwrap();
+        *forge.snapshot.borrow_mut() = Some(ForgeShip {
+            iid: 10,
+            url: "u".into(),
+            target: "master".into(),
+            source: String::new(),
+            pilot: "me".into(),
+            ticket: Some(key.clone()),
+            title: "T".into(),
+            state: ShipState::Open,
+            head_sha: ShipRepo::snapshot(&db, &s.id).unwrap().unwrap().head_sha,
+            has_conflicts: false,
+            open_threads: 0,
+            total_threads: 0,
+            approvals: Approvals { current: 0, required: 0 },
+            armed: false,
+            on_merge_train: false,
+            blocked_by: vec![],
+            pipeline: None,
+            merge_status: None,
+        });
+        capped(&db, &forge, &host, "PROJ-1", 2).unwrap();
+        assert!(TicketRepo::get(&db, &key).unwrap().unwrap().held, "anchored: ⚓");
+        let cmd = host.spawned.borrow()[0].2.clone();
+        assert!(cmd.contains("--agent sailor 'fleetd escalated PROJ-1 for you") && cmd.contains("Don'\\''t sweep"), "a sailor stands by: {cmd}");
+        let sailor = SessionRepo::for_ticket(&db, &key).unwrap().into_iter().find(|s| s.kind == CrewKind::Sailor).unwrap();
+        let case = db.open_case(&sailor.id).unwrap().expect("its escalation is a case");
+        assert!(case.question.contains("needed 2 of your rulings"), "{}", case.question);
+        let verdict = db.verdict(&case.id).unwrap().unwrap();
+        assert_eq!((verdict.verdict, verdict.body.as_str()), (Verdict::Confirm, CAP_VERDICT), "CONFIRMed by fleetd: no inspection");
+        let cogs = [Cog { session: sailor, liveness: Liveness::Idle }];
+        assert_eq!(plan(&db, &cogs, true, &cap_2).unwrap(), vec![Action::LaunchAdmiral { ticket: "PROJ-1".into() }], "the operator's, with an admiral; no sweep");
     }
 
     #[test]
