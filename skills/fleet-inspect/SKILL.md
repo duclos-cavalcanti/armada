@@ -44,9 +44,10 @@ In a chat with the operator (the admiral), show them the verdict too. Then:
 - **REFUTE** → when the way out names a step of the captain's (a blocker edge, an AC amendment
   that keeps behaviour and spirit), take it first, in your convoy: `fleetc ticket block <KEY> --by
   <KEY>`, or `fleetc ticket edit <KEY> --body - --why "<…>" --case <N>` (fleetd records the diff on
-  the ticket). Then send the cog its way out, so it unblocks itself:
+  the ticket). Then point the cog at the verdict you recorded, so it reads its way out there and
+  unblocks itself. One line, never the verdict itself: the ledger holds it.
   ```bash
-  fleetc send --cog <kind> --ticket <KEY> "Inspected: REFUTE — <the recommendation, with its cites>. Unblock yourself and carry on."
+  fleetc send --cog <kind> --ticket <KEY> "Case #<N> was inspected: REFUTE. Read the verdict with fleetc inspection <KEY>, take its recommendation, and carry on."
   ```
 - **CONFIRM** → send nothing; the escalation stands with the operator, and fleetd convenes an
   admiral on it (`admiral-<KEY>`) for them to rule with. Their ruling goes on the case

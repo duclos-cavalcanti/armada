@@ -100,16 +100,20 @@ impl SessionHost for TmuxHost {
     /// target is `=name:` (bare `=name` is "can't find pane"); the text goes literally (`-l`); and
     /// the Enter comes a beat later — Claude Code reads a long burst as a paste and drops an Enter
     /// that arrives inside it.
+    /// One bracketed paste, then Enter. Typed keys reach Claude Code split into paste blocks and a
+    /// typed tail, which an older one dropped all but the tail of; a paste arrives whole. The pause
+    /// lets the paste settle before Enter submits it.
     fn send(&self, name: &str, text: &str) -> Result<()> {
-        let pane = format!("{}:", target(name));
-        let keys = |args: &[&str]| -> Result<()> {
-            let out = tmux(&[&["send-keys", "-t", &pane], args].concat())?;
-            ensure!(out.status.success(), "tmux send-keys to {name}: {}", crate::preflight::one_line(&out.stderr));
+        let (pane, buffer) = (format!("{}:", target(name)), format!("fleet-send-{name}"));
+        let run = |args: &[&str], input: Option<&[u8]>| -> Result<()> {
+            let out = crate::proc::run(Command::new("tmux").args(args), input, crate::proc::LOCAL)?;
+            ensure!(out.status.success(), "tmux {} to {name}: {}", args[0], crate::preflight::one_line(&out.stderr));
             Ok(())
         };
-        keys(&["-l", text])?;
+        run(&["load-buffer", "-b", &buffer, "-"], Some(text.as_bytes()))?;
+        run(&["paste-buffer", "-p", "-d", "-b", &buffer, "-t", &pane], None)?;
         std::thread::sleep(std::time::Duration::from_secs(1));
-        keys(&["Enter"])
+        run(&["send-keys", "-t", &pane, "Enter"], None)
     }
 
     fn list(&self) -> Result<Vec<String>> {
