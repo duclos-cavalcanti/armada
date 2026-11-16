@@ -1126,7 +1126,9 @@ pub(crate) const CAP_VERDICT: &str =
 /// Capped — a sailor came due on a ticket that needed `rulings` of the operator's rulings since it
 /// was last weighed. It's anchored (⚓) and escalated instead of swept: a sailor launches standing by,
 /// fleetd records its escalation (opening the case) and CONFIRMs it, so it reaches the operator and
-/// an admiral at once. The operator's ruling weighs the ticket and goes to that sailor.
+/// an admiral at once. The operator's ruling weighs the ticket and goes to that sailor. Its MR is
+/// left as it stands, never disarmed or drafted (unlike `fleetc anchor`): the operator looks into
+/// the churn, then weighs it or rethinks its design.
 fn capped<H: SessionHost, F: Forge + ?Sized>(ledger: &Ledger, forge: &F, host: &H, ticket: &str, rulings: u64) -> Result<()> {
     let tkey = TicketKey(ticket.to_string());
     let reason = format!("needed {rulings} rulings since it was last weighed: escalated for your ruling");
