@@ -423,6 +423,7 @@ dependencies = [
  "anyhow",
  "domain",
  "ledger",
+ "libc",
  "serde",
  "serde-saphyr",
  "serde_json",

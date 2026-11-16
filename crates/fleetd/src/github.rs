@@ -5,6 +5,7 @@
 //! when a PR turns ready), so `request_review` only marks the PR ready. GitHub's merge-readiness
 //! (`mergeStateStatus`) is translated into GitLab's `merge_status` words the sailor already reads.
 
+use crate::proc::OutputWithin;
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use domain::ports::Forge;
 use domain::{Approvals, CiReport, FailedJob, FloatingNote, ForgeShip, MrDraft, PipelineStatus, ReviewState, ReviewThread, ShipState, TicketKey};
@@ -29,7 +30,7 @@ impl GhForge {
 
     /// Run `gh <args> -R <repo>` and return its stdout.
     fn gh(&self, args: &[&str]) -> Result<String> {
-        let out = Command::new("gh").args(args).args(["-R", &self.repo]).output()?;
+        let out = Command::new("gh").args(args).args(["-R", &self.repo]).output_within(crate::proc::API)?;
         ensure!(
             out.status.success(),
             "gh {} failed: {}",
@@ -49,7 +50,7 @@ impl GhForge {
     fn checks(&self, n: i64) -> Result<Vec<Value>> {
         let out = Command::new("gh")
             .args(["pr", "checks", &n.to_string(), "--json", "name,bucket,link", "-R", &self.repo])
-            .output()?;
+            .output_within(crate::proc::API)?;
         let stdout = String::from_utf8_lossy(&out.stdout);
         if !out.status.success() && !matches!(out.status.code(), Some(1) | Some(8)) || stdout.trim().is_empty() {
             let err = crate::preflight::one_line(&out.stderr);
@@ -64,7 +65,7 @@ impl GhForge {
     /// The PR's changed files (`/pulls/N/files`, every page): each its `filename` and `patch`.
     fn files(&self, n: i64) -> Result<Vec<Value>> {
         let path = format!("repos/{}/pulls/{n}/files?per_page=100", self.repo);
-        let out = Command::new("gh").args(["api", "--paginate", &path]).output()?;
+        let out = Command::new("gh").args(["api", "--paginate", &path]).output_within(crate::proc::API)?;
         ensure!(out.status.success(), "gh api {path} failed: {}", crate::preflight::one_line(&out.stderr));
         let mut all = Vec::new();
         for page in serde_json::Deserializer::from_slice(&out.stdout).into_iter::<Value>() {
@@ -83,7 +84,7 @@ impl GhForge {
         for (k, v) in typed {
             cmd.args(["-F", &format!("{k}={v}")]);
         }
-        let out = cmd.output()?;
+        let out = cmd.output_within(crate::proc::API)?;
         ensure!(out.status.success(), "gh api graphql failed: {}", crate::preflight::one_line(&out.stderr));
         let v: Value = serde_json::from_slice(&out.stdout)?;
         if let Some(errors) = v.get("errors") {

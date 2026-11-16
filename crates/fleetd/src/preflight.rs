@@ -3,13 +3,14 @@
 //! checkout exists. One ✓/✗ line per check; any ✗ stops the boot with the whole list, so a broken
 //! setup fails at the door, not mid-sync.
 
+use crate::proc::OutputWithin;
 use anyhow::{anyhow, bail, Result};
 use std::process::Command;
 
 /// Run `program args…` and return its trimmed stdout. A missing binary is its own clear error
 /// (`brew install <program>`), distinct from the command failing.
 pub(crate) fn cli(program: &str, args: &[&str]) -> Result<String> {
-    let out = Command::new(program).args(args).output().map_err(|e| match e.kind() {
+    let out = Command::new(program).args(args).output_within(crate::proc::API).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => anyhow!("{program} not found on PATH (brew install {program})"),
         _ => anyhow!("{program}: {e}"),
     })?;

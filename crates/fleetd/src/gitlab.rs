@@ -7,6 +7,7 @@
 //! REST took three or four calls per MR. A single MR (`snapshot`) is the same query by iid. Writes
 //! and the review surface stay REST.
 
+use crate::proc::OutputWithin;
 use anyhow::{anyhow, ensure, Context, Result};
 use domain::ports::Forge;
 use domain::{Approvals, CiReport, FailedJob, FloatingNote, ForgeShip, MrDraft, PipelineStatus, ReviewState, ReviewThread, ShipState, TicketKey};
@@ -24,7 +25,7 @@ impl GlabForge {
     }
 
     fn api(&self, path: &str) -> Result<String> {
-        let out = Command::new("glab").args(["api", path]).output()?;
+        let out = Command::new("glab").args(["api", path]).output_within(crate::proc::API)?;
         ensure!(
             out.status.success(),
             "glab api {path} failed: {}",
@@ -35,7 +36,7 @@ impl GlabForge {
 
     /// One GraphQL call (`what` names it in an error): the response, or the errors it reports.
     fn graphql(&self, what: &str, query: &str) -> Result<serde_json::Value> {
-        let out = Command::new("glab").args(["api", "graphql", "-f", &format!("query={query}")]).output()?;
+        let out = Command::new("glab").args(["api", "graphql", "-f", &format!("query={query}")]).output_within(crate::proc::API)?;
         ensure!(out.status.success(), "glab api graphql ({what}) failed: {}", crate::preflight::one_line(&out.stderr));
         let v: serde_json::Value = serde_json::from_slice(&out.stdout)?;
         if let Some(errors) = v.get("errors") {
@@ -47,7 +48,7 @@ impl GlabForge {
     /// `glab api --paginate` for a list endpoint: it emits one JSON array per page,
     /// concatenated, so parse the stream of arrays and flatten into all elements.
     fn api_paginate(&self, path: &str) -> Result<Vec<serde_json::Value>> {
-        let out = Command::new("glab").args(["api", "--paginate", path]).output()?;
+        let out = Command::new("glab").args(["api", "--paginate", path]).output_within(crate::proc::API)?;
         ensure!(
             out.status.success(),
             "glab api --paginate {path} failed: {}",
@@ -129,7 +130,7 @@ impl GlabForge {
     /// Cancel an armed MR's merge-when-pipeline-succeeds (callers check it's armed first).
     fn cancel_auto_merge(&self, iid: i64) -> Result<()> {
         let path = format!("projects/{}/merge_requests/{iid}/cancel_merge_when_pipeline_succeeds", self.project);
-        let out = Command::new("glab").args(["api", "--method", "POST", &path]).output()?;
+        let out = Command::new("glab").args(["api", "--method", "POST", &path]).output_within(crate::proc::API)?;
         ensure!(out.status.success(), "glab cancel auto-merge failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
@@ -194,10 +195,10 @@ impl Forge for GlabForge {
     fn reply(&self, iid: i64, thread: &str, body: &str, resolve: bool) -> Result<()> {
         let discussion = format!("projects/{}/merge_requests/{iid}/discussions/{thread}", self.project);
         let note = format!("{discussion}/notes");
-        let out = Command::new("glab").args(["api", "--method", "POST", &note, "-f", &format!("body={body}")]).output()?;
+        let out = Command::new("glab").args(["api", "--method", "POST", &note, "-f", &format!("body={body}")]).output_within(crate::proc::API)?;
         ensure!(out.status.success(), "glab reply failed: {}", crate::preflight::one_line(&out.stderr));
         if resolve {
-            let out = Command::new("glab").args(["api", "--method", "PUT", &discussion, "-f", "resolved=true"]).output()?;
+            let out = Command::new("glab").args(["api", "--method", "PUT", &discussion, "-f", "resolved=true"]).output_within(crate::proc::API)?;
             ensure!(out.status.success(), "glab resolve failed: {}", crate::preflight::one_line(&out.stderr));
         }
         Ok(())
@@ -224,7 +225,7 @@ impl Forge for GlabForge {
                 "PUT",
                 &format!("projects/{}/merge_requests/{iid}/rebase", self.project),
             ])
-            .output()?;
+            .output_within(crate::proc::API)?;
         ensure!(out.status.success(), "glab rebase failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
@@ -234,7 +235,7 @@ impl Forge for GlabForge {
         let (dead, declared) = read_blocks(&serde_json::from_str(&self.api(&blocks)?)?);
         let mut changed = 0;
         for id in dead {
-            let out = Command::new("glab").args(["api", "--method", "DELETE", &format!("{blocks}/{id}")]).output()?;
+            let out = Command::new("glab").args(["api", "--method", "DELETE", &format!("{blocks}/{id}")]).output_within(crate::proc::API)?;
             ensure!(out.status.success(), "unblock !{child_iid} failed: {}", crate::preflight::one_line(&out.stderr));
             changed += 1;
         }
@@ -245,7 +246,7 @@ impl Forge for GlabForge {
             let gid = mr.get("id").and_then(|i| i.as_i64()).ok_or_else(|| anyhow!("MR !{parent} has no global id"))?;
             let out = Command::new("glab")
                 .args(["api", "--method", "POST", &blocks, "-f", &format!("blocking_merge_request_id={gid}")])
-                .output()?;
+                .output_within(crate::proc::API)?;
             ensure!(out.status.success(), "block !{child_iid} on !{parent} failed: {}", crate::preflight::one_line(&out.stderr));
             changed += 1;
         }
@@ -277,7 +278,7 @@ impl Forge for GlabForge {
         if d.draft {
             args.push("--draft");
         }
-        let out = Command::new("glab").args(&args).output()?;
+        let out = Command::new("glab").args(&args).output_within(crate::proc::API)?;
         ensure!(out.status.success(), "glab mr create failed: {}", crate::preflight::one_line(&out.stderr));
         let stdout = String::from_utf8_lossy(&out.stdout);
         Ok(stdout.lines().rev().find(|l| l.trim_start().starts_with("http")).unwrap_or(stdout.trim()).trim().to_string())
@@ -287,7 +288,7 @@ impl Forge for GlabForge {
         let title = keep_draft(title, self.is_draft(iid)?);
         let (iid, repo) = (iid.to_string(), self.repo()?);
         let args = ["mr", "update", &iid, "-R", &repo, "--title", &title, "--description", description];
-        let out = Command::new("glab").args(args).output()?;
+        let out = Command::new("glab").args(args).output_within(crate::proc::API)?;
         ensure!(out.status.success(), "glab mr update failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
@@ -298,7 +299,7 @@ impl Forge for GlabForge {
         if mr.get("state").and_then(|s| s.as_str()) == Some("closed") {
             return Ok(()); // already closed
         }
-        let out = Command::new("glab").args(["mr", "close", &iid.to_string(), "-R", &self.repo()?]).output()?;
+        let out = Command::new("glab").args(["mr", "close", &iid.to_string(), "-R", &self.repo()?]).output_within(crate::proc::API)?;
         ensure!(out.status.success(), "glab mr close failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
@@ -308,7 +309,7 @@ impl Forge for GlabForge {
             return Ok(()); // already there
         }
         let flag = if draft { "--draft" } else { "--ready" };
-        let out = Command::new("glab").args(["mr", "update", &iid.to_string(), "-R", &self.repo()?, flag]).output()?;
+        let out = Command::new("glab").args(["mr", "update", &iid.to_string(), "-R", &self.repo()?, flag]).output_within(crate::proc::API)?;
         ensure!(out.status.success(), "glab mr update {flag} failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
@@ -328,11 +329,11 @@ impl Forge for GlabForge {
 
     fn post_review(&self, iid: i64, body: &str, approve: bool) -> Result<()> {
         let notes = format!("projects/{}/merge_requests/{iid}/notes", self.project);
-        let out = Command::new("glab").args(["api", "--method", "POST", &notes, "-f", &format!("body={body}")]).output()?;
+        let out = Command::new("glab").args(["api", "--method", "POST", &notes, "-f", &format!("body={body}")]).output_within(crate::proc::API)?;
         ensure!(out.status.success(), "glab review note failed: {}", crate::preflight::one_line(&out.stderr));
         if approve {
             let path = format!("projects/{}/merge_requests/{iid}/approve", self.project);
-            let out = Command::new("glab").args(["api", "--method", "POST", &path]).output()?;
+            let out = Command::new("glab").args(["api", "--method", "POST", &path]).output_within(crate::proc::API)?;
             ensure!(out.status.success(), "glab approve failed: {}", crate::preflight::one_line(&out.stderr));
         }
         Ok(())
@@ -340,7 +341,7 @@ impl Forge for GlabForge {
 
     fn post_thread(&self, iid: i64, body: &str) -> Result<()> {
         let path = format!("projects/{}/merge_requests/{iid}/discussions", self.project);
-        let out = Command::new("glab").args(["api", "--method", "POST", &path, "-f", &format!("body={body}")]).output()?;
+        let out = Command::new("glab").args(["api", "--method", "POST", &path, "-f", &format!("body={body}")]).output_within(crate::proc::API)?;
         ensure!(out.status.success(), "glab review thread failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
@@ -381,7 +382,7 @@ impl Forge for GlabForge {
     fn retry_ci(&self, iid: i64) -> Result<()> {
         let (pid, _) = self.latest_pipeline(iid)?.ok_or_else(|| anyhow!("!{iid}: no pipeline to retry"))?;
         let path = format!("projects/{}/pipelines/{pid}/retry", self.project);
-        let out = Command::new("glab").args(["api", "--method", "POST", &path]).output()?;
+        let out = Command::new("glab").args(["api", "--method", "POST", &path]).output_within(crate::proc::API)?;
         ensure!(out.status.success(), "glab pipeline retry failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
@@ -390,7 +391,7 @@ impl Forge for GlabForge {
         let repo = self.repo()?;
         let out = Command::new("glab")
             .args(["mr", "merge", &iid.to_string(), "-R", &repo, "--auto-merge", "--yes"])
-            .output()?;
+            .output_within(crate::proc::API)?;
         ensure!(out.status.success(), "glab arm-merge failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
@@ -414,7 +415,7 @@ impl Forge for GlabForge {
         let repo = self.repo()?;
         let out = Command::new("glab")
             .args(["mr", "update", &ship.iid.to_string(), "-R", &repo, "--reviewer", &reviewers.join(",")])
-            .output()?;
+            .output_within(crate::proc::API)?;
         ensure!(
             out.status.success(),
             "glab mr update --reviewer failed: {}",

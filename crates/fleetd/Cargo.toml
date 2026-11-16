@@ -18,3 +18,4 @@ tracing-subscriber = { version = "0.3", features = ["local-time"] }
 uuid = { version = "1", features = ["v4"] }
 serde-saphyr = "2"
 similar = "2"
+libc = "0.2"

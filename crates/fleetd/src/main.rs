@@ -17,6 +17,7 @@ mod jira;
 mod logbook;
 mod otlp;
 mod preflight;
+mod proc;
 mod reconcile;
 mod scheduler;
 mod server;
@@ -24,6 +25,7 @@ mod settings;
 mod sync;
 mod tmux;
 
+use crate::proc::OutputWithin;
 use anyhow::Result;
 use domain::ports::{Forge, SessionHost, SessionRepo, Tracker};
 use domain::{Liveness, LivenessThresholds, Session};
@@ -119,7 +121,7 @@ fn tracker(cfg: &config::Config) -> Box<dyn Tracker + Send> {
 
 /// `git config user.name` — the filesystem tracker's default "me".
 fn git_user() -> Option<String> {
-    let out = std::process::Command::new("git").args(["config", "user.name"]).output().ok()?;
+    let out = std::process::Command::new("git").args(["config", "user.name"]).output_within(crate::proc::GIT).ok()?;
     let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !name.is_empty()).then_some(name)
 }
@@ -207,6 +209,8 @@ fn boot(project: &wire::Project, cfg: config::Config) -> Result<()> {
         stacks: forge.stacks(),
     };
     let sched_snapshot = snapshot.clone();
+    let pulse = scheduler::Pulse::default();
+    let sched_pulse = pulse.clone();
 
     // Online banner — the one line that says "up, and here's what I'll do", before the
     // scheduler thread consumes cfg + ledger. It carries the trust-critical facts: the
@@ -223,10 +227,10 @@ fn boot(project: &wire::Project, cfg: config::Config) -> Result<()> {
         cfg.forge.project,
         cfg.tracker.project,
     );
-    std::thread::spawn(move || scheduler::run(ledger, host, forge, tracker, sched_snapshot, cfg, cmd_rx));
+    std::thread::spawn(move || scheduler::run(ledger, host, forge, tracker, sched_snapshot, cfg, cmd_rx, sched_pulse));
 
     tracing::info!("serving context on {socket}");
-    server::serve(&socket, snapshot, cmd_tx, deployment) // blocks forever
+    server::serve(&socket, snapshot, cmd_tx, deployment, pulse) // blocks forever
 }
 
 #[cfg(test)]

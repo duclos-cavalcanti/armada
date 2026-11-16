@@ -2,6 +2,7 @@
 //! auth/lore, so we reuse it rather than reimplement it). Swap this impl for a
 //! `DockerSessionHost`/`SshSessionHost` later without touching `core`/`fleetd`.
 
+use crate::proc::OutputWithin;
 use anyhow::{ensure, Result};
 use domain::ports::SessionHost;
 use domain::TicketKey;
@@ -47,7 +48,7 @@ fn otel_attribution(session_name: &str) -> Vec<(&'static str, String)> {
 }
 
 fn tmux(args: &[&str]) -> Result<Output> {
-    Ok(Command::new("tmux").args(args).output()?)
+    Ok(Command::new("tmux").args(args).output_within(crate::proc::LOCAL)?)
 }
 
 /// `=name` is tmux's exact-match target, so a session name is never a prefix match.
@@ -73,8 +74,8 @@ impl SessionHost for TmuxHost {
             tmux.arg("-e").arg(format!("{k}={v}"));
         }
         tmux.arg("-c").arg(cwd).arg(cmd);
-        let status = tmux.status()?;
-        ensure!(status.success(), "tmux new-session failed for {name}");
+        let out = tmux.output_within(crate::proc::LOCAL)?;
+        ensure!(out.status.success(), "tmux new-session failed for {name}: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }
 

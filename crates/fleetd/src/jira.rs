@@ -6,6 +6,7 @@
 //! The vendor→domain status mapping lives here (and ONLY here): Jira's status names
 //! map onto `TicketStatus`. `core` never names Jira.
 
+use crate::proc::OutputWithin;
 use anyhow::{ensure, Context, Result};
 use domain::ports::Tracker;
 use domain::{ConvoyKey, TicketDetail, TicketDraft, TicketKey, TicketLink, TicketStatus, TrackerTicket};
@@ -27,7 +28,7 @@ impl JiraTracker {
     fn raw_page(&self, jql: &str, from: usize) -> Result<String> {
         let out = Command::new("jira")
             .args(["issue", "list", "-p", &self.project, "-q", jql, "--raw", "--paginate", &format!("{from}:100")])
-            .output()?;
+            .output_within(crate::proc::API)?;
         if !out.status.success() {
             // jira-cli fails an empty match ("No result found"): an empty page, not an error.
             let err = crate::preflight::one_line(&out.stderr);
@@ -46,7 +47,7 @@ impl JiraTracker {
     /// Run `jira <args>` and return stdout on success (stderr on failure). The shared
     /// invocation path for the claim mutations.
     fn jira(&self, args: &[&str]) -> Result<String> {
-        let out = Command::new("jira").args(args).output()?;
+        let out = Command::new("jira").args(args).output_within(crate::proc::API)?;
         ensure!(
             out.status.success(),
             "jira {} failed: {}",
@@ -87,18 +88,10 @@ impl JiraTracker {
         if let Some(body) = body {
             curl.args(["--data-binary", &body.to_string()]);
         }
-        curl.arg(&url)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+        curl.arg(&url);
         curl.args(if token.is_some() { ["-K", "-"] } else { ["--netrc", "-f"] });
-        let mut child = curl.spawn().context("curl")?;
-        if let Some(t) = &token {
-            let user = format!("user = \"{}:{}\"\n", cfg.login, t.replace('\\', "\\\\").replace('"', "\\\""));
-            std::io::Write::write_all(child.stdin.as_mut().context("curl stdin")?, user.as_bytes())?;
-        }
-        drop(child.stdin.take());
-        let out = child.wait_with_output()?;
+        let user = token.map(|t| format!("user = \"{}:{}\"\n", cfg.login, t.replace('\\', "\\\\").replace('"', "\\\"")));
+        let out = crate::proc::run(&mut curl, user.as_deref().map(str::as_bytes), crate::proc::API).context("curl")?;
         let stdout = String::from_utf8_lossy(&out.stdout);
         let (resp, code) = stdout.rsplit_once('\n').unwrap_or(("", &stdout));
         ensure!(
@@ -160,7 +153,7 @@ impl Tracker for JiraTracker {
         }
         let out = Command::new("jira")
             .args(["issue", "move", &key.0, jira_status_name(to)])
-            .output()?;
+            .output_within(crate::proc::API)?;
         ensure!(out.status.success(), "jira move failed: {}", crate::preflight::one_line(&out.stderr));
         Ok(())
     }

@@ -11,6 +11,7 @@
 //! - **Project Worktrees**: no stale worktree entry blocks cutting one again.
 
 use crate::config::Config;
+use crate::proc::OutputWithin;
 use anyhow::{bail, Result};
 use domain::{HealthCheck, HealthStatus};
 use std::os::unix::fs::PermissionsExt;
@@ -209,10 +210,57 @@ fn worktrees(checkout: &str) -> HealthCheck {
     verdict("Project Worktrees", "worktrees", about, HealthStatus::Fail, miss)
 }
 
+// ── Sync ────────────────────────────────────────────────────────────────────────────
+
+/// Failed reads in a row before a remote's check warns: a blip passes unremarked.
+const FAILS_TO_WARN: u32 = 3;
+
+/// How the sync's reads of one remote (the tracker, or the forge) have gone.
+#[derive(Default)]
+pub struct Reads {
+    last_ok: Option<String>,
+    fails: u32,
+    last_err: Option<String>,
+}
+
+impl Reads {
+    /// Note one read's outcome (`at`: when), passing it through.
+    pub fn note<T>(&mut self, read: Result<T>, at: &str) -> Result<T> {
+        match &read {
+            Ok(_) => *self = Reads { last_ok: Some(at.into()), ..Reads::default() },
+            Err(e) => {
+                self.fails += 1;
+                self.last_err = Some(crate::preflight::one_line(format!("{e:#}").as_bytes()));
+            }
+        }
+        read
+    }
+
+    fn check(&self, name: &str, remote: &str) -> HealthCheck {
+        let since = self.last_ok.as_deref().unwrap_or("fleetd started");
+        let detail = (self.fails >= FAILS_TO_WARN)
+            .then(|| format!("no good read since {since}: {}", self.last_err.as_deref().unwrap_or("")));
+        verdict("Sync", name, &format!("the sync reads the {remote}"), HealthStatus::Warn, detail)
+    }
+}
+
+/// The sync's reads of the tracker and the forge: a warning once either keeps failing.
+#[derive(Default)]
+pub struct Reach {
+    pub tracker: Reads,
+    pub forge: Reads,
+}
+
+impl Reach {
+    pub fn checks(&self) -> [HealthCheck; 2] {
+        [self.tracker.check("tracker-reads", "tracker"), self.forge.check("forge-reads", "forge")]
+    }
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────────────────
 
 fn run_git(checkout: &str, args: &[&str]) -> std::result::Result<String, String> {
-    let out = Command::new("git").arg("-C").arg(checkout).args(args).output().map_err(|e| e.to_string())?;
+    let out = Command::new("git").arg("-C").arg(checkout).args(args).output_within(crate::proc::GIT).map_err(|e| e.to_string())?;
     let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
     if out.status.success() { Ok(text(&out.stdout)) } else { Err(crate::preflight::one_line(&out.stderr)) }
 }
@@ -233,7 +281,7 @@ fn setting(file: Option<&Path>, key: &str) -> Option<String> {
         Some(f) => cmd.arg("--file").arg(f),
         None => cmd.arg("--global"),
     };
-    let out = cmd.args(["--get", key]).output().ok()?;
+    let out = cmd.args(["--get", key]).output_within(crate::proc::GIT).ok()?;
     let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !v.is_empty()).then_some(v)
 }
@@ -244,6 +292,22 @@ fn executable(path: &Path) -> bool {
 
 #[cfg(test)]
 pub(crate) mod tests {
+
+    #[test]
+    fn a_remote_warns_once_its_reads_keep_failing_and_clears_on_a_good_one() {
+        let mut reads = Reads::default();
+        let fail = |r: &mut Reads| assert!(r.note::<()>(Err(anyhow::anyhow!("connection reset")), "t").is_err());
+        assert_eq!(reads.check("tracker-reads", "tracker").status, HealthStatus::Ok, "no read yet");
+        assert_eq!(reads.note(Ok(7), "t1").unwrap(), 7, "a read passes through");
+        fail(&mut reads);
+        fail(&mut reads);
+        assert_eq!(reads.check("tracker-reads", "tracker").status, HealthStatus::Ok, "a blip passes");
+        fail(&mut reads);
+        let c = reads.check("tracker-reads", "tracker");
+        assert_eq!((c.status, c.detail.as_deref()), (HealthStatus::Warn, Some("no good read since t1: connection reset")));
+        reads.note(Ok(()), "t5").unwrap();
+        assert_eq!(reads.check("tracker-reads", "tracker").status, HealthStatus::Ok, "a good read clears it");
+    }
     use super::*;
 
     /// A config over a fixture checkout.

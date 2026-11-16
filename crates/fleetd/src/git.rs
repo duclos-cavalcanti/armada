@@ -4,6 +4,7 @@
 //! copy of an MR's head under `review/`, beside the checkout) is cut and struck here, one per
 //! lookout. Runs from the project checkout — the main checkout that owns the worktrees.
 
+use crate::proc::OutputWithin;
 use anyhow::{anyhow, ensure, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -59,7 +60,7 @@ impl GitWorktrees {
         if force {
             args.push("--force");
         }
-        let out = Command::new("git").args(&args).arg(path).output()?;
+        let out = Command::new("git").args(&args).arg(path).output_within(crate::proc::GIT)?;
         ensure!(
             out.status.success(),
             "git worktree remove {path} failed: {}",
@@ -67,7 +68,7 @@ impl GitWorktrees {
         );
 
         if let Some(b) = branch {
-            let _ = Command::new("git").args(["-C", &self.project, "branch", "-D", &b]).output();
+            let _ = Command::new("git").args(["-C", &self.project, "branch", "-D", &b]).output_within(crate::proc::GIT);
         }
         Ok(())
     }
@@ -122,7 +123,7 @@ impl GitWorktrees {
     }
 
     fn git(&self, args: &[&str]) -> Result<()> {
-        let out = Command::new("git").arg("-C").arg(&self.project).args(args).output()?;
+        let out = Command::new("git").arg("-C").arg(&self.project).args(args).output_within(crate::proc::GIT)?;
         ensure!(out.status.success(), "git {} failed: {}", args.join(" "), crate::preflight::one_line(&out.stderr));
         Ok(())
     }
@@ -148,7 +149,7 @@ fn link_shared_caches(checkout: &Path, worktree: &Path) {
 pub fn current_branch(path: &str) -> Option<String> {
     Command::new("git")
         .args(["-C", path, "branch", "--show-current"])
-        .output()
+        .output_within(crate::proc::GIT)
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())

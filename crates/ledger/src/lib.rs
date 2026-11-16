@@ -492,12 +492,17 @@ impl TicketRepo for Ledger {
 
     fn set_held(&self, key: &TicketKey, held: bool, reason: Option<&str>, at: &str) -> Result<()> {
         // Flip held + log TicketHeld(reason)/TicketReleased (CDC, same txn). Only a real change
-        // (held != current) touches a row; a no-op (already in that state) logs nothing.
+        // (held != current) touches a row; a no-op (already in that state) logs nothing. A ticket
+        // the ledger doesn't hold is refused: holding it would otherwise do nothing, silently.
         let tx = self.conn.unchecked_transaction()?;
         let n = tx.execute(
             "UPDATE tickets SET held = ?2 WHERE key = ?1 AND held != ?2",
             params![key.0, held as i64],
         )?;
+        if n == 0 {
+            let known: bool = tx.query_row("SELECT EXISTS (SELECT 1 FROM tickets WHERE key = ?1)", params![key.0], |r| r.get(0))?;
+            anyhow::ensure!(known, "{} isn't in the ledger", key.0);
+        }
         if n > 0 {
             let (kind, payload) = if held {
                 (EventKind::TicketHeld, serde_json::json!({ "reason": reason }))
@@ -1303,6 +1308,8 @@ mod tests {
         TicketRepo::set_held(&db, &key, false, None, "t2").unwrap();
         assert!(!TicketRepo::get(&db, &key).unwrap().unwrap().held);
         TicketRepo::set_held(&db, &key, false, None, "t2b").unwrap(); // not held → no-op
+        let unknown = TicketKey("PROJ-404".into());
+        assert!(TicketRepo::set_held(&db, &unknown, true, None, "t3").is_err(), "a ticket it doesn't hold: refused, not a silent no-op");
 
         let events = db.since(Seq(0)).unwrap();
         let held: Vec<_> = events.iter().filter(|e| e.kind == EventKind::TicketHeld).collect();

@@ -7,7 +7,7 @@
 //! plenty. Reads never touch the ledger (they serve the poll's snapshot); the write
 //! route never touches the ledger *here* either — it hands a `Command` to the writer.
 
-use crate::scheduler::{Command, ControlTarget};
+use crate::scheduler::{Command, ControlTarget, Pulse, STALLED};
 use crate::Snapshot;
 use anyhow::Result;
 use domain::{CogState, ConvoyKey, Order, TicketKey};
@@ -35,7 +35,7 @@ pub fn refuse_if_running(path: &str) -> Result<()> {
 
 /// Bind the socket (clearing any stale file) and serve forever. `cmds` is the write
 /// channel to the scheduler; each connection gets its own clone.
-pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, deployment: Deployment) -> Result<()> {
+pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, deployment: Deployment, pulse: Pulse) -> Result<()> {
     let deployment = std::sync::Arc::new(deployment);
     let _ = std::fs::remove_file(path); // a leftover socket from a crash would block bind
     let listener = UnixListener::bind(path)?;
@@ -45,8 +45,9 @@ pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, deployment: 
                 let snapshot = snapshot.clone();
                 let cmds = cmds.clone();
                 let deployment = deployment.clone();
+                let pulse = pulse.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = handle(&mut s, &snapshot, &cmds, &deployment) {
+                    if let Err(e) = handle(&mut s, &snapshot, &cmds, &deployment, &pulse) {
                         tracing::warn!("connection error: {e}");
                     }
                 });
@@ -62,9 +63,13 @@ fn handle(
     snapshot: &Snapshot,
     cmds: &Sender<Command>,
     deployment: &Deployment,
+    pulse: &Pulse,
 ) -> std::io::Result<()> {
     let request = read_request(stream)?;
     let (method, path) = parse_request_line(&request);
+    if let Some(busy) = busy(path.as_deref(), pulse, STALLED) {
+        return stream.write_all(busy.as_bytes());
+    }
 
     let response = match (method.as_deref(), path.as_deref()) {
         (Some("GET"), Some(p)) if p.starts_with("/context?convoy=") => handle_convoy_view(cmds, p),
@@ -119,6 +124,29 @@ fn handle(
         _ => http_response("404 Not Found", "text/plain", "not found"),
     };
     stream.write_all(response.as_bytes())
+}
+
+/// The `503` for a request that needs the scheduler while one step has held its loop `after` or
+/// more (`STALLED`): refused, never queued, so it can't run late behind the stall (or twice, on a retry).
+/// The two answers that never touch the scheduler (`/context`, `/project`) still serve.
+fn busy(path: Option<&str>, pulse: &Pulse, after: std::time::Duration) -> Option<String> {
+    if matches!(path, Some("/context" | "/project")) {
+        return None;
+    }
+    let (step, held) = pulse.stalled(after)?;
+    let why = format!("fleetd busy: its {step} has held the loop for {}; nothing was queued, try again later", span(held));
+    tracing::warn!("{why}");
+    Some(http_response("503 Service Unavailable", "text/plain", &why))
+}
+
+/// A duration as an operator reads it: `38h 2m`, `3m 10s`, `45s`.
+fn span(d: std::time::Duration) -> String {
+    let s = d.as_secs();
+    match s {
+        3600.. => format!("{}h {}m", s / 3600, s % 3600 / 60),
+        60.. => format!("{}m {}s", s / 60, s % 60),
+        _ => format!("{s}s"),
+    }
 }
 
 /// `POST /status` — parse the wire DTO, validate it authoritatively (the cog + state
@@ -1033,6 +1061,20 @@ mod tests {
     }
 
     #[test]
+    fn a_stalled_loop_refuses_what_needs_it_and_serves_the_rest() {
+        let (pulse, now) = (Pulse::default(), std::time::Duration::ZERO);
+        assert!(busy(Some("/dispatch"), &pulse, now).is_none(), "an idle loop takes it");
+        pulse.on("health check");
+        let refused = busy(Some("/dispatch"), &pulse, now).unwrap();
+        assert!(refused.starts_with("HTTP/1.1 503") && refused.contains("its health check has held the loop"), "{refused}");
+        assert!(busy(Some("/project"), &pulse, now).is_none() && busy(Some("/context"), &pulse, now).is_none());
+        assert!(busy(Some("/dispatch"), &pulse, STALLED).is_none(), "not held long enough yet");
+        pulse.off();
+        assert!(busy(Some("/dispatch"), &pulse, now).is_none());
+        assert_eq!((span(std::time::Duration::from_secs(45)), span(std::time::Duration::from_secs(190)), span(std::time::Duration::from_secs(137_000))), ("45s".into(), "3m 10s".into(), "38h 3m".into()));
+    }
+
+    #[test]
     fn http_response_has_status_type_and_length() {
         let r = http_response("200 OK", "application/json", "[]");
         assert!(r.starts_with("HTTP/1.1 200 OK\r\n"));
@@ -1055,7 +1097,7 @@ mod tests {
         std::thread::spawn(move || {
             let deployment =
                 Deployment { project: "/wt/project".into(), default_branch: "origin/main".into(), stacks };
-            let _ = serve(&sock2, snapshot, cmds, deployment);
+            let _ = serve(&sock2, snapshot, cmds, deployment, Pulse::default());
         });
         for _ in 0..100 {
             if std::path::Path::new(&sock).exists() {

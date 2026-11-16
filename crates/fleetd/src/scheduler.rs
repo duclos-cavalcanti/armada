@@ -110,6 +110,29 @@ pub enum Command {
 /// Own the ledger (single writer) + drivers and pace the tickers forever, with the
 /// cadences + thresholds injected from `Config`. Between tickers it drains client
 /// write `Command`s off `cmds` — the only place writes happen (single-writer).
+/// The step the scheduler's loop is on, and since when: shared with the server, which refuses a
+/// new command while one step has held the loop past `STALLED` (it would only queue behind it).
+#[derive(Clone, Default)]
+pub struct Pulse(std::sync::Arc<std::sync::Mutex<Option<(&'static str, Instant)>>>);
+
+/// How long one step may hold the loop before fleetd counts it stalled.
+pub const STALLED: Duration = Duration::from_secs(120);
+
+impl Pulse {
+    pub(crate) fn on(&self, step: &'static str) {
+        *self.0.lock().unwrap() = Some((step, Instant::now()));
+    }
+    pub(crate) fn off(&self) {
+        *self.0.lock().unwrap() = None;
+    }
+    /// The step holding the loop, and for how long, once it's held it `after` or more.
+    pub fn stalled(&self, after: Duration) -> Option<(&'static str, Duration)> {
+        let (step, since) = (*self.0.lock().unwrap())?;
+        Some((step, since.elapsed())).filter(|(_, held)| *held >= after)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     ledger: Ledger,
     host: TmuxHost,
@@ -118,11 +141,13 @@ pub fn run(
     snapshot: Snapshot,
     cfg: Config,
     cmds: Receiver<Command>,
+    pulse: Pulse,
 ) {
     let (mut next_poll, mut next_sync, mut next_reconcile, mut next_prune) =
         (Instant::now(), Instant::now(), Instant::now(), Instant::now());
     // The last health check (`None`: not run yet). Boot passed it; each sync re-runs it.
     let mut health: Option<Vec<domain::HealthCheck>> = None;
+    let mut reach = crate::health::Reach::default();
 
     // The cadences + thresholds + dry_run are LIVE levers (`settings` overlay): each tick re-reads
     // the effective value off the ledger, so a `fleetc settings set` takes effect with no restart.
@@ -130,14 +155,17 @@ pub fn run(
     loop {
         let now = Instant::now();
         if now >= next_poll {
+            pulse.on("liveness poll");
             tick_liveness(&ledger, &host, &snapshot, &settings::thresholds(&cfg, &ledger));
             next_poll = now + Duration::from_secs(settings::poll_secs(&cfg, &ledger));
         }
         if now >= next_sync {
-            if let Err(e) = tick_sync(&ledger, forge.as_ref(), tracker.as_ref()) {
+            pulse.on("sync");
+            if let Err(e) = tick_sync(&ledger, forge.as_ref(), tracker.as_ref(), &mut reach) {
                 tracing::error!("sync tick error: {e:#}");
             }
-            if let Err(e) = tick_health(&ledger, &cfg, &mut health) {
+            pulse.on("health check");
+            if let Err(e) = tick_health(&ledger, &cfg, &reach, &mut health) {
                 tracing::error!("health check error: {e:#}");
             }
             next_sync = now + Duration::from_secs(settings::sync_secs(&cfg, &ledger));
@@ -170,6 +198,7 @@ pub fn run(
                 assess_skill: cfg.assess_skill.clone(),
             };
             let cogs = snapshot.lock().unwrap().clone();
+            pulse.on("reconcile");
             match reconcile::tick(&ledger, tracker.as_ref(), &host, forge.as_ref(), &cogs, &cfg.project.path, &levers) {
                 Ok(n) if n > 0 => {
                     let mode = if dry_run { "dry-run" } else { "live" };
@@ -181,8 +210,12 @@ pub fn run(
             next_reconcile = now + Duration::from_secs(settings::reconcile_secs(&cfg, &ledger));
         }
         // Wait for a write up to the tick quantum, then loop to re-check the tickers.
+        pulse.off();
         match cmds.recv_timeout(Duration::from_millis(500)) {
-            Ok(cmd) => apply(&ledger, tracker.as_ref(), &host, forge.as_ref(), &cfg, cmd),
+            Ok(cmd) => {
+                pulse.on("a fleetc command");
+                apply(&ledger, tracker.as_ref(), &host, forge.as_ref(), &cfg, cmd)
+            }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break, // server gone → nothing left to do
         }
@@ -196,10 +229,10 @@ const WEIGH_MSG: &str = "⚓ weigh anchor — resume work.";
 
 /// Apply one client command on the writer thread, replying with the outcome. `cfg` is the startup
 /// base the live-config reads (`GetSettings`) resolve against.
-/// Ensure a dispatched ticket exists in the ledger before its order FKs it. An off-sprint /
-/// not-yet-synced ticket won't be there (the board sync pulls only open sprints), so fetch it from
-/// the tracker and upsert via the same mapping the sync uses. A synced ticket is left untouched.
-/// This is dispatch's only producer step — the worktree stays the operating agent's berth job.
+/// Ensure a ticket exists in the ledger before a command writes it: a dispatch's order FKs it, an
+/// anchor holds it. An off-sprint / not-yet-synced ticket (one filed a moment ago) won't be there
+/// (the board sync pulls only open sprints), so fetch it from the tracker and upsert via the same
+/// mapping the sync uses. A synced ticket is left untouched.
 fn ensure_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey) -> Result<()> {
     if TicketRepo::get(ledger, key)?.is_some() {
         return Ok(());
@@ -305,7 +338,9 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let _ = reply.send(res);
         }
         Command::AnchorTicket { ticket, anchor, reason, reply } => {
-            let res = anchor_ticket(ledger, forge, host, &ticket, anchor, reason.as_deref()).map_err(|e| format!("{e:#}"));
+            let res = ensure_ticket(ledger, tracker, &ticket)
+                .and_then(|()| anchor_ticket(ledger, forge, host, &ticket, anchor, reason.as_deref()))
+                .map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
         Command::Rework { ticket, hand, reply } => {
@@ -1377,11 +1412,19 @@ fn tick_liveness(ledger: &Ledger, host: &TmuxHost, snapshot: &Snapshot, threshol
 
 /// Sync the board + armada, then record a `TickRan` event carrying the change-count
 /// span (no-op detection) and the counts. Trait objects so it's testable with fakes.
-pub fn tick_sync(ledger: &Ledger, forge: &dyn Forge, tracker: &dyn Tracker) -> Result<()> {
+pub fn tick_sync(ledger: &Ledger, forge: &dyn Forge, tracker: &dyn Tracker, reach: &mut crate::health::Reach) -> Result<()> {
     let now = now_rfc3339();
     let before = ledger.total_changes();
-    let tickets = sync::sync_board(ledger, tracker, &now)?;
-    let ships = sync::sync_armada(ledger, forge, &now)?;
+    // Each remote on its own: a tracker that fails doesn't keep the forge's MRs from syncing.
+    let tickets = reach.tracker.note(sync::sync_board(ledger, tracker, &now), &now);
+    let ships = reach.forge.note(sync::sync_armada(ledger, forge, &now), &now);
+    let (tickets, ships) = match (tickets, ships) {
+        (Ok(t), Ok(s)) => (t, s),
+        (t, s) => {
+            let failed = [t.err().map(|e| format!("tracker: {e:#}")), s.err().map(|e| format!("forge: {e:#}"))];
+            bail!("{}", failed.into_iter().flatten().collect::<Vec<_>>().join("; "));
+        }
+    };
     let after = ledger.total_changes();
     ledger.append(
         &now,
@@ -1414,8 +1457,9 @@ fn prune(cmd: &str, checkout: &str) -> std::thread::JoinHandle<()> {
 /// Re-run the health check after a sync. A change (or the first run) is recorded as a
 /// `health_checked` event, every named check in it, which the dashboard's `fleet:` light and Health
 /// tab read, and logged: a failure loudly, as it holds the lookouts until it passes.
-fn tick_health(ledger: &Ledger, cfg: &Config, last: &mut Option<Vec<domain::HealthCheck>>) -> Result<()> {
-    let checks = crate::health::checks(cfg);
+fn tick_health(ledger: &Ledger, cfg: &Config, reach: &crate::health::Reach, last: &mut Option<Vec<domain::HealthCheck>>) -> Result<()> {
+    let mut checks = crate::health::checks(cfg);
+    checks.extend(reach.checks());
     if last.as_ref() == Some(&checks) {
         return Ok(());
     }
@@ -1925,15 +1969,15 @@ mod tests {
         let mut last = None;
         let checks = |db: &Ledger| db.events_of(EventKind::HealthChecked).unwrap();
         let ref_guard = |e: &Event| e.payload["checks"].as_array().unwrap().iter().find(|c| c["name"] == "ref-guard").unwrap()["status"].clone();
-        tick_health(&db, &cfg, &mut last).unwrap();
-        tick_health(&db, &cfg, &mut last).unwrap();
+        tick_health(&db, &cfg, &crate::health::Reach::default(), &mut last).unwrap();
+        tick_health(&db, &cfg, &crate::health::Reach::default(), &mut last).unwrap();
         assert_eq!(checks(&db).len(), 1, "unguarded, once");
         assert_eq!(checks(&db)[0].payload["ok"], false);
         assert_eq!(ref_guard(&checks(&db)[0]), "fail", "every check named in it");
 
         let link = std::path::Path::new(&checkout).join(".git/hooks/reference-transaction");
         std::os::unix::fs::symlink(crate::health::kit_hooks().join(crate::health::REF_GUARD), link).unwrap();
-        tick_health(&db, &cfg, &mut last).unwrap();
+        tick_health(&db, &cfg, &crate::health::Reach::default(), &mut last).unwrap();
         assert_eq!(checks(&db).len(), 2);
         assert_eq!(ref_guard(&checks(&db)[1]), "ok", "guarded: recorded as it changes");
         let _ = std::fs::remove_dir_all(&dir);
@@ -2670,7 +2714,7 @@ mod tests {
             labels: vec![],
         }]);
 
-        tick_sync(&db, &forge, &tracker).unwrap();
+        tick_sync(&db, &forge, &tracker, &mut crate::health::Reach::default()).unwrap();
 
         let events = db.since(Seq(0)).unwrap();
         let tick = events
