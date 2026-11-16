@@ -150,7 +150,8 @@ whole fleet builds from, and you own and adjudicate them.
    the critical path sound). File new tickets with `/fleet-commission` and wire every dependency with
    `fleetc ticket block <KEY> --by <KEY>` (the sweep above); drop a wrong or stale one with
    `fleetc ticket unblock <KEY> --by <KEY>`, and cross-reference two tickets without gating either
-   with `fleetc ticket relate <KEY> --to <KEY>` (`unrelate` undoes it). Edit a description (its ACs) with
+   with `fleetc ticket relate <KEY> --to <KEY>` (`unrelate` undoes it). Move a ticket under an epic in
+   the tracker with `fleetc ticket epic <KEY> <EPIC>` (its convoy is `convoy add`'s). Edit a description (its ACs) with
    `fleetc ticket edit <KEY> --body -`, which replaces it whole, so start from `fleetc ticket
    <KEY>`; leave a ruling's why with `fleetc ticket comment <KEY> --body -`. Labels and sprints
    go through the tracker itself (Jira: the Atlassian MCP — never hand-rolled field IDs).

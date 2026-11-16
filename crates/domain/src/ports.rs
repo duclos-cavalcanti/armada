@@ -326,6 +326,8 @@ pub trait Tracker {
     fn link(&self, key: &TicketKey, other: &TicketKey, link: TicketLink, on: bool) -> Result<()>;
     /// Add a comment to the ticket — a decision's why, kept where the team reads the ticket.
     fn comment(&self, key: &TicketKey, body: &str) -> Result<()>;
+    /// Move the ticket under `epic` in the tracker (Jira: its parent; filesystem: its `convoy`).
+    fn set_epic(&self, key: &TicketKey, epic: &ConvoyKey) -> Result<()>;
 }
 
 pub trait SessionHost {

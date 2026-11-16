@@ -320,6 +320,11 @@ impl Tracker for FsTracker {
         }
     }
 
+    fn set_epic(&self, key: &TicketKey, epic: &ConvoyKey) -> Result<()> {
+        self.load(&TicketKey(epic.0.clone()))?; // an epic that isn't there is refused, as Jira refuses it
+        self.update(key, |h| h.convoy = Some(epic.0.clone()))
+    }
+
     /// A comment is appended to the ticket's body, under a dated heading.
     fn comment(&self, key: &TicketKey, body: &str) -> Result<()> {
         let mut t = self.load(key)?;
@@ -443,6 +448,17 @@ mod tests {
         assert_eq!(t.read(&five).unwrap().related, vec![four.clone()], "kept on both sides");
         t.link(&five, &four, TicketLink::Relates, false).unwrap();
         assert!(t.read(&four).unwrap().related.is_empty() && t.read(&five).unwrap().related.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn set_epic_moves_the_ticket_under_an_epic_that_exists() {
+        let epic = ARMT_4.replace("title: Add neg", "title: Arithmetic").replace("blocked_by: [ARMT-3]\n", "");
+        let (t, dir) = tracker("epic", &[("ARMT-4.md", ARMT_4), ("ARMT-9.md", &epic)]);
+        let four = TicketKey("ARMT-4".into());
+        t.set_epic(&four, &ConvoyKey("ARMT-9".into())).unwrap();
+        assert_eq!(t.get(&four).unwrap().convoy, Some(ConvoyKey("ARMT-9".into())));
+        assert!(t.set_epic(&four, &ConvoyKey("ARMT-7".into())).is_err(), "no ARMT-7 file to move under");
         let _ = std::fs::remove_dir_all(dir);
     }
 

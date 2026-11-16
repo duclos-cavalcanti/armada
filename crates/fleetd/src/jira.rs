@@ -264,6 +264,11 @@ impl Tracker for JiraTracker {
         self.put_issue(key, &serde_json::json!({ "fields": { "description": wiki(description) } }))
     }
 
+    /// Only `parent` goes: a whole-issue edit would re-send components Jira may have archived.
+    fn set_epic(&self, key: &TicketKey, epic: &ConvoyKey) -> Result<()> {
+        self.put_issue(key, &serde_json::json!({ "fields": { "parent": { "key": epic.0 } } }))
+    }
+
     fn label(&self, key: &TicketKey, label: &str, on: bool) -> Result<()> {
         let op = if on { "add" } else { "remove" };
         self.put_issue(key, &serde_json::json!({ "update": { "labels": [{ op: label }] } }))

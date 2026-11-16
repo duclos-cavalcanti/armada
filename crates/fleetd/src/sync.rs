@@ -387,6 +387,9 @@ mod tests {
         fn comment(&self, _: &TicketKey, _: &str) -> Result<()> {
             Ok(())
         }
+        fn set_epic(&self, _: &TicketKey, _: &ConvoyKey) -> Result<()> {
+            Ok(())
+        }
     }
 
     fn tt(key: &str, status: TicketStatus) -> TrackerTicket {

@@ -66,6 +66,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (prints the new key)\n  \
      fleetc ticket   block|unblock <KEY-N> --by <KEY-N>   (add or remove an 'is blocked by' edge; unblock: never a cog)\n  \
      fleetc ticket   relate|unrelate <KEY-N> --to <KEY-N>   (add or remove a 'relates to' link, both ways; the fleet never acts on it)\n  \
+     fleetc ticket   epic <KEY-N> <EPIC>   (move the ticket under an epic in the tracker; its convoy is `convoy add`'s; never a cog)\n  \
      fleetc ticket   edit [<KEY-N>] --body <text|-> [--why <text>] [--case <N>]   (replace the description, whole: read it first; a captain: its convoy's tickets, with why)\n  \
      fleetc ticket   comment [<KEY-N>] --body <text|->   (comment on the ticket)\n  \
      fleetc propose  --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (a cog: file a new ticket labelled fleet-proposed; prints its id + key)\n  \
@@ -1446,12 +1447,13 @@ fn arm(args: &[String]) -> Result<()> {
     post_and_print("/arm", &wire::ArmCmd { ticket })
 }
 
-/// `fleetc ticket <KEY-N> | new … | block|unblock … | relate|unrelate … | edit … | comment …` — read or write tickets through
+/// `fleetc ticket <KEY-N> | new … | block|unblock … | relate|unrelate … | epic … | edit … | comment …` — read or write tickets through
 /// the project's tracker (Jira, the filesystem, …): one verb, whichever adapter fleet.toml picks.
 fn ticket(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("new") => ticket_new(&args[1..]),
         Some(sub @ ("block" | "unblock" | "relate" | "unrelate")) => ticket_link(sub, &args[1..]),
+        Some("epic") => ticket_epic(&args[1..]),
         Some(sub @ ("edit" | "comment")) => ticket_text(sub, &args[1..]),
         Some(key) if !key.starts_with('-') => match args.get(1).map(String::as_str) {
             Some("--where") => ticket_where(&ticket_key(key, "ticket")?),
@@ -1461,7 +1463,7 @@ fn ticket(args: &[String]) -> Result<()> {
             let key = ticket_or_own(&[], "ticket")?;
             if args.is_empty() { ticket_show(&key) } else { ticket_where(&key) }
         }
-        _ => bail!("usage: fleetc ticket [<KEY-N>] | new --title <t> --type <type> … | block|unblock <KEY-N> --by <KEY-N> | relate|unrelate <KEY-N> --to <KEY-N> | edit|comment [<KEY-N>] --body <text|->"),
+        _ => bail!("usage: fleetc ticket [<KEY-N>] | new --title <t> --type <type> … | block|unblock <KEY-N> --by <KEY-N> | relate|unrelate <KEY-N> --to <KEY-N> | epic <KEY-N> <EPIC> | edit|comment [<KEY-N>] --body <text|->"),
     }
 }
 
@@ -1722,6 +1724,17 @@ fn ticket_link(sub: &str, args: &[String]) -> Result<()> {
     };
     let on = !sub.starts_with("un");
     submit("/ticket-link", &wire::TicketLinkCmd { ticket, other, link: link.into(), on, captain: captain_convoy() })
+}
+
+/// `fleetc ticket epic <KEY-N> <EPIC>` — move the ticket under the epic in the tracker. Its convoy
+/// is apart: a convoy may group tickets of several epics (`convoy add`). The operator's, the
+/// shipwright's or the admiral's: never a cog's.
+fn ticket_epic(args: &[String]) -> Result<()> {
+    if in_cog() {
+        bail!("a cog doesn't move tickets between epics — propose it for the operator");
+    }
+    let [key, epic] = args else { bail!("usage: fleetc ticket epic <KEY-N> <EPIC>") };
+    submit("/ticket-epic", &wire::TicketEpicCmd { ticket: ticket_key(key, "ticket epic")?, epic: epic.clone() })
 }
 
 /// A `--body` value: as given, or stdin's whole text for `-`.

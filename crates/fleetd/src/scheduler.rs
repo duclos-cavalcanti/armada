@@ -96,6 +96,7 @@ pub enum Command {
     LinkTicket { ticket: TicketKey, other: TicketKey, link: domain::TicketLink, on: bool, captain: Option<ConvoyKey>, reply: Reply }, // an action: add or remove a link (tracker, + ledger)
     EditTicket { ticket: TicketKey, description: String, amend: Option<Amend>, reply: Reply }, // an action: replace its description (tracker)
     CommentTicket { ticket: TicketKey, body: String, reply: Reply }, // an action: comment on it (tracker)
+    SetEpic { ticket: TicketKey, epic: ConvoyKey, reply: Reply }, // an action: move it under an epic (tracker, + ledger)
     Propose { from: Option<TicketKey>, proposed: Proposed, reply: UrlReply }, // hold a cog's proposal → its id
     AcceptProposal { id: ProposalId, convoy: Option<ConvoyKey>, reply: UrlReply }, // an action: accept it → its key (a new one is filed)
     DropProposal { id: ProposalId, reply: UrlReply },
@@ -431,6 +432,9 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         }
         Command::CommentTicket { ticket, body, reply } => {
             let _ = reply.send(tracker.comment(&ticket, &body).map_err(|e| format!("{e:#}")));
+        }
+        Command::SetEpic { ticket, epic, reply } => {
+            let _ = reply.send(set_epic(ledger, tracker, &ticket, &epic).map_err(|e| format!("{e:#}")));
         }
         Command::Propose { from, proposed, reply } => {
             let res = propose(ledger, tracker, from, proposed)
@@ -851,6 +855,13 @@ fn link_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey, other: &
         }
     }
     Ok(())
+}
+
+/// Move a ticket under `epic` in the tracker, then re-read it into the ledger: its epic shows at
+/// once, not at the next sync. A convoy's own membership (`convoy add`) is a separate matter.
+fn set_epic(ledger: &Ledger, tracker: &dyn Tracker, ticket: &TicketKey, epic: &ConvoyKey) -> Result<()> {
+    tracker.set_epic(ticket, epic)?;
+    TicketRepo::sync(ledger, &tracker.get(ticket)?, &now_rfc3339())
 }
 
 /// The blockers of `ticket` not yet Done/Cancelled.
@@ -1713,6 +1724,11 @@ mod tests {
             self.comments.borrow_mut().push((key.clone(), body.into()));
             Ok(())
         }
+        fn set_epic(&self, key: &TicketKey, epic: &ConvoyKey) -> Result<()> {
+            let mut tickets = self.tickets.borrow_mut();
+            tickets.iter_mut().find(|t| &t.key == key).ok_or_else(|| anyhow!("no such ticket"))?.convoy = Some(epic.clone());
+            Ok(())
+        }
     }
 
     #[test]
@@ -2345,6 +2361,17 @@ mod tests {
             blocked_by: vec![],
             labels: vec![],
         }
+    }
+
+    #[test]
+    fn set_epic_moves_the_ticket_in_the_tracker_and_the_ledger_at_once() {
+        let db = Ledger::in_memory().unwrap();
+        let tracker = FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]);
+        let key = TicketKey("PROJ-1".into());
+        sync::sync_board(&db, &tracker, "t").unwrap();
+        set_epic(&db, &tracker, &key, &ConvoyKey("PROJ-9".into())).unwrap();
+        assert_eq!(TicketRepo::get(&db, &key).unwrap().unwrap().convoy, Some(ConvoyKey("PROJ-9".into())));
+        assert!(set_epic(&db, &tracker, &TicketKey("PROJ-404".into()), &ConvoyKey("PROJ-9".into())).is_err());
     }
 
     #[test]
