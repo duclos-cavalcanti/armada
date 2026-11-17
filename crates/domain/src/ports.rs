@@ -266,6 +266,10 @@ pub trait Forge {
     fn request_changes(&self, iid: i64, _body: &str) -> Result<()> {
         anyhow::bail!("!{iid}: this forge can't request changes")
     }
+    /// Withdraw the fleet's user's approval of the MR; nothing to do if it hadn't approved.
+    fn unapprove(&self, iid: i64) -> Result<()> {
+        anyhow::bail!("!{iid}: this forge can't withdraw an approval")
+    }
     /// The paths each MR changes, every iid at once where the forge allows (one query on GitLab):
     /// what a lookout's crossing check holds a review against, with no branch fetched.
     fn changed_paths(&self, _iids: &[i64]) -> Result<Vec<(i64, Vec<String>)>> {

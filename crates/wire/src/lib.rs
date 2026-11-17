@@ -165,6 +165,9 @@ pub struct ReviewPostCmd {
     /// Request changes with the comment: the forge holds the MR's merge until they're lifted.
     #[serde(default)]
     pub request_changes: bool,
+    /// Withdraw the fleet's approval with the comment (nothing to do if it hadn't approved).
+    #[serde(default)]
+    pub unapprove: bool,
 }
 
 /// Reply on one review thread, resolving it when `resolve` (`POST /reply`, `fleetc reply`).

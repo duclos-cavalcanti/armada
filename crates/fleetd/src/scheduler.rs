@@ -738,7 +738,7 @@ fn post_review(ledger: &Ledger, forge: &dyn Forge, cmd: &wire::ReviewPostCmd) ->
     if cmd.thread {
         return forge.post_thread(cmd.iid, &cmd.body);
     }
-    if cmd.approve || cmd.request_changes {
+    if cmd.approve || cmd.request_changes || cmd.unapprove {
         let ours = match ShipRepo::get_by_iid(ledger, cmd.iid)? {
             Some(ship) => reconcile::is_ours(ledger, &ship)?,
             None => false,
@@ -747,6 +747,10 @@ fn post_review(ledger: &Ledger, forge: &dyn Forge, cmd: &wire::ReviewPostCmd) ->
     }
     if cmd.request_changes {
         return forge.request_changes(cmd.iid, &cmd.body);
+    }
+    if cmd.unapprove {
+        forge.post_review(cmd.iid, &cmd.body, false)?;
+        return forge.unapprove(cmd.iid);
     }
     forge.post_review(cmd.iid, &cmd.body, cmd.approve)
 }
@@ -1533,6 +1537,7 @@ mod tests {
         closed: std::cell::RefCell<Vec<i64>>,
         noted: std::cell::RefCell<Vec<(i64, String)>>,
         changes: std::cell::RefCell<Vec<i64>>, // the MRs it requested changes on
+        unapproved: std::cell::RefCell<Vec<i64>>, // the MRs it withdrew its approval from
         state: Option<ShipState>, // what `snapshot` reports (None: Open)
         threads: i64,             // the open review threads `snapshot` reports
         paths: Vec<(i64, Vec<String>)>, // what `changed_paths` reports
@@ -1624,6 +1629,10 @@ mod tests {
         fn request_changes(&self, iid: i64, body: &str) -> Result<()> {
             self.changes.borrow_mut().push(iid);
             self.post_review(iid, body, false)
+        }
+        fn unapprove(&self, iid: i64) -> Result<()> {
+            self.unapproved.borrow_mut().push(iid);
+            Ok(())
         }
         fn open_mr(&self, d: &MrDraft) -> Result<String> {
             self.opened.borrow_mut().push(d.clone());
@@ -2106,7 +2115,7 @@ mod tests {
         let db = Ledger::in_memory().unwrap();
         sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]), "now").unwrap();
         our_ship(&db, "PROJ-1", 7);
-        let post = |iid, approve| wire::ReviewPostCmd { iid, body: "clean".into(), approve, thread: false, request_changes: false };
+        let post = |iid, approve| wire::ReviewPostCmd { iid, body: "clean".into(), approve, thread: false, request_changes: false, unapprove: false };
         let e = post_review(&db, &FakeForge::default(), &post(7, true)).unwrap_err().to_string();
         assert!(e.contains("never approves our own"), "{e}");
         post_review(&db, &FakeForge::default(), &post(7, false)).unwrap();
@@ -2117,13 +2126,26 @@ mod tests {
         let db = Ledger::in_memory().unwrap();
         sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]), "now").unwrap();
         our_ship(&db, "PROJ-1", 7);
-        let refuse = |iid| wire::ReviewPostCmd { iid, body: "refused: x".into(), approve: false, thread: false, request_changes: true };
+        let refuse = |iid| wire::ReviewPostCmd { iid, body: "refused: x".into(), approve: false, thread: false, request_changes: true, unapprove: false };
         let forge = FakeForge::default();
         let e = post_review(&db, &forge, &refuse(7)).unwrap_err().to_string();
         assert!(e.contains("nor requests changes"), "{e}");
         post_review(&db, &forge, &refuse(77)).unwrap();
         assert_eq!(*forge.changes.borrow(), vec![77], "only the ally's MR is held");
         assert_eq!(forge.noted.borrow().len(), 1, "the comment rides with the request");
+    }
+
+    #[test]
+    fn a_lookout_withdraws_its_approval_only_on_an_allys_mr() {
+        let db = Ledger::in_memory().unwrap();
+        sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]), "now").unwrap();
+        our_ship(&db, "PROJ-1", 7);
+        let revoke = |iid| wire::ReviewPostCmd { iid, body: "Approval withdrawn: x".into(), approve: false, thread: false, request_changes: false, unapprove: true };
+        let forge = FakeForge::default();
+        assert!(post_review(&db, &forge, &revoke(7)).is_err(), "ours carries no approval of the fleet's");
+        post_review(&db, &forge, &revoke(77)).unwrap();
+        assert_eq!(*forge.unapproved.borrow(), vec![77]);
+        assert_eq!(forge.noted.borrow().len(), 1, "the comment says why");
     }
 
     #[test]

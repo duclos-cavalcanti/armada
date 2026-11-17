@@ -57,7 +57,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc ship     [--iid <N>]       (one MR, ours or an ally's: ship + snapshot + fetch ref, as JSON)\n  \
      fleetc crossings [--iid <N>] [--brief]   (the MR beside our open tickets: shared paths + folders, and each ticket's text unless --brief, as JSON)\n  \
      fleetc diff     --iid <N> --path <file>   (one MR's diff of one file)\n  \
-     fleetc review-post [--iid <N>] --body <text|-> [--approve | --thread | --request-changes]   (post one review comment, approving if clean or requesting changes on a refused match; or open one review thread)\n  \
+     fleetc review-post [--iid <N>] --body <text|-> [--approve | --unapprove | --thread | --request-changes]   (post one review comment, approving if clean, withdrawing that approval, or requesting changes on a refused match; or open one review thread)\n  \
      fleetc rebase   [--iid <N>]       (server-side rebase an MR)\n  \
      fleetc ci       [--iid <N>]       (the MR's CI: status + each failed job's log excerpt, as JSON)\n  \
      fleetc retry-ci [--iid <N>]       (re-run the MR's failed CI jobs)\n  \
@@ -1365,11 +1365,11 @@ fn diff(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// `fleetc review-post --iid <N> --body <text|-> [--approve | --thread | --request-changes]` — post one
-/// review comment on an MR (`--body -` reads stdin), then approve it, or request changes on it, when
-/// asked; or open it as one resolvable thread.
+/// `fleetc review-post --iid <N> --body <text|-> [--approve | --unapprove | --thread | --request-changes]`
+/// — post one review comment on an MR (`--body -` reads stdin), then approve it, withdraw the
+/// approval, or request changes on it, when asked; or open it as one resolvable thread.
 fn review_post(args: &[String]) -> Result<()> {
-    let (mut iid, mut body, mut approve, mut thread, mut request_changes) = (None, None, false, false, false);
+    let (mut iid, mut body, mut approve, mut unapprove, mut thread, mut request_changes) = (None, None, false, false, false, false);
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
@@ -1377,17 +1377,19 @@ fn review_post(args: &[String]) -> Result<()> {
             "--iid" => iid = Some(take()?.parse::<i64>().map_err(|_| anyhow!("--iid must be a number"))?),
             "--body" => body = Some(take()?),
             "--approve" => approve = true,
+            "--unapprove" => unapprove = true,
             "--thread" => thread = true,
             "--request-changes" => request_changes = true,
             other => bail!("unknown flag: {other}"),
         }
     }
     anyhow::ensure!(
-        [approve, thread, request_changes].iter().filter(|&&f| f).count() <= 1,
-        "--approve, --thread and --request-changes don't mix: one verdict per post"
+        [approve, unapprove, thread, request_changes].iter().filter(|&&f| f).count() <= 1,
+        "--approve, --unapprove, --thread and --request-changes don't mix: one verdict per post"
     );
     let body = body_text(body.ok_or_else(|| anyhow!("--body required"))?)?;
-    post_and_print("/review-post", &wire::ReviewPostCmd { iid: iid_or_own(iid, "review-post")?, body, approve, thread, request_changes })
+    let cmd = wire::ReviewPostCmd { iid: iid_or_own(iid, "review-post")?, body, approve, thread, request_changes, unapprove };
+    post_and_print("/review-post", &cmd)
 }
 
 /// `fleetc ci --iid <N>` — the MR's CI as JSON: `{status, failed: [{name, url, log_excerpt}]}`, failed

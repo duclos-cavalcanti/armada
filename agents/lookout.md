@@ -102,10 +102,15 @@ refusal; escalate if you truly need more.
    admin a `409`, but this lets it through. Which should hold?":
    - **ours**: one thread each (`fleetc review-post --thread --body -`), for its worker to answer;
    - **an ally's**: one comment, under `## Crossing our course` (`fleetc review-post --body -`).
-4. **Approve** an ally's MR only, and only when the verdict is `clean` **and** nothing crosses our
-   course: `fleetc review-post --approve --body "Clean, and clear of our work."`. If the forge
-   refuses the approval (for example, on an MR authored by the same account), the comment still
-   stands. Never approve ours: fleetd refuses it, and it merges on the team's approvals.
+4. **Approve, or revoke.** An approval says "clean, and clear of our work", so it stands only
+   while both hold:
+   - **Approve** an ally's MR only when the verdict is `clean` **and** nothing crosses our
+     course: `fleetc review-post --approve --body "Clean, and clear of our work."`. If the forge
+     refuses the approval (for example, on an MR authored by the same account), the comment still
+     stands. Never approve ours: fleetd refuses it, and it merges on the team's approvals.
+   - **Revoke** when anything crosses our course, or the verdict is `changes`, and an earlier pass
+     of yours approved the MR: withdraw that approval, every time.
+     `fleetc review-post --unapprove --body "Approval withdrawn: <the crossing or finding, in one line>."`
 
 ## Finish the pass
 

@@ -364,6 +364,15 @@ impl Forge for GlabForge {
         Ok(())
     }
 
+    /// GitLab answers 404 when the user hadn't approved: nothing to withdraw.
+    fn unapprove(&self, iid: i64) -> Result<()> {
+        let path = format!("projects/{}/merge_requests/{iid}/unapprove", self.project);
+        let out = Command::new("glab").args(["api", "--method", "POST", &path]).output_within(crate::proc::API)?;
+        let err = crate::preflight::one_line(&out.stderr);
+        ensure!(out.status.success() || err.contains("HTTP 404"), "glab unapprove failed: {err}");
+        Ok(())
+    }
+
     fn changed_paths(&self, iids: &[i64]) -> Result<Vec<(i64, Vec<String>)>> {
         let mut all = Vec::new();
         for chunk in iids.chunks(100) {
