@@ -100,31 +100,35 @@ impl GlabForge {
         }))
     }
 
-    /// A pipeline's failed jobs with their log tails, descending into failed child pipelines (the
-    /// parent-child layout hides the real failure one level down) — two levels at most.
-    fn failed_jobs(&self, pid: i64, depth: u8, out: &mut Vec<FailedJob>) -> Result<()> {
+    /// A pipeline and each failed child pipeline under it, two levels at most, with each one's
+    /// failed jobs (latest attempts; trigger jobs aren't jobs here). The parent-child layout hides
+    /// the real failure one level down, so `ci` reads it and `retry_ci` retries it there.
+    fn failed_tree(&self, pid: i64, depth: u8) -> Result<Vec<(i64, Vec<serde_json::Value>)>> {
         let jobs: serde_json::Value =
             serde_json::from_str(&self.api(&format!("projects/{}/pipelines/{pid}/jobs?scope[]=failed&per_page=100", self.project))?)?;
-        for job in jobs.as_array().into_iter().flatten() {
-            let Some(id) = job.get("id").and_then(|i| i.as_i64()) else { continue };
-            let log_excerpt = self
-                .api(&format!("projects/{}/jobs/{id}/trace", self.project))
-                .map(|log| crate::preflight::log_excerpt(&log))
-                .unwrap_or_else(|e| format!("(log unavailable: {e:#})"));
-            out.push(FailedJob {
-                name: job.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string(),
-                url: job.get("web_url").and_then(|u| u.as_str()).unwrap_or("").to_string(),
-                log_excerpt,
-            });
-        }
+        let mut tree = vec![(pid, jobs.as_array().cloned().unwrap_or_default())];
         if depth < 2 {
             let bridges: serde_json::Value =
                 serde_json::from_str(&self.api(&format!("projects/{}/pipelines/{pid}/bridges", self.project))?)?;
             for child in failed_children(&bridges) {
-                self.failed_jobs(child, depth + 1, out)?;
+                tree.extend(self.failed_tree(child, depth + 1)?);
             }
         }
-        Ok(())
+        Ok(tree)
+    }
+
+    /// A failed job with its log tail.
+    fn failed_job(&self, job: &serde_json::Value) -> Option<FailedJob> {
+        let id = job.get("id")?.as_i64()?;
+        let log_excerpt = self
+            .api(&format!("projects/{}/jobs/{id}/trace", self.project))
+            .map(|log| crate::preflight::log_excerpt(&log))
+            .unwrap_or_else(|e| format!("(log unavailable: {e:#})"));
+        Some(FailedJob {
+            name: job.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string(),
+            url: job.get("web_url").and_then(|u| u.as_str()).unwrap_or("").to_string(),
+            log_excerpt,
+        })
     }
 
     /// Cancel an armed MR's merge-when-pipeline-succeeds (callers check it's armed first).
@@ -318,8 +322,8 @@ impl Forge for GlabForge {
         let Some((pid, status)) = self.latest_pipeline(iid)? else {
             return Ok(CiReport { status: None, failed: vec![] });
         };
-        let mut failed = Vec::new();
-        self.failed_jobs(pid, 0, &mut failed)?;
+        let tree = self.failed_tree(pid, 0)?;
+        let failed = tree.iter().flat_map(|(_, jobs)| jobs).filter_map(|job| self.failed_job(job)).collect();
         Ok(CiReport { status: pipeline_status(&status), failed })
     }
 
@@ -379,11 +383,17 @@ impl Forge for GlabForge {
         diff_of(&files, path, "diff").ok_or_else(|| anyhow!("!{iid} doesn't change {path}"))
     }
 
+    /// Retry each pipeline in the tree that holds a failed job: a pipeline's retry never reaches
+    /// its child pipelines, and GitLab answers success when it re-runs nothing.
     fn retry_ci(&self, iid: i64) -> Result<()> {
         let (pid, _) = self.latest_pipeline(iid)?.ok_or_else(|| anyhow!("!{iid}: no pipeline to retry"))?;
-        let path = format!("projects/{}/pipelines/{pid}/retry", self.project);
-        let out = Command::new("glab").args(["api", "--method", "POST", &path]).output_within(crate::proc::API)?;
-        ensure!(out.status.success(), "glab pipeline retry failed: {}", crate::preflight::one_line(&out.stderr));
+        let targets = retry_targets(&self.failed_tree(pid, 0)?);
+        ensure!(!targets.is_empty(), "!{iid}: no failed job to retry");
+        for p in targets {
+            let path = format!("projects/{}/pipelines/{p}/retry", self.project);
+            let out = Command::new("glab").args(["api", "--method", "POST", &path]).output_within(crate::proc::API)?;
+            ensure!(out.status.success(), "glab pipeline retry failed: {}", crate::preflight::one_line(&out.stderr));
+        }
         Ok(())
     }
 
@@ -608,6 +618,14 @@ fn failed_children(bridges: &serde_json::Value) -> Vec<i64> {
         .collect()
 }
 
+/// The pipelines a retry re-runs: those holding a failed job that isn't allowed to fail.
+fn retry_targets(tree: &[(i64, Vec<serde_json::Value>)]) -> Vec<i64> {
+    tree.iter()
+        .filter(|(_, jobs)| jobs.iter().any(|j| j.get("allow_failure").and_then(|a| a.as_bool()) != Some(true)))
+        .map(|(p, _)| *p)
+        .collect()
+}
+
 /// Map GitLab's pipeline vocabulary onto our five states (vendor→domain stays in the
 /// adapter). In-flight variants collapse to `Running`; `skipped`/unknown → `None`.
 fn pipeline_status(s: &str) -> Option<PipelineStatus> {
@@ -748,6 +766,17 @@ mod tests {
             {"name": "pending", "downstream_pipeline": null}
         ]);
         assert_eq!(failed_children(&bridges), vec![11]);
+    }
+
+    #[test]
+    fn retries_only_the_pipelines_holding_a_failed_job() {
+        let tree = vec![
+            (1, vec![]), // the parent: only its trigger job failed
+            (11, vec![serde_json::json!({"name": "lint", "allow_failure": false})]),
+            (12, vec![serde_json::json!({"name": "advisory", "allow_failure": true})]),
+        ];
+        assert_eq!(retry_targets(&tree), vec![11]);
+        assert!(retry_targets(&tree[..1]).is_empty(), "nothing to retry: retry_ci errors");
     }
 
     #[test]
