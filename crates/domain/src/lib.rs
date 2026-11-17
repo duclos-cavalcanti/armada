@@ -143,6 +143,12 @@ pub enum LookoutState { Reviewed, Escalated }
 #[serde(rename_all = "snake_case")]
 pub enum CaptainState { Done, Escalated }
 
+/// An admiral convened on a confirmed escalation: `escalated` once it hands the ruling to the
+/// operator (always, in a convoy that isn't delegated; a referral, in one that is).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdmiralState { Escalated }
+
 /// A crew member's self-reported state, typed per cog. The `reports` table stores the
 /// string (`as_str`); readers widen it back with the session's `kind` via `parse`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,6 +158,7 @@ pub enum CogState {
     Hand(HandState),
     Captain(CaptainState),
     Lookout(LookoutState),
+    Admiral(AdmiralState),
 }
 
 /// A ticket's workflow status — a cached mirror of the tracker (re-synced,
@@ -1072,6 +1079,20 @@ impl CaptainState {
     }
 }
 
+impl AdmiralState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AdmiralState::Escalated => "escalated",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "escalated" => Some(Self::Escalated),
+            _ => None,
+        }
+    }
+}
+
 impl CogState {
     /// Which cog this state belongs to (the enum variant carries it).
     pub fn cog(&self) -> CrewKind {
@@ -1081,6 +1102,7 @@ impl CogState {
             CogState::Hand(_) => CrewKind::Hand,
             CogState::Captain(_) => CrewKind::Captain,
             CogState::Lookout(_) => CrewKind::Lookout,
+            CogState::Admiral(_) => CrewKind::Admiral,
         }
     }
     pub fn as_str(&self) -> &'static str {
@@ -1090,6 +1112,7 @@ impl CogState {
             CogState::Hand(s) => s.as_str(),
             CogState::Captain(s) => s.as_str(),
             CogState::Lookout(s) => s.as_str(),
+            CogState::Admiral(s) => s.as_str(),
         }
     }
     /// Widen a stored string back to a typed state, given the session's cog. The cog
@@ -1101,7 +1124,7 @@ impl CogState {
             CrewKind::Hand => HandState::parse(s).map(CogState::Hand),
             CrewKind::Captain => CaptainState::parse(s).map(CogState::Captain),
             CrewKind::Lookout => LookoutState::parse(s).map(CogState::Lookout),
-            CrewKind::Admiral => None, // an admiral reports nothing: the cog's own reports end it
+            CrewKind::Admiral => AdmiralState::parse(s).map(CogState::Admiral),
         }
     }
     /// A builder's happy terminal — MR open + reviewed, ready to hand to a sailor.
@@ -1128,6 +1151,7 @@ impl CogState {
                 | CogState::Sailor(SailorState::Escalated)
                 | CogState::Captain(CaptainState::Escalated)
                 | CogState::Lookout(LookoutState::Escalated)
+                | CogState::Admiral(AdmiralState::Escalated)
         )
     }
     /// A DELIBERATE non-terminal hold (a wait on blockers or on a review, an anchor).
@@ -1536,5 +1560,18 @@ mod memory_tests {
         assert!(Memory { refused: vec![refused("Batch create")], rulings: vec![] }.validate().is_err(), "not a slug");
         let blank = StandingRuling { then: " ".into(), ..ruling };
         assert!(Memory { refused: vec![], rulings: vec![blank] }.validate().is_err(), "an empty then");
+    }
+}
+
+#[cfg(test)]
+mod cog_state_tests {
+    use super::*;
+
+    #[test]
+    fn an_admiral_reports_only_that_the_ruling_is_the_operators() {
+        let s = CogState::parse(CrewKind::Admiral, "escalated").expect("an admiral's escalated");
+        assert_eq!((s.cog(), s.as_str()), (CrewKind::Admiral, "escalated"));
+        assert!(s.is_escalated() && !s.is_done() && !s.is_paused());
+        assert_eq!(CogState::parse(CrewKind::Admiral, "sleeping"), None, "a sailor's word, not an admiral's");
     }
 }

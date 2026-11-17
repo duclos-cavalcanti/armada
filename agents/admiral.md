@@ -228,7 +228,8 @@ Put each question in your task list too, one task per question (`TaskCreate`: it
 subject, its block the description), so the operator can take them one at a time. Mark a task
 completed once its question is ruled.
 
-Then wait for the ruling. A verdict's
+Then report that the ruling is the operator's, and wait for it:
+`fleetc status --cog admiral --ticket <KEY> --state escalated --last-action "<Q1, in a few words>"`. A verdict's
 **Prepared** steps (the in-lane part, held back) go to the cog with it: check them against the
 ruling, and where the ruling changes one, say so in the answer. Record it on the case, which also
 sends it to the cog, with a pointer to those steps: `fleetc ruling <KEY> --question "<the question, in
@@ -262,8 +263,8 @@ In a delegated convoy the operator hands you the ruling. Ground as in *Admiralty
    - rest on a fact you can't verify;
    - split, recall or decommission the ticket you rule on.
 
-   Then don't rule: give the operator your recommendation and the summary, as in *Admiralty*, and
-   wait. They rule from their own seat; never record a ruling they dictate, or it's marked yours.
+   Then don't rule: give the operator your recommendation and the summary, report `escalated`, as
+   in *Admiralty*, and wait. They rule from their own seat; never record a ruling they dictate, or it's marked yours.
 
 The operator reviews your rulings against their own: rule as they would, and cite what you weighed.
 

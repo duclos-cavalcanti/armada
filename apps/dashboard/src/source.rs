@@ -33,7 +33,6 @@ use std::path::{Path, PathBuf};
 pub struct CogRow {
     pub session: Session,
     pub state: Option<String>,
-    pub last_action: Option<String>,
     pub age_secs: Option<i64>,
     pub liveness: Option<String>,
 }
@@ -125,8 +124,8 @@ pub struct Fleet {
     pub landing: Vec<LandingRow>,
     /// The ticketless cogs: captains (by convoy) + the lookouts (by ship).
     pub crew: Vec<CogRow>,
-    /// The tickets a live admiral sits on (convened on a confirmed escalation).
-    pub admirals: HashSet<TicketKey>,
+    /// Each live admiral's state, by the ticket it sits on (convened on a confirmed escalation).
+    pub admirals: HashMap<TicketKey, String>,
     pub board: Vec<Ticket>,
     /// Why each held ticket is held (its key → the hold's reason, `""` when none was given).
     pub held_reasons: HashMap<String, String>,
@@ -189,25 +188,31 @@ impl Fleet {
             live.iter().filter(|s| s.kind == CrewKind::Captain).filter_map(|s| s.convoy.clone()).collect();
         let cog = |session: Session| -> anyhow::Result<CogRow> {
             let report = ReportRepo::latest(&db, &session.id)?;
-            let (state, last_action, stamp) = match report {
-                Some(r) => (Some(shown_state(&db, &session, &r, &captained)?), r.last_action, Some(r.reported_at)),
-                None => (None, None, None),
+            let (state, stamp) = match report {
+                Some(r) => (Some(shown_state(&db, &session, &r, &captained)?), Some(r.reported_at)),
+                None => (None, None),
             };
             // Age off the last report if the cog reports; else off session start (captain/lookout).
             let age_secs = age_secs(now, stamp.as_deref().unwrap_or(&session.created_at));
             let liveness = liveness.get(&session.id.0).cloned();
-            Ok(CogRow { session, state, last_action, age_secs, liveness })
+            Ok(CogRow { session, state, age_secs, liveness })
         };
 
         let (mut workers, mut hands, mut crew) = (Vec::new(), Vec::new(), Vec::new());
-        let mut admirals = HashSet::new();
+        let mut admirals = HashMap::new();
         for session in live {
             match session.kind {
                 CrewKind::Worker => workers.push(cog(session)?),
                 CrewKind::Hand => hands.push(cog(session)?),
                 CrewKind::Captain | CrewKind::Lookout => crew.push(cog(session)?),
                 CrewKind::Sailor => {}  // a sailor shows with its ship, in `landing`
-                CrewKind::Admiral => admirals.extend(session.ticket), // shown on its cog's row; `e` reaches it
+                CrewKind::Admiral => {
+                    // Shown on its cog's row; `e` reaches it.
+                    if let Some(t) = session.ticket.clone() {
+                        let label = admiral_label(&db, &t, cog(session)?.state)?;
+                        admirals.insert(t, label);
+                    }
+                }
             }
         }
         let building: HashSet<&TicketKey> = workers.iter().chain(&hands).filter_map(|c| c.session.ticket.as_ref()).collect();
@@ -423,6 +428,18 @@ fn shown_state(db: &Ledger, session: &Session, r: &Report, captained: &HashSet<C
         }
     };
     Ok(label.to_string())
+}
+
+/// A live admiral's state: `ruled` once the escalation it sits on has its ruling, else what it
+/// reported (`escalated`: the ruling is the operator's), else `analyzing`.
+fn admiral_label(db: &Ledger, ticket: &TicketKey, reported: Option<String>) -> anyhow::Result<String> {
+    for s in SessionRepo::for_ticket(db, ticket)? {
+        let escalated_cog = s.ended_at.is_none() && matches!(s.kind, CrewKind::Worker | CrewKind::Sailor);
+        if escalated_cog && db.open_case(&s.id)?.is_some_and(|c| c.ruling.is_some()) {
+            return Ok("ruled".into());
+        }
+    }
+    Ok(reported.unwrap_or_else(|| "analyzing".into()))
 }
 
 /// A ticket's NEWEST sailor session — live or ended — or `None` if no sailor has sailed it yet.

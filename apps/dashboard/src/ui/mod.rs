@@ -193,8 +193,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 ("Live", 7),
                 ("MR", 7),
                 ("Pipeline", 9),
-                ("Age", 6),
-                ("Last action", 0),
+                ("Age", 0),
             ])),
             (if pane == Pane::Impl { &f.workers } else { &f.hands })
                 .iter()
@@ -210,7 +209,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
                 ("Ticket", 12),
                 ("Convoy", 7),
                 ("Sailor", 15),
-                ("Adm", 5),
+                ("Admiral", 11),
                 ("Live", 7),
                 ("MR", 7),
                 ("Pipeline", 9),
@@ -224,7 +223,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
             f.landing
                 .iter()
                 .map(|r| {
-                    let admiral = r.ship.ticket.as_ref().is_some_and(|t| f.admirals.contains(t));
+                    let admiral = r.ship.ticket.as_ref().and_then(|t| f.admirals.get(t)).map(String::as_str);
                     let t = r.ship.ticket.as_ref();
                     let held = t.is_some_and(|t| f.held_reasons.contains_key(&t.0));
                     landing_row(r, r.sailor.as_ref().is_some_and(|s| f.is_up(s)), ticket_convoy_cell(f.convoy_of(t), f.on_path(t)), admiral, held)
@@ -244,7 +243,7 @@ fn pane_view(app: &App, pane: Pane) -> (String, Option<Line<'static>>, Vec<Line<
         ),
         Pane::Convoys => (
             format!(" Convoys · {} open ", f.convoys.len()),
-            Some(header(&[("Convoy", 16), ("Captain", 10), ("Launched", 9), ("Open", 6), ("Path", 6), ("Ref/Conf", 9), ("Title", 0)])),
+            Some(header(&[("Convoy", 16), ("Captain", 10), ("Live", 7), ("Launched", 9), ("Open", 6), ("Path", 6), ("Ref/Conf", 9), ("Title", 0)])),
             f.convoys.iter().map(|c| convoy_row(c, f)).collect(),
         ),
         Pane::Proposals => (
@@ -324,7 +323,11 @@ fn order_row(o: &OrderRow, convoy: (String, usize, Style)) -> Line<'static> {
 fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>, convoy: (String, usize, Style)) -> Line<'static> {
     let s = &c.session;
     let state = c.state.clone().unwrap_or_else(|| "·".into());
-    let anchor = if s.anchored_at.is_some() { "⚓ " } else { "" };
+    // An anchored builder shows ⚓ before its state, as an anchored ship does.
+    let (state, state_style) = match s.anchored_at {
+        Some(_) => (format!("⚓ {state}"), state_style("anchored")),
+        None => (state.clone(), state_style(&state)),
+    };
     let (mr, pipe) = match ship {
         Some(r) => (format!("!{}", r.ship.iid), pipeline(r.snapshot.as_ref())),
         None => ("—".into(), ("—".into(), dim())),
@@ -333,16 +336,15 @@ fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>, convoy: (String, us
         (s.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| "—".into()), 12, Style::default()),
         convoy,
         (s.kind.as_str().into(), 7, Style::default()),
-        (state.clone(), 13, state_style(&state)),
+        (state, 13, state_style),
         live_cell(c.liveness.as_deref(), up),
         (mr, 7, Style::default()),
         (pipe.0, 9, pipe.1),
-        (fmt_age(c.age_secs), 6, dim()),
-        (format!("{anchor}{}", c.last_action.as_deref().unwrap_or("—")), 0, Style::default()),
+        (fmt_age(c.age_secs), 0, dim()),
     ])
 }
 
-fn landing_row(r: &LandingRow, up: bool, convoy: (String, usize, Style), admiral: bool, held: bool) -> Line<'static> {
+fn landing_row(r: &LandingRow, up: bool, convoy: (String, usize, Style), admiral: Option<&str>, held: bool) -> Line<'static> {
     let snap = r.snapshot.as_ref();
     // An ended sailor's last word stays visible, dimmed: the ship is at rest. An anchored ticket
     // shows ⚓ before it, whatever its sailor last said: no sailor sweeps it until it's weighed.
@@ -350,7 +352,7 @@ fn landing_row(r: &LandingRow, up: bool, convoy: (String, usize, Style), admiral
     let sailor_style = if held { state_style("anchored") } else if r.live { state_style(&sailor) } else { dim() };
     let sailor = if held { format!("⚓ {sailor}") } else { sailor };
     let age = r.sailor.as_ref().and_then(|s| s.age_secs);
-    let live = if r.live { live_cell(r.sailor.as_ref().and_then(|s| s.liveness.as_deref()), up) } else { ("—".into(), 7, dim()) };
+    let live = if r.live { live_cell(r.sailor.as_ref().and_then(|s| s.liveness.as_deref()), up) } else { ("off".into(), 7, dim()) };
     let pipe = pipeline(snap);
     let (appr, appr_style) = match snap {
         Some(s) => {
@@ -380,7 +382,10 @@ fn landing_row(r: &LandingRow, up: bool, convoy: (String, usize, Style), admiral
         convoy,
         (sailor, 15, sailor_style),
         // An admiral convened on its confirmed escalation: `e` switches to it.
-        if admiral { ("up".into(), 5, Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)) } else { ("—".into(), 5, dim()) },
+        match admiral {
+            Some(a) => (a.to_string(), 11, state_style(a)),
+            None => ("—".into(), 11, dim()),
+        },
         live,
         (format!("!{}", r.ship.iid), 7, Style::default()),
         (pipe.0, 9, pipe.1),
@@ -498,16 +503,20 @@ fn convoy_row(c: &Convoy, f: &crate::source::Fleet) -> Line<'static> {
         .copied()
         .filter(|t| f.critical.contains(&t.key) && t.status != Some(domain::TicketStatus::Cancelled))
         .collect();
-    let live = match f.captain_of(&c.key) {
-        Some(cap) if cap.state.as_deref() == Some("escalated") => ("escalated".into(), 10, state_style("escalated")),
-        Some(cap) => live_cell(cap.liveness.as_deref(), f.is_up(cap)),
-        None => ("off".into(), 7, dim()),
+    let (captain, live) = match f.captain_of(&c.key) {
+        Some(cap) => {
+            let state = cap.state.clone().unwrap_or_else(|| "·".into());
+            let style = state_style(&state);
+            ((state, 10, style), live_cell(cap.liveness.as_deref(), f.is_up(cap)))
+        }
+        None => (("—".into(), 10, dim()), ("off".into(), 7, dim())),
     };
     let anchor = if c.anchored_at.is_some() { "⚓ " } else { "" };
     let launched = fmt_age(f.captain_launched.get(&c.key.0).and_then(|at| age_of(at)));
     cells(vec![
         convoy_cell(Some(c.no).filter(|n| *n > 0), Some(&c.key.0), 16),
-        (live.0, 10, live.2),
+        captain,
+        live,
         (launched, 9, dim()),
         (format!("{open}/{}", members.len()), 6, Style::default()),
         match c.goal {
@@ -775,6 +784,7 @@ fn live_cell(liveness: Option<&str>, up: bool) -> (String, usize, Style) {
     let style = match live.as_str() {
         "active" | "up" => green(),
         "quiet" => yellow(),
+        "idle" => Style::default(),
         "dead" => Style::default().fg(Color::Red),
         _ => dim(),
     };
@@ -791,7 +801,8 @@ fn pipeline(snap: Option<&ShipSnapshot>) -> (String, Style) {
     }
 }
 
-/// A cog's self-reported state: red when it needs you, magenta when you hold it.
+/// A cog's state, one vocabulary for every cog: green at work, dim at rest, red when it needs you,
+/// magenta when you hold it.
 fn state_style(state: &str) -> Style {
     match state {
         "escalated" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
@@ -799,8 +810,8 @@ fn state_style(state: &str) -> Style {
         "triage" | "ruled" => Style::default().fg(Color::Cyan),
         "review" => Style::default().fg(Color::Blue),
         "anchored" => Style::default().fg(Color::Magenta),
-        "concluded" | "done" | "merged" => green(),
-        "sleeping" | "unmanned" | "·" => dim(),
+        "started" | "implementing" | "sailing" | "analyzing" | "concluded" | "merged" => green(),
+        "sleeping" | "waiting" | "awaiting" | "unmanned" | "done" | "·" => dim(),
         _ => Style::default(),
     }
 }

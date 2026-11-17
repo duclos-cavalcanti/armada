@@ -12,8 +12,12 @@ single static binary, no runtime dependencies.
 Cycle with `Tab` / `S-Tab`:
 
 - **Fleet** — the line, top-down: the open convoys, what waits to enter the line, every order,
-  then the builders and the ships being landed:
-  - **Convoys** — the open convoys: the captain's liveness (or off), how many tickets are still
+  then the builders and the ships being landed. Every cog reads the same two ways. Its **state** is
+  what it last reported: green at work (`implementing`, `sailing`, `analyzing`), dim at rest
+  (`sleeping`, `waiting`, `done`), blue in `review`, cyan in `triage` / `ruled`, red when it needs
+  you (`escalated`), magenta when you hold it (`anchored`). **Live** is its session: `active`
+  (green), `quiet` (yellow), `idle` (plain), `dead` (red), `off` (dim).
+  - **Convoys** — the open convoys: the captain's state and liveness (or off), how many tickets are still
     open, and of its critical path (`Path`: its goal and all it waits on; `—` with no goal);
     `enter` switches to the captain, `a` convenes an admiral to take a look at the convoy (in a
     window of your session). On every other pane, a ticket on its convoy's critical path
@@ -25,10 +29,11 @@ Cycle with `Tab` / `S-Tab`:
   - **Dispatch** — the workers' orders (auto-implemented), with their phase (waiting /
     implementation / merge) and what they wait on (anchored ⚓ / blocked ⛔); `h`/`l` swaps in the
     hands' orders (operator-driven);
-  - **Implementation** — builders at work (workers + hands): state, liveness, MR + pipeline, last
-    action. A worker in **review** has put its MR up for a lookout and waits for its review;
-  - **Merge** — our ships being landed: the sailor's state (dimmed once it's stood down), whether
-    an admiral sits on its escalation (`Adm`: `up`; `e` switches to it), pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status;
+  - **Implementation** — builders at work (workers + hands): state (`⚓` when anchored), liveness,
+    MR + pipeline. A worker in **review** has put its MR up for a lookout and waits for its review;
+  - **Merge** — our ships being landed: the sailor's state (dimmed once it's stood down), the
+    admiral's on its escalation (`analyzing`, `escalated`: the ruling is yours, `ruled`; `e` switches
+    to it), pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status;
   - an escalation reads by who holds it: **flagged** (no captain has looked), **triage** (a
     captain is inspecting it, or sent its way out), **escalated** (confirmed: yours), **ruled**
     (your ruling went to the cog, `fleetc ruling`; it clears when the cog moves on). `v` reads
