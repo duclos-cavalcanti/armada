@@ -84,7 +84,7 @@ and tmux:
 - **Steer the work** with the whole `fleetc` surface: dispatch a one-off ticket (no captain or
   convoy needed — a captain only auto-dispatches a convoy), `anchor` / `weigh` a ticket (all on
   it), a convoy (its captain and every open ticket in it) or the lookouts, `rework` a ticket whose ACs changed under its MR, `convoy`
-  `open` (`--standing`: fleet-wide work, never delivered) / `close` / `add` / `remove`, `proposal accept` / `drop`, `ticket block` / `unblock` /
+  `open` (`--standing`: fleet-wide work, never delivered; `--delegation on|off`: its admirals rule its escalations) / `close` / `add` / `remove`, `proposal accept` / `drop`, `ticket block` / `unblock` /
   `relate` / `unrelate` / `epic` / `edit` / `comment`, `escalations` (a convoy's cases) / `ruling` (record
   the operator's ruling on a case, which sends it to the cog), `memory set` / `drop` (the
   project's refused list and standing rulings), `sink` / `send` a cog, `decommission` a ticket withdrawn for good (MR closed,

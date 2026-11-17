@@ -1480,7 +1480,8 @@ fn stand_down_lookout<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, 
 
 /// LaunchAdmiral — convene an admiral on a ticket's confirmed escalation, in the project folder, for
 /// the operator to rule with (`admiral-<KEY>`; the dashboard's `e` switches to it). Its first order
-/// names the ticket. No `FLEET_TICKET`: it isn't a cog, and keeps the operator's verbs fleetc refuses
+/// names the ticket. In a delegated convoy the order delegates the ruling to it, and
+/// `FLEET_DELEGATION` marks its rulings its own. No `FLEET_TICKET`: it isn't a cog, and keeps the operator's verbs fleetc refuses
 /// a cog. The ticket's worktree rides in as `--add-dir`: the admiral reads the cog's files while its
 /// cwd stays the checkout, whose CLAUDE.md and settings are the merged canon's, not the branch's.
 /// A tmux session of that name already up is one the operator opened: a benign skip.
@@ -1509,14 +1510,20 @@ fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, tick
         Some(id) => id,
         None => return Ok(()), // the per-ticket lock holds → an admiral already sits. Benign skip.
     };
-    let add_dir = OrderRepo::get(ledger, &TicketKey(ticket.to_string()))?
+    let key = TicketKey(ticket.to_string());
+    let add_dir = OrderRepo::get(ledger, &key)?
         .and_then(|o| o.worktree_path)
         .map(|wt| format!(" --add-dir '{}'", wt.replace('\'', r"'\''")))
         .unwrap_or_default();
+    let convoy = TicketRepo::get(ledger, &key)?.and_then(|t| t.convoy);
+    let delegated = ConvoyRepo::active(ledger)?.iter().any(|c| Some(&c.key) == convoy.as_ref() && c.delegation);
     // The key is `<PREFIX>-<n>`-validated, so the quoted order is shell-safe. `--` ends the options:
     // `--add-dir` takes a list, and would swallow the order as a second directory.
-    let env = skill_env(skills);
-    let cmd = format!("{env}{}{add_dir} -- 'Rule on the confirmed escalation of {ticket}.'", launch_cmd("admiral", Launch::Fresh(&hid)));
+    let (env, order) = match delegated {
+        true => (format!("FLEET_DELEGATION=1 {}", skill_env(skills)), format!("Rule on the confirmed escalation of {ticket}: the operator delegated it to you.")),
+        false => (skill_env(skills), format!("Rule on the confirmed escalation of {ticket}.")),
+    };
+    let cmd = format!("{env}{}{add_dir} -- '{order}'", launch_cmd("admiral", Launch::Fresh(&hid)));
     host.spawn(&tmux_session, Path::new(project), &cmd)?;
     ledger.append(
         &now_rfc3339(),
@@ -2714,7 +2721,7 @@ mod tests {
         order_wt(&db, "PROJ-1", true, Some("/wt/PROJ-1"));
         ship(&db, 10, "PROJ-1", ShipState::Open);
         let key = TicketKey("PROJ-1".into());
-        let rule = || db.rule_alone(&key, &Ruling { question: "q".into(), answer: "a".into(), ruled_at: now_rfc3339() }).unwrap();
+        let rule = || db.rule_alone(&key, &Ruling { question: "q".into(), answer: "a".into(), ruled_at: now_rfc3339(), by: domain::Ruler::Operator }).unwrap();
         let cap_2 = Levers { max_rulings: 2, admirals: 1, ..LIVE };
 
         rule();
@@ -3875,6 +3882,28 @@ mod tests {
         assert!(cmd.starts_with("FLEET_GROOM_SKILL=groom-ticket FLEET_ASSESS_SKILL=assess-ticket claude "), "the project's skills ride in: {cmd}");
         let live = SessionRepo::live(&db).unwrap();
         assert!(live.iter().any(|s| s.kind == CrewKind::Admiral && s.ticket == Some(TicketKey("PROJ-1".into()))));
+    }
+
+    #[test]
+    fn launch_admiral_in_a_delegated_convoy_delegates_the_ruling_to_it() {
+        let db = db();
+        let convoy = ConvoyKey("PROJ-100".into());
+        db.open(&convoy, None, false, "t1").unwrap();
+        convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::InProgress);
+        let order = |db: &Ledger| {
+            let host = FakeHost::new();
+            launch_admiral(db, &host, "/project", "PROJ-1", &[]).unwrap();
+            for s in SessionRepo::live(db).unwrap() {
+                SessionRepo::end(db, &s.id, "t2").unwrap(); // its seat freed for the next
+            }
+            host.spawned.take().remove(0).2
+        };
+        let plain = order(&db);
+        assert!(plain.ends_with("-- 'Rule on the confirmed escalation of PROJ-1.'") && !plain.contains("FLEET_DELEGATION"), "{plain}");
+        db.set_delegation(&convoy, true, "t3").unwrap();
+        let delegated = order(&db);
+        assert!(delegated.starts_with("FLEET_DELEGATION=1 claude "), "its rulings are marked its own: {delegated}");
+        assert!(delegated.ends_with("-- 'Rule on the confirmed escalation of PROJ-1: the operator delegated it to you.'"), "{delegated}");
     }
 
     #[test]

@@ -18,7 +18,7 @@ use domain::ports::{
 };
 use domain::{
     CogState, ConvoyKey, ConvoyTicketView, ConvoyView, CrewKind, EntityKind, EventKind, HandState, Inspection,
-    CaseId, Ruling, TicketLabel, Verdict,
+    CaseId, Ruler, Ruling, TicketLabel, Verdict,
     LivenessThresholds, MrDraft, Order, Packet, Proposal, ProposalId, Proposed, Report, Session, Ship, ShipState, TicketDraft,
     TicketKey, TicketStatus, WorkerState,
 };
@@ -66,7 +66,7 @@ pub enum Command {
     RecordStatus { target: ControlTarget, state: CogState, last_action: Option<String>, reply: UrlReply }, // → "ok", or its case's note
     Dispatch { order: Order, reply: Reply },
     LaunchHand { worktree_path: String, reply: Reply }, // ticketless operator-driven hand, no order
-    OpenConvoy { key: ConvoyKey, title: Option<String>, plan: Option<String>, goal: Option<TicketKey>, standing: bool, reply: Reply },
+    OpenConvoy { key: ConvoyKey, title: Option<String>, plan: Option<String>, goal: Option<TicketKey>, standing: bool, delegation: Option<bool>, reply: Reply },
     CloseConvoy { key: ConvoyKey, captain: bool, reply: Reply }, // `captain`: its own captain signs it off
     Anchor { target: ControlTarget, reply: Reply },
     Weigh { target: ControlTarget, reply: Reply },
@@ -75,7 +75,7 @@ pub enum Command {
     AnchorTicket { ticket: TicketKey, anchor: bool, reason: Option<String>, reply: Reply }, // hold everything on it, or release it
     Rework { ticket: TicketKey, hand: bool, reply: Reply }, // send it back down the line to a builder
     Inspect { ticket: TicketKey, verdict: Verdict, body: String, reply: Reply }, // a verdict on its cog's escalation
-    Rule { ticket: TicketKey, question: String, answer: String, reply: UrlReply }, // the operator's ruling → what it did
+    Rule { ticket: TicketKey, question: String, answer: String, by: Ruler, reply: UrlReply }, // a ruling → what it did
     Remember { memory: domain::Memory, reply: UrlReply }, // set entries of the project's memory → what it holds
     Forget { id: String, reply: UrlReply },               // drop one → what it holds
     GetPacket { ticket: TicketKey, reply: PacketReply }, // a read: the cog's composed work-packet
@@ -309,8 +309,9 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
                 .map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
-        Command::OpenConvoy { key, title, plan, goal, standing, reply } => {
+        Command::OpenConvoy { key, title, plan, goal, standing, delegation, reply } => {
             let res = open_convoy(ledger, tracker, &key, title.as_deref(), plan.as_deref(), goal.as_ref(), standing)
+                .and_then(|()| delegation.map_or(Ok(()), |on| ledger.set_delegation(&key, on, &now_rfc3339())))
                 .map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
@@ -352,8 +353,8 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let res = inspect(ledger, &ticket, verdict, body).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
-        Command::Rule { ticket, question, answer, reply } => {
-            let res = rule(ledger, host, ticket, question, answer).map_err(|e| format!("{e:#}"));
+        Command::Rule { ticket, question, answer, by, reply } => {
+            let res = rule(ledger, host, ticket, question, answer, by).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
         Command::Remember { memory, reply } => {
@@ -941,9 +942,9 @@ fn held(ledger: &Ledger, done: &str) -> Result<String> {
 /// it; with none, it stands alone. Either way it goes to the worker or sailor on the ticket, if one
 /// is. Nothing is ruled while the lookout is still judging. A ruling on the ruling cap's escalation
 /// weighs the ticket too: its sailor goes on, and the count restarts.
-fn rule<H: SessionHost>(ledger: &Ledger, host: &H, ticket: TicketKey, question: String, answer: String) -> Result<String> {
+fn rule<H: SessionHost>(ledger: &Ledger, host: &H, ticket: TicketKey, question: String, answer: String, by: Ruler) -> Result<String> {
     anyhow::ensure!(!question.trim().is_empty() && !answer.trim().is_empty(), "a ruling has a question and an answer");
-    let ruling = Ruling { question: question.trim().into(), answer: answer.trim().into(), ruled_at: now_rfc3339() };
+    let ruling = Ruling { question: question.trim().into(), answer: answer.trim().into(), ruled_at: now_rfc3339(), by };
     let pending = ledger.pending_case(&ticket)?;
     if let Some(case) = &pending {
         anyhow::ensure!(ledger.verdict(&case.id)?.is_some(), "case #{} awaits its inspection: a captain inspects it first (/fleet-inspect)", case.id.0);
@@ -2856,8 +2857,10 @@ mod tests {
         ReportRepo::record(&db, &Report { session: id, state, last_action: question, reported_at: now_rfc3339() }).unwrap();
         inspect(&db, &key, Verdict::Confirm, reconcile::CAP_VERDICT.into()).unwrap();
 
-        rule(&db, &host, key.clone(), "How does it go on?".into(), "Split the docs out.".into()).unwrap();
+        rule(&db, &host, key.clone(), "How does it go on?".into(), "Split the docs out.".into(), Ruler::Admiral).unwrap();
         assert!(!TicketRepo::get(&db, &key).unwrap().unwrap().held, "weighed: its cog goes on");
+        let ruled = db.cases(None, &key).unwrap().remove(0).ruling.unwrap();
+        assert_eq!(ruled.by, Ruler::Admiral, "a delegated admiral's ruling is its own");
         assert_eq!(db.rulings_since_weigh(&key).unwrap(), 0, "the count restarts");
         assert!(host.said.borrow()[0].contains("Split the docs out."), "{}", host.said.borrow()[0]);
     }
@@ -2867,7 +2870,7 @@ mod tests {
         let (db, id) = db_with_live_worker();
         let host = FakeHost::new();
         let key = TicketKey("PROJ-1".into());
-        let ruling = |text: &str| rule(&db, &host, key.clone(), "Q?".into(), text.into());
+        let ruling = |text: &str| rule(&db, &host, key.clone(), "Q?".into(), text.into(), Ruler::Operator);
         let state = CogState::Worker(WorkerState::Escalated);
         ReportRepo::record(&db, &Report { session: id.clone(), state, last_action: Some("which auth?".into()), reported_at: "t1".into() }).unwrap();
         let case = db.open_case(&id).unwrap().expect("raised");

@@ -38,8 +38,9 @@ pub struct DispatchOrder {
 }
 
 /// A convoy open/close command as it travels the wire. `open` carries an optional `title`, `plan`
-/// (its text; none = no plan), `goal` (a ticket key; none = unchanged) and `standing` (makes it
-/// standing; false = unchanged); `close` carries only `captain`. The verb is the route
+/// (its text; none = no plan), `goal` (a ticket key; none = unchanged), `standing` (makes it
+/// standing; false = unchanged) and `delegation` (on or off; none = unchanged); `close` carries
+/// only `captain`. The verb is the route
 /// (`/convoy-open` vs `/convoy-close`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConvoyCmd {
@@ -52,6 +53,8 @@ pub struct ConvoyCmd {
     pub goal: Option<String>,
     #[serde(default)]
     pub standing: bool,
+    #[serde(default)]
+    pub delegation: Option<bool>,
     /// Sent by its captain: a close it signs off, refused on a standing convoy.
     #[serde(default)]
     pub captain: bool,
@@ -119,6 +122,10 @@ pub struct RulingCmd {
     pub ticket: String,
     pub question: String,
     pub answer: String,
+    /// Sent by the admiral of a delegated convoy (`FLEET_DELEGATION`): its own ruling, not the
+    /// operator's.
+    #[serde(default)]
+    pub delegated: bool,
 }
 
 /// An edit to the project's memory (`POST /memory`): entries to add or update by id, as the TOML the

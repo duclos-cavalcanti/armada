@@ -192,7 +192,7 @@ pub enum EventKind {
     ShipOpened, ShipSynced, ShipMerged, ShipClosed,
     ShipRoundsReset, // retired with the sailor's round cap: kept to read the ledger's past events
     EscalationInspected, EscalationRuled,
-    ConvoyOpened, ConvoyClosed, ConvoyPlanned, ConvoyGoalSet,
+    ConvoyOpened, ConvoyClosed, ConvoyPlanned, ConvoyGoalSet, ConvoyDelegated,
     SessionAnchored, SessionWeighed,
     ConvoyAnchored, ConvoyWeighed,
     LookoutAnchored, LookoutWeighed,
@@ -296,6 +296,10 @@ pub struct Convoy {
     /// it, and fleetd wakes none while it holds no open ticket.
     #[serde(default)]
     pub standing: bool,
+    /// Delegated (`convoy open --delegation on`): the operator delegated the rulings on its confirmed
+    /// escalations to the admiral fleetd convenes on each.
+    #[serde(default)]
+    pub delegation: bool,
 }
 
 /// The goal and every ticket it waits on, through the `board`'s blocker edges, whatever their
@@ -779,13 +783,24 @@ pub struct Case {
     pub settled_at: Option<Timestamp>,
 }
 
-/// The operator's answer to a case: the question in general terms, so a later case can cite it,
-/// and the answer.
+/// The answer to a case: the question in general terms, so a later case can cite it, the answer,
+/// and who ruled.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Ruling {
     pub question: String,
     pub answer: String,
     pub ruled_at: Timestamp,
+    #[serde(default)]
+    pub by: Ruler,
+}
+
+/// Who ruled: the operator, or the admiral of a delegated convoy, on its own judgment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Ruler {
+    #[default]
+    Operator,
+    Admiral,
 }
 
 /// The project's memory: the operator's standing decisions, kept in the ledger. Written only through
@@ -902,6 +917,22 @@ impl Order {
 // ── SQL string mapping for the CHECK-constrained enums ──────────────────────────
 // Pure string forms (match the serde snake_case). The `ledger` adapter uses these
 // to map enum ↔ TEXT; `domain` stays free of any sqlite dependency.
+
+impl Ruler {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Ruler::Operator => "operator",
+            Ruler::Admiral => "admiral",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "operator" => Some(Self::Operator),
+            "admiral" => Some(Self::Admiral),
+            _ => None,
+        }
+    }
+}
 
 impl Verdict {
     pub fn as_str(&self) -> &'static str {
@@ -1274,6 +1305,7 @@ impl EventKind {
             EventKind::ConvoyClosed => "convoy_closed",
             EventKind::ConvoyPlanned => "convoy_planned",
             EventKind::ConvoyGoalSet => "convoy_goal_set",
+            EventKind::ConvoyDelegated => "convoy_delegated",
             EventKind::SessionAnchored => "session_anchored",
             EventKind::SessionWeighed => "session_weighed",
             EventKind::ConvoyAnchored => "convoy_anchored",
@@ -1310,6 +1342,7 @@ impl EventKind {
             "convoy_closed" => Some(Self::ConvoyClosed),
             "convoy_planned" => Some(Self::ConvoyPlanned),
             "convoy_goal_set" => Some(Self::ConvoyGoalSet),
+            "convoy_delegated" => Some(Self::ConvoyDelegated),
             "session_anchored" => Some(Self::SessionAnchored),
             "session_weighed" => Some(Self::SessionWeighed),
             "convoy_anchored" => Some(Self::ConvoyAnchored),

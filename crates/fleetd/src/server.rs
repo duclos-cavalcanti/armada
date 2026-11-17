@@ -10,7 +10,7 @@
 use crate::scheduler::{Command, ControlTarget, Pulse, STALLED};
 use crate::Snapshot;
 use anyhow::Result;
-use domain::{CogState, ConvoyKey, Order, TicketKey};
+use domain::{CogState, ConvoyKey, Order, Ruler, TicketKey};
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
@@ -296,7 +296,7 @@ fn handle_convoy(request: &str, cmds: &Sender<Command>, open: bool) -> String {
     };
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
     let cmd = if open {
-        Command::OpenConvoy { key, title: dto.title, plan: dto.plan, goal, standing: dto.standing, reply: reply_tx }
+        Command::OpenConvoy { key, title: dto.title, plan: dto.plan, goal, standing: dto.standing, delegation: dto.delegation, reply: reply_tx }
     } else {
         Command::CloseConvoy { key, captain: dto.captain, reply: reply_tx }
     };
@@ -953,7 +953,8 @@ fn handle_ruling(request: &str, cmds: &Sender<Command>) -> String {
         Err(r) => return r,
     };
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    let cmd = Command::Rule { ticket, question: dto.question, answer: dto.answer, reply: reply_tx };
+    let by = if dto.delegated { Ruler::Admiral } else { Ruler::Operator };
+    let cmd = Command::Rule { ticket, question: dto.question, answer: dto.answer, by, reply: reply_tx };
     if cmds.send(cmd).is_err() {
         return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
     }

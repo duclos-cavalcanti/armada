@@ -301,6 +301,9 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE convoys ADD COLUMN goal TEXT REFERENCES tickets(key);",
     // v13: standing convoys, fleet-wide work never delivered.
     "ALTER TABLE convoys ADD COLUMN standing INTEGER NOT NULL DEFAULT 0 CHECK (standing IN (0, 1));",
+    // v14: delegated convoys, whose admirals rule; and who ruled each case.
+    "ALTER TABLE convoys ADD COLUMN delegation INTEGER NOT NULL DEFAULT 0 CHECK (delegation IN (0, 1));
+    ALTER TABLE cases ADD COLUMN ruled_by TEXT NOT NULL DEFAULT 'operator' CHECK (ruled_by IN ('operator', 'admiral'));",
 ];
 
 /// The ledger's schema version (SQLite `user_version`): one past its last migration.
@@ -798,7 +801,7 @@ mod tests {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; \
-             ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; PRAGMA user_version = 1;",
+             ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; PRAGMA user_version = 1;",
         )
         .unwrap();
         drop(conn);
@@ -822,7 +825,7 @@ mod tests {
         drop(Ledger::open(&path).unwrap());
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing;
+            "DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by;
              INSERT INTO convoys(key, created_at) VALUES ('PROJ-9', 't2'), ('PROJ-5', 't1'), ('PROJ-7', 't3');
              PRAGMA user_version = 10;",
         )
@@ -847,7 +850,7 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO convoys(key, created_at) VALUES ('PROJ-100', 't1');
              INSERT INTO convoy_plans(convoy, body, updated_at) VALUES ('PROJ-100', 'ship the seed', 't2');
-             ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; PRAGMA user_version = 7;",
+             ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; PRAGMA user_version = 7;",
         )
         .unwrap();
         drop(conn);
@@ -874,7 +877,7 @@ mod tests {
         // Back to v4: the same rebuild, without the admiral kind.
         let v4 = MIGRATIONS[3].replace(",'admiral'", ""); // v5's rebuild
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; PRAGMA user_version = 4;"))
+        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; PRAGMA user_version = 4;"))
             .unwrap();
         drop(conn);
 
@@ -1253,6 +1256,22 @@ mod tests {
     }
 
     #[test]
+    fn delegation_turns_on_and_off_and_logs_only_a_change() {
+        let db = Ledger::in_memory().unwrap();
+        let k = ConvoyKey("PROJ-100".into());
+        assert!(db.set_delegation(&k, true, "t0").is_err(), "no convoy yet");
+        db.open(&k, None, false, "t1").unwrap();
+        assert!(!db.active().unwrap()[0].delegation, "off by default");
+        db.set_delegation(&k, true, "t2").unwrap();
+        db.set_delegation(&k, true, "t3").unwrap(); // unchanged → no event
+        db.open(&k, None, false, "t4").unwrap();
+        assert!(db.active().unwrap()[0].delegation, "re-opening keeps it");
+        db.set_delegation(&k, false, "t5").unwrap();
+        assert!(!db.active().unwrap()[0].delegation);
+        assert_eq!(db.events_of(EventKind::ConvoyDelegated).unwrap().len(), 2);
+    }
+
+    #[test]
     fn convoy_open_and_close_log_cdc_events_and_a_noop_close_logs_nothing() {
         let db = Ledger::in_memory().unwrap();
         let k = ConvoyKey("PROJ-100".into());
@@ -1628,6 +1647,10 @@ fn row_to_convoy(r: &rusqlite::Row) -> rusqlite::Result<Convoy> {
             Ok(i) => r.get(i)?,
             Err(_) => false,
         },
+        delegation: match r.as_ref().column_index("delegation") {
+            Ok(i) => r.get(i)?,
+            Err(_) => false,
+        },
     })
 }
 
@@ -1821,6 +1844,31 @@ impl ConvoyRepo for Ledger {
         Ok(())
     }
 
+    fn set_delegation(&self, key: &ConvoyKey, on: bool, at: &str) -> Result<()> {
+        // Write the flag + ConvoyDelegated (CDC, same txn). Unchanged logs nothing.
+        let tx = self.conn.unchecked_transaction()?;
+        let was: Option<bool> =
+            tx.query_row("SELECT delegation FROM convoys WHERE key = ?1", params![key.0], |r| r.get(0)).optional()?;
+        match was {
+            None => anyhow::bail!("no convoy {}", key.0),
+            Some(was) if was == on => return Ok(()),
+            Some(_) => {}
+        }
+        tx.execute("UPDATE convoys SET delegation = ?2 WHERE key = ?1", params![key.0, on])?;
+        tx.execute(
+            "INSERT INTO events(created_at, kind, entity_kind, entity_ref, payload_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                at,
+                EventKind::ConvoyDelegated.as_str(),
+                EntityKind::Convoy.as_str(),
+                key.0,
+                serde_json::json!({ "delegation": on }).to_string()
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     fn goal(&self, key: &ConvoyKey) -> Result<Option<TicketKey>> {
         // Read-only readers can run ahead of fleetd's migration: a ledger without the column has no goal.
         match self.conn.query_row("SELECT goal FROM convoys WHERE key = ?1", params![key.0], |r| r.get::<_, Option<String>>(0)) {
@@ -1936,7 +1984,15 @@ const ANSWERED: &str =
 
 fn row_to_case(r: &rusqlite::Row) -> rusqlite::Result<Case> {
     let ruling = match r.get::<_, Option<String>>("ruling")? {
-        Some(answer) => Some(Ruling { question: r.get("ruling_question")?, answer, ruled_at: r.get("ruled_at")? }),
+        Some(answer) => Some(Ruling {
+            question: r.get("ruling_question")?,
+            answer,
+            ruled_at: r.get("ruled_at")?,
+            by: match r.as_ref().column_index("ruled_by") {
+                Ok(i) => require(Ruler::parse(&r.get::<_, String>(i)?), i, "ruled_by")?,
+                Err(_) => Ruler::Operator,
+            },
+        }),
         None => None,
     };
     Ok(Case {
@@ -1992,8 +2048,8 @@ impl CaseRepo for Ledger {
         anyhow::ensure!(confirmed, "case #{} isn't confirmed: a captain inspects it first (/fleet-inspect)", id.0);
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
-            "UPDATE cases SET ruling_question = ?2, ruling = ?3, ruled_at = ?4 WHERE id = ?1",
-            params![id.0, ruling.question, ruling.answer, ruling.ruled_at],
+            "UPDATE cases SET ruling_question = ?2, ruling = ?3, ruled_at = ?4, ruled_by = ?5 WHERE id = ?1",
+            params![id.0, ruling.question, ruling.answer, ruling.ruled_at, ruling.by.as_str()],
         )?;
         ruled(&tx, id, ruling)?;
         tx.commit()?;
@@ -2003,9 +2059,9 @@ impl CaseRepo for Ledger {
     fn rule_alone(&self, ticket: &TicketKey, ruling: &Ruling) -> Result<CaseId> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO cases(ticket, convoy, question, raised_at, ruling_question, ruling, ruled_at, settled_at)
-             SELECT key, convoy, ?2, ?3, ?2, ?4, ?3, ?3 FROM tickets WHERE key = ?1",
-            params![ticket.0, ruling.question, ruling.ruled_at, ruling.answer],
+            "INSERT INTO cases(ticket, convoy, question, raised_at, ruling_question, ruling, ruled_at, ruled_by, settled_at)
+             SELECT key, convoy, ?2, ?3, ?2, ?4, ?3, ?5, ?3 FROM tickets WHERE key = ?1",
+            params![ticket.0, ruling.question, ruling.ruled_at, ruling.answer, ruling.by.as_str()],
         )?;
         anyhow::ensure!(tx.changes() == 1, "{} isn't on the board", ticket.0);
         let id = CaseId(tx.last_insert_rowid());
@@ -2385,7 +2441,7 @@ mod repo_tests {
         assert_eq!((joined.id.clone(), joined.reports, joined.question.as_str()), (case.id.clone(), 3, "needs a ruling on X"), "one case, its question kept");
         assert!(db.verdict(&joined.id).unwrap().is_some_and(|v| v.judges(&joined)), "still judged");
 
-        let ruling = Ruling { question: "X?".into(), answer: "Do Y.".into(), ruled_at: "t4".into() };
+        let ruling = Ruling { question: "X?".into(), answer: "Do Y.".into(), ruled_at: "t4".into(), by: Ruler::Operator };
         db.rule(&case.id, &ruling).unwrap();
         escalate(&db, &id, "needs a ruling on X", "t5"); // answered: the same words are a new case
         let next = db.open_case(&id).unwrap().unwrap();
@@ -2425,7 +2481,7 @@ mod repo_tests {
         let key = TicketKey("PROJ-1".into());
         let pending = |db: &Ledger| db.pending_case(&key).unwrap().map(|c| c.id);
         assert_eq!(pending(&db), Some(case.id.clone()), "awaiting its answer");
-        let ruling = Ruling { question: "Which auth does an admin route take?".into(), answer: "Rev 4's".into(), ruled_at: "t5".into() };
+        let ruling = Ruling { question: "Which auth does an admin route take?".into(), answer: "Rev 4's".into(), ruled_at: "t5".into(), by: Ruler::Admiral };
         assert!(db.rule(&case.id, &ruling).is_err(), "not inspected yet");
         verdict_on(&db, &case, Verdict::Refute);
         assert_eq!(pending(&db), None, "a REFUTE answers it");
@@ -2439,8 +2495,9 @@ mod repo_tests {
         assert_eq!((ruled.ruling.as_ref(), ruled.settled_at.as_ref()), (Some(&ruling), None), "it settles when its cog moves on");
         assert_eq!(ruled.outcome(Some(Verdict::Confirm)), "ruled");
 
-        let alone = db.rule_alone(&TicketKey("PROJ-1".into()), &ruling).unwrap();
+        let alone = db.rule_alone(&TicketKey("PROJ-1".into()), &Ruling { by: Ruler::Operator, ..ruling.clone() }).unwrap();
         let alone = db.case(&alone).unwrap().unwrap();
+        assert_eq!((ruled.ruling.unwrap().by, alone.ruling.unwrap().by), (Ruler::Admiral, Ruler::Operator), "who ruled is kept");
         assert_eq!((alone.session, alone.settled_at.as_deref(), alone.question.as_str()), (None, Some("t5"), ruling.question.as_str()));
         assert!(db.rule_alone(&TicketKey("PROJ-404".into()), &ruling).is_err(), "not on the board");
         assert_eq!(pending(&db), None, "a ruling alone awaits nothing");
@@ -2452,7 +2509,7 @@ mod repo_tests {
         let db = Ledger::in_memory().unwrap();
         TicketRepo::upsert(&db, &bare_ticket("PROJ-1")).unwrap();
         let key = TicketKey("PROJ-1".into());
-        let rule = |at: &str| db.rule_alone(&key, &Ruling { question: "q".into(), answer: "a".into(), ruled_at: at.into() }).unwrap();
+        let rule = |at: &str| db.rule_alone(&key, &Ruling { question: "q".into(), answer: "a".into(), ruled_at: at.into(), by: Ruler::Operator }).unwrap();
         rule("2026-01-01T00:00:01Z");
         rule("2026-01-01T00:00:02Z");
         assert_eq!(db.rulings_since_weigh(&key).unwrap(), 2);
@@ -2489,7 +2546,7 @@ mod repo_tests {
             format!("INSERT INTO inspections(session_id, reported_at, verdict, body, inspected_at) VALUES ({}, '{at}', '{v}', 'b', '{at}9');", s.0)
         };
         conn.execute_batch(&format!(
-            "DELETE FROM cases; DROP INDEX one_open_case; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; DROP TABLE cases;
+            "DELETE FROM cases; DROP INDEX one_open_case; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; DROP TABLE cases;
              {} {} {} {} {} {} {}
              INSERT INTO reports(session_id, state, last_action, reported_at) VALUES ({}, 'escalated', 'Y?', 't3'), ({}, 'escalated', 'Z?', 't4');
              PRAGMA user_version = 8;",

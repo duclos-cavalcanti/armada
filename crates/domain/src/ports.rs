@@ -95,6 +95,9 @@ pub trait ConvoyRepo {
     /// Set the convoy's goal: the ticket whose Done proves its outcome. Errs unless the goal is a
     /// ticket of the convoy, not Cancelled. Appends `ConvoyGoalSet`; no-op (no event) if unchanged.
     fn set_goal(&self, key: &ConvoyKey, goal: &TicketKey, at: &str) -> Result<()>;
+    /// Delegate the convoy's rulings to its admirals, or take them back. Appends `ConvoyDelegated`;
+    /// no-op (no event) if unchanged.
+    fn set_delegation(&self, key: &ConvoyKey, on: bool, at: &str) -> Result<()>;
     fn goal(&self, key: &ConvoyKey) -> Result<Option<TicketKey>>;
     /// Close a convoy (the captain's "all delivered" judgment) — sets `ended_at`, which
     /// reconcile reads to reap the captain. Appends `ConvoyClosed`.
