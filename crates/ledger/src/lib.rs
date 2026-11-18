@@ -477,6 +477,11 @@ impl TicketRepo for Ledger {
         Ok(())
     }
 
+    fn set_status(&self, key: &TicketKey, status: TicketStatus) -> Result<()> {
+        self.conn.execute("UPDATE tickets SET status = ?2 WHERE key = ?1", params![key.0, status.as_str()])?;
+        Ok(())
+    }
+
     fn set_hand(&self, key: &TicketKey, hand: bool, at: &str) -> Result<()> {
         if hand {
             self.conn.execute(

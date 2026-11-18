@@ -29,6 +29,11 @@ pub trait TicketRepo {
     /// Mark the ticket for a hand (`true`: the captain dispatches it to one) or for a worker.
     fn set_hand(&self, key: &TicketKey, hand: bool, at: &str) -> Result<()>;
     fn is_hand(&self, key: &TicketKey) -> Result<bool>;
+    /// Record a move fleetd just made in the tracker, so the ledger's readers (the blocker gate,
+    /// the frontier, the dashboard) see it now, not at the next sync — which still rewrites it from
+    /// the tracker. Leaves `synced_at`, the last tracker read, as it is. A ticket not on the board
+    /// is left alone.
+    fn set_status(&self, key: &TicketKey, status: TicketStatus) -> Result<()>;
     /// Upsert the tracker-sourced fields (title/assignee/status/convoy + synced_at),
     /// PRESERVING our own `held` + `created_at`. Inserts with defaults if new.
     fn sync(&self, t: &TrackerTicket, now: &str) -> Result<()>;

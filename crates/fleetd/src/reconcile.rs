@@ -800,7 +800,7 @@ fn spawn<T: Tracker + ?Sized, H: SessionHost>(
     if crew == CrewKind::Worker {
         // Claim Jira only after the worktree check — a missing worktree never moves the ticket.
         // The transition is the lock (claim.sh step 1): a peer who moved it past To Do fails here.
-        tracker.transition(&tkey, TicketStatus::InProgress)?;
+        move_ticket(ledger, tracker, &tkey, TicketStatus::InProgress)?;
 
         // Claim follow-ons, best-effort: a failure is a partial claim — logged, not fatal (the
         // transition already locked the ticket and the cog must launch).
@@ -915,7 +915,7 @@ fn handoff<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
     }
 
     // 1. Move Jira In Progress → In QA.
-    tracker.transition(&tkey, TicketStatus::InQa)?;
+    move_ticket(ledger, tracker, &tkey, TicketStatus::InQa)?;
 
     // 2. Mark the MR ready (a draft is the pre-review state) + request the team's review — once,
     //    here. Best-effort: a forge hiccup
@@ -959,7 +959,7 @@ pub(crate) fn reap<T: Tracker + ?Sized, H: SessionHost>(
 
     let status = TicketRepo::get(ledger, &tkey)?.and_then(|t| t.status);
     if !matches!(status, Some(TicketStatus::Done) | Some(TicketStatus::Cancelled)) {
-        tracker.transition(&tkey, TicketStatus::Done)?;
+        move_ticket(ledger, tracker, &tkey, TicketStatus::Done)?;
     }
 
     // rollup_parent: the ticket is now Done; if ALL its siblings are terminal, close the parent.
@@ -1031,9 +1031,17 @@ fn roll_up_parent<T: Tracker + ?Sized>(ledger: &Ledger, tracker: &T, child: &Tic
     let all_done =
         !subs.is_empty() && subs.iter().all(|s| matches!(s.status, TicketStatus::Done | TicketStatus::Cancelled));
     if all_done {
-        tracker.transition(&parent, TicketStatus::Done)?;
+        move_ticket(ledger, tracker, &parent, TicketStatus::Done)?;
     }
     Ok(())
+}
+
+/// Move a ticket in the tracker, then in the ledger once the tracker took it: what reads the
+/// ledger (a dependent's blocker gate, the frontier, the dashboard) sees the move now instead of at
+/// the next sync, up to `sync_secs` later.
+fn move_ticket<T: Tracker + ?Sized>(ledger: &Ledger, tracker: &T, key: &TicketKey, to: TicketStatus) -> Result<()> {
+    tracker.transition(key, to)?;
+    TicketRepo::set_status(ledger, key, to)
 }
 
 /// Heal — the live counterpart to converge's `reconcile_cogs` respawn: a live session whose
@@ -1639,6 +1647,11 @@ mod tests {
         if !edges.is_empty() {
             TicketRepo::set_blocked_by(db, &TicketKey(key.into()), &edges).unwrap();
         }
+    }
+
+    /// The ticket's status as the ledger has it.
+    fn status_of(db: &Ledger, key: &str) -> Option<TicketStatus> {
+        TicketRepo::get(db, &TicketKey(key.into())).unwrap().and_then(|t| t.status)
     }
 
     fn order(db: &Ledger, key: &str, auto_impl: bool) {
@@ -2402,11 +2415,12 @@ mod tests {
         let host = FakeHost::new();
         assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[], "/project", &LIVE).unwrap(), 1);
 
-        // Jira claimed: To Do → In Progress.
+        // Jira claimed: To Do → In Progress, and the ledger with it (off the frontier now).
         assert_eq!(
             tracker.moves.borrow().as_slice(),
             &[("PROJ-1".to_string(), TicketStatus::InProgress)]
         );
+        assert_eq!(status_of(&db, "PROJ-1"), Some(TicketStatus::InProgress), "the ledger moved with Jira");
         // ...then the claim follow-ons.
         assert_eq!(tracker.claims.borrow().as_slice(), &["PROJ-1".to_string()]);
         // a live worker session now exists in the order's worktree.
@@ -2573,8 +2587,9 @@ mod tests {
         let forge = FakeForge::new();
         assert_eq!(tick(&db, &tracker, &host, &forge, &[w], "/project", &LIVE).unwrap(), 1);
 
-        // Jira moved In Progress → In QA.
+        // Jira moved In Progress → In QA, and the ledger with it.
         assert_eq!(tracker.moves.borrow().as_slice(), &[("PROJ-1".to_string(), TicketStatus::InQa)]);
+        assert_eq!(status_of(&db, "PROJ-1"), Some(TicketStatus::InQa), "the ledger moved with Jira");
         // The ready MR was handed to the team's review (once, at handoff).
         assert_eq!(forge.review_requested.borrow().as_slice(), &["PROJ-1".to_string()]);
         // Handoff does NOT launch the sailor (LaunchSailor owns that) — it only reaps the builder.
@@ -3317,6 +3332,7 @@ mod tests {
     fn executes_reap_on_a_merged_ship_moves_to_done_reaps_the_sailor_and_retires_the_order() {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
+        ticket(&db, "PROJ-2", TicketStatus::Todo, false, vec!["PROJ-1"]); // waits on PROJ-1
         order_wt(&db, "PROJ-1", true, Some("/wt")); // the fulfilled order to retire
         session(&db, CrewKind::Sailor, "PROJ-1", false); // live sailor
         ship(&db, 10, "PROJ-1", ShipState::Merged);
@@ -3325,8 +3341,11 @@ mod tests {
         let host = FakeHost::new();
         assert_eq!(tick(&db, &tracker, &host, &FakeForge::new(), &[], "/project", &LIVE).unwrap(), 1);
 
-        // merged ship on an In QA ticket → Jira driven to Done.
+        // merged ship on an In QA ticket → Jira driven to Done, and the ledger with it: what waits
+        // on it is unblocked now, not at the next sync.
         assert_eq!(tracker.moves.borrow().as_slice(), &[("PROJ-1".to_string(), TicketStatus::Done)]);
+        assert_eq!(status_of(&db, "PROJ-1"), Some(TicketStatus::Done), "the ledger moved with Jira");
+        assert!(!has_open_blocker(&db, &TicketKey("PROJ-2".into())).unwrap(), "its dependent is unblocked");
         // the sailor was reaped: session ended, tmux killed.
         let sessions = SessionRepo::for_ticket(&db, &TicketKey("PROJ-1".into())).unwrap();
         assert!(sessions.iter().all(|s| s.ended_at.is_some()), "all sessions ended");
@@ -3595,6 +3614,7 @@ mod tests {
     #[test]
     fn reap_rolls_up_the_parent_when_all_subtasks_are_terminal() {
         let db = db();
+        ticket(&db, "PROJ-100", TicketStatus::InProgress, false, vec![]); // the parent, on the board too
         ticket(&db, "PROJ-101", TicketStatus::InQa, false, vec![]); // the sub-task being reaped
         let tracker = FakeTracker::new();
         *tracker.parent.borrow_mut() = Some(TicketKey("PROJ-100".into()));
@@ -3606,6 +3626,7 @@ mod tests {
         let moves = tracker.moves.borrow();
         assert!(moves.contains(&("PROJ-101".to_string(), TicketStatus::Done)), "sub-task closed");
         assert!(moves.contains(&("PROJ-100".to_string(), TicketStatus::Done)), "parent rolled up");
+        assert_eq!(status_of(&db, "PROJ-100"), Some(TicketStatus::Done), "the ledger moved with Jira");
     }
 
     #[test]
