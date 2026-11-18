@@ -313,7 +313,7 @@ function DetailPane({ node, mode, setMode, onClose }) {
   const m = d?.modes?.[mode]
   return (
     <div style={{
-      position: 'fixed', top: 0, right: 0, width: 372, height: '100vh', zIndex: 7,
+      position: 'absolute', top: 0, right: 0, width: 372, height: '100%', zIndex: 7,
       background: 'var(--panel)', borderLeft: '1px solid var(--border)',
       boxShadow: '-10px 0 30px rgba(0,0,0,0.45)', overflowY: 'auto', padding: '18px 18px 48px',
     }}>
@@ -592,12 +592,12 @@ export default function Topology() {
   }
 
   return (
-    <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
+    <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
       <div className="viz-header">
         <b>{arch.title ?? 'Armada — architecture topology'}</b>
         <span style={{ color: 'var(--dim)', fontSize: 11, display: 'block', marginTop: 4 }}>crossing-aware orthogonal routing · baseline @ {arch.sha}</span>
       </div>
-      <div style={{ position: 'fixed', top: 14, right: 14, zIndex: 6, display: 'flex', gap: 8, alignItems: 'center' }}>
+      <div style={{ position: 'absolute', top: 14, right: 14, zIndex: 6, display: 'flex', gap: 8, alignItems: 'center' }}>
         {activeGroup.graphs.length > 1 && (
           <select
             value={graphName}
@@ -662,7 +662,7 @@ export default function Topology() {
         <MiniMap pannable zoomable maskColor="rgba(13,17,23,0.7)"
           nodeColor={(n) => (KIND[kindOf(n.id)] ?? KIND.config).c} />
       </ReactFlow>
-      <div style={{ position: 'fixed', bottom: 14, right: 14, zIndex: 6, background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 12px' }}>
+      <div style={{ position: 'absolute', bottom: 14, right: 14, zIndex: 6, background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 10px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 12px' }}>
         {VISIBLE_LEGEND.map(([k, label]) => (
           <span key={k} style={{ font: `10px ${MONO}`, color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ width: 9, height: 9, borderRadius: 2, background: (KIND[k] ?? KIND.config).c, display: 'inline-block' }} />{label}

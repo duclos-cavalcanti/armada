@@ -1,21 +1,20 @@
-import Head from '@docusaurus/Head';
+import Layout from '@theme/Layout';
 import BrowserOnly from '@docusaurus/BrowserOnly';
 
-// The fleet viewer (demos/fleet), full screen: it lays its panels out against the viewport, so the
-// page has no navbar (back to the docs with the browser's Back). Browser-only: it reads
-// window.location as it loads.
+// The fleet viewer (demos/fleet) under the site's navbar, filling the rest of the window: it lays
+// its panels out against its own box, so that box is the viewport less the navbar. Browser-only:
+// it reads window.location as it loads.
 export default function Fleet() {
   return (
-    <>
-      <Head>
-        <title>Fleet viewer</title>
-      </Head>
-      <BrowserOnly>
-        {() => {
-          const App = require('../../../demos/fleet/src/App.jsx').default;
-          return <App />;
-        }}
-      </BrowserOnly>
-    </>
+    <Layout title="Fleet viewer" noFooter>
+      <div style={{ height: 'calc(100vh - var(--ifm-navbar-height))' }}>
+        <BrowserOnly>
+          {() => {
+            const App = require('../../../demos/fleet/src/App.jsx').default;
+            return <App />;
+          }}
+        </BrowserOnly>
+      </div>
+    </Layout>
   );
 }
