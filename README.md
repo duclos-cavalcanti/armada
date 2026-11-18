@@ -140,6 +140,17 @@ make serve                            # http://localhost:5175, until Ctrl-C; rel
 ```
 
 The drawings in `demos/draw/` are Excalidraw files: open them at [excalidraw.com](https://excalidraw.com).
+For Claude to render them, and to draw in your Excalidraw+ workspace:
+
+```bash
+npm install -g @excalidraw/cli               # `excalidraw render` a drawing (or a Mermaid diagram) to PNG/SVG
+export EXCALIDRAW_API_KEY=<key>              # Excalidraw+ → Account settings → MCP/API key (the CLI reads it too)
+claude --mcp-config harness/mcp.json         # a session with the Excalidraw+ MCP, from the repo root
+```
+
+`harness/mcp.json` loads only into a session started with the flag, never a cog. Not a `.mcp.json`:
+Claude Code reads one from every parent folder, so each cog under `projects/` would open on its
+approval prompt.
 
 ---
 
@@ -153,7 +164,8 @@ armada/
 ├── skills/      the kit's skills, stowed to ~/.claude/skills/
 ├── local/       your own skills (local/skills/<name>/), stowed alike but never committed
 ├── .claude/     Claude config (settings, CLAUDE.md, scripts), stowed to ~/.claude/
-├── harness/     apply.sh + gitignored per-deployment settings profiles
+├── harness/     apply.sh + gitignored per-deployment settings profiles + mcp.json (MCP servers a
+│                root session adds with `--mcp-config`)
 ├── hooks/       the guards: git's ref guard (linked into each checkout by `install.sh --hooks`)
 │                and the lookouts' command guard (attached to each lookout by fleetd)
 ├── demos/       architecture decks (open-slide) + the fleet viewer's source (React Flow; served at /fleet by the notes)
