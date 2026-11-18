@@ -167,12 +167,12 @@ CREATE TABLE IF NOT EXISTS orders (
 -- answered (a REFUTE, or a ruling), another escalation from its cog joins it, whatever its wording
 -- (`reports` counts them), so it isn't judged twice; once answered, another escalation is a new
 -- case. Any other report, or the session ending, settles it. A ruling with no escalation behind it has no
--- session and is settled at once. `convoy` = the ticket's when raised: a cog reads its own convoy's
--- cases before it escalates.
+-- session and is settled at once. A case's convoy is its ticket's, resolved on read (the one it was
+-- added to, else its epic's): a cog reads its own convoy's cases before it escalates.
 CREATE TABLE IF NOT EXISTS cases (
     id              INTEGER PRIMARY KEY,
     ticket          TEXT NOT NULL REFERENCES tickets(key),
-    convoy          TEXT,
+    convoy          TEXT,                                 -- unused: the raw epic, frozen at raise by older fleetds; never read
     session_id      INTEGER REFERENCES sessions(id),
     question        TEXT NOT NULL,
     raised_at       TEXT NOT NULL,

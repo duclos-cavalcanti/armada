@@ -759,9 +759,8 @@ fn track_case(tx: &Connection, r: &Report) -> Result<()> {
     }
     if r.state.is_escalated() {
         tx.execute(
-            "INSERT INTO cases(ticket, convoy, session_id, question, raised_at)
-             SELECT s.ticket, t.convoy, s.id, ?2, ?3 FROM sessions s LEFT JOIN tickets t ON t.key = s.ticket
-             WHERE s.id = ?1 AND s.ticket IS NOT NULL",
+            "INSERT INTO cases(ticket, session_id, question, raised_at)
+             SELECT s.ticket, s.id, ?2, ?3 FROM sessions s WHERE s.id = ?1 AND s.ticket IS NOT NULL",
             params![r.session.0, question, r.reported_at],
         )?;
     }
@@ -1976,7 +1975,14 @@ fn row_to_inspection(r: &rusqlite::Row) -> rusqlite::Result<Inspection> {
 
 // ── cases ───────────────────────────────────────────────────────────────────────
 
-const CASE_SELECT: &str = "SELECT c.*, s.kind FROM cases c LEFT JOIN sessions s ON s.id = c.session_id";
+/// A case's convoy: its ticket's, resolved on read as every ticket read does (`TICKET_READ`) — the
+/// one it was added to, else its epic's. Never the stored `cases.convoy`, which froze the raw epic
+/// at raise and missed a ticket added to a convoy (an accepted proposal, `fleetc convoy add`).
+const CASE_CONVOY: &str = "coalesce(m.convoy, t.convoy)";
+
+const CASE_SELECT: &str = "SELECT c.*, s.kind, coalesce(m.convoy, t.convoy) AS ticket_convoy FROM cases c \
+     LEFT JOIN sessions s ON s.id = c.session_id \
+     LEFT JOIN tickets t ON t.key = c.ticket LEFT JOIN convoy_members m ON m.ticket = c.ticket";
 
 /// A case is answered once ruled, or once its latest verdict is a REFUTE (its way out is the answer).
 const ANSWERED: &str =
@@ -1998,7 +2004,7 @@ fn row_to_case(r: &rusqlite::Row) -> rusqlite::Result<Case> {
     Ok(Case {
         id: CaseId(r.get("id")?),
         ticket: TicketKey(r.get("ticket")?),
-        convoy: r.get::<_, Option<String>>("convoy")?.map(ConvoyKey),
+        convoy: r.get::<_, Option<String>>("ticket_convoy")?.map(ConvoyKey),
         session: r.get::<_, Option<i64>>("session_id")?.map(SessionId),
         cog: r.get::<_, Option<String>>("kind")?.and_then(|k| CrewKind::parse(&k)),
         question: r.get("question")?,
@@ -2026,8 +2032,8 @@ impl CaseRepo for Ledger {
 
     fn cases(&self, convoy: Option<&ConvoyKey>, ticket: &TicketKey) -> Result<Vec<Case>> {
         let (sql, key) = match convoy {
-            Some(c) => (format!("{CASE_SELECT} WHERE c.convoy = ?1 ORDER BY c.id DESC"), &c.0),
-            None => (format!("{CASE_SELECT} WHERE c.convoy IS NULL AND c.ticket = ?1 ORDER BY c.id DESC"), &ticket.0),
+            Some(c) => (format!("{CASE_SELECT} WHERE {CASE_CONVOY} = ?1 ORDER BY c.id DESC"), &c.0),
+            None => (format!("{CASE_SELECT} WHERE {CASE_CONVOY} IS NULL AND c.ticket = ?1 ORDER BY c.id DESC"), &ticket.0),
         };
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![key], row_to_case)?;
@@ -2059,8 +2065,8 @@ impl CaseRepo for Ledger {
     fn rule_alone(&self, ticket: &TicketKey, ruling: &Ruling) -> Result<CaseId> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO cases(ticket, convoy, question, raised_at, ruling_question, ruling, ruled_at, ruled_by, settled_at)
-             SELECT key, convoy, ?2, ?3, ?2, ?4, ?3, ?5, ?3 FROM tickets WHERE key = ?1",
+            "INSERT INTO cases(ticket, question, raised_at, ruling_question, ruling, ruled_at, ruled_by, settled_at)
+             SELECT key, ?2, ?3, ?2, ?4, ?3, ?5, ?3 FROM tickets WHERE key = ?1",
             params![ticket.0, ruling.question, ruling.ruled_at, ruling.answer, ruling.by.as_str()],
         )?;
         anyhow::ensure!(tx.changes() == 1, "{} isn't on the board", ticket.0);
@@ -2470,6 +2476,50 @@ mod repo_tests {
         assert_eq!(db.open_case(&id).unwrap(), None);
         assert_eq!(db.pending_case(&TicketKey("PROJ-1".into())).unwrap(), None, "settled: nothing awaits");
         assert_eq!(db.cases(None, &TicketKey("PROJ-1".into())).unwrap()[0].settled_at.as_deref(), Some("t2"));
+    }
+
+    #[test]
+    fn a_case_is_among_its_tickets_convoy_the_one_it_was_added_to_else_its_epics() {
+        let db = Ledger::in_memory().unwrap();
+        let tracked = |key: &str, epic: Option<&str>| TrackerTicket {
+            key: TicketKey(key.into()),
+            title: "T".into(),
+            status: TicketStatus::InProgress,
+            assignee: None,
+            convoy: epic.map(|e| ConvoyKey(e.into())),
+            blocked_by: vec![],
+            labels: vec![],
+        };
+        let (epic, ours) = (ConvoyKey("PROJ-50".into()), ConvoyKey("PROJ-90".into()));
+        let ids = |db: &Ledger, convoy: Option<&ConvoyKey>, ticket: &str| -> Vec<CaseId> {
+            db.cases(convoy, &TicketKey(ticket.into())).unwrap().into_iter().map(|c| c.id).collect()
+        };
+
+        // An accepted proposal: filed with no epic, then added to a convoy — its case is that convoy's.
+        db.sync(&tracked("PROJ-1", None), "t").unwrap();
+        db.add_member(&ours, &TicketKey("PROJ-1".into()), "t").unwrap();
+        let w1 = db.start(&worker_on("PROJ-1")).unwrap().unwrap();
+        escalate(&db, &w1, "which auth?", "t1");
+        let proposed = db.open_case(&w1).unwrap().unwrap();
+        assert_eq!(proposed.convoy, Some(ours.clone()), "the convoy it was added to, not its (absent) epic");
+        assert_eq!(ids(&db, Some(&ours), ""), vec![proposed.id.clone()], "its captain reads it");
+        assert!(ids(&db, None, "PROJ-1").is_empty(), "not a convoyless case");
+
+        // An epic's ticket: its case is the epic's until the ticket is added elsewhere — then it follows.
+        db.sync(&tracked("PROJ-2", Some("PROJ-50")), "t").unwrap();
+        let w2 = db.start(&worker_on("PROJ-2")).unwrap().unwrap();
+        escalate(&db, &w2, "which schema?", "t2");
+        let moved = db.open_case(&w2).unwrap().unwrap();
+        assert_eq!(ids(&db, Some(&epic), ""), vec![moved.id.clone()]);
+        db.add_member(&ours, &TicketKey("PROJ-2".into()), "t3").unwrap();
+        assert_eq!(db.case(&moved.id).unwrap().unwrap().convoy, Some(ours.clone()), "it follows its ticket");
+        assert_eq!(ids(&db, Some(&ours), ""), vec![moved.id.clone(), proposed.id.clone()], "newest first");
+        assert!(ids(&db, Some(&epic), "").is_empty(), "gone from the epic's");
+
+        // A ruling alone is its ticket's convoy's too.
+        let ruling = Ruling { question: "q".into(), answer: "a".into(), ruled_at: "t4".into(), by: Ruler::Operator };
+        let alone = db.rule_alone(&TicketKey("PROJ-1".into()), &ruling).unwrap();
+        assert_eq!(db.case(&alone).unwrap().unwrap().convoy, Some(ours));
     }
 
     #[test]

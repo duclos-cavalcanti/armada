@@ -776,7 +776,8 @@ impl Inspection {
 pub struct Case {
     pub id: CaseId,
     pub ticket: TicketKey,
-    /// The ticket's convoy when the case was raised: whose cases it is among.
+    /// The ticket's convoy (the one it was added to, else its epic's), read now: whose cases it is
+    /// among. A case follows its ticket into another convoy.
     pub convoy: Option<ConvoyKey>,
     /// The escalated cog's session and kind; `None` for a ruling with no escalation.
     pub session: Option<SessionId>,
