@@ -17,70 +17,81 @@ pub fn sync_board(ledger: &Ledger, tracker: &dyn Tracker, now: &str) -> Result<u
     for t in &tickets {
         TicketRepo::sync(ledger, t, now)?;
     }
-    let mut done: HashSet<TicketKey> = tickets.iter().map(|t| t.key.clone()).collect();
+    let mut pass = Pass { fetched: tickets.iter().map(|t| t.key.clone()).collect(), ..Pass::default() };
     // A board ticket's blocker off the board (another convoy's, out of sprint) isn't in the ledger,
     // so its edge was dropped: pull the blocker in, then re-write the edges, or the ticket reads as
     // unblocked — dispatched early, and its worker can't report `waiting` on it.
     for t in &tickets {
-        if t.blocked_by.iter().any(|b| !done.contains(b)) {
-            sync_with_blockers(ledger, tracker, t, &mut done, now)?;
+        if t.blocked_by.iter().any(|b| !pass.fetched.contains(b)) {
+            sync_with_blockers(ledger, tracker, t, &mut pass, now)?;
         }
     }
+    pass.expanded.extend(tickets.iter().map(|t| t.key.clone())); // every board blocker is in now
     // Off the board (no sprint, or another team's), the fleet still tracks an open convoy's
     // tickets, what it works (an order), and what those wait on: refresh them too, or their status
     // and `is blocked by` edges go stale — a captain would miss a ticket, a sailor would boot blind
     // to its blocker, and the gate would never lift.
     for convoy in ConvoyRepo::active(ledger)? {
-        if let Err(e) = sync_convoy_with(ledger, tracker, &convoy.key, &mut done, now) {
+        if let Err(e) = sync_convoy_with(ledger, tracker, &convoy.key, &mut pass, now) {
             tracing::warn!("sync: convoy {} not refreshed: {e:#}", convoy.key.0);
         }
     }
     let tracked = OrderRepo::queue(ledger)?.into_iter().map(|o| o.ticket).chain(ledger.added_members()?);
     for key in tracked {
-        if done.contains(&key) {
+        if pass.expanded.contains(&key) {
             continue;
         }
-        if let Err(e) = tracker.get(&key).and_then(|t| sync_with_blockers(ledger, tracker, &t, &mut done, now)) {
+        if let Err(e) = tracker.get(&key).and_then(|t| sync_with_blockers(ledger, tracker, &t, &mut pass, now)) {
             tracing::warn!("sync: {} (off the board) not refreshed: {e:#}", key.0);
         }
     }
     Ok(count)
 }
 
+/// What one sync pass has refreshed: every ticket it `fetched`, and the ones it `expanded` — fetched
+/// with their blockers. A ticket fetched only as another's blocker isn't expanded, so if the fleet
+/// tracks it too (a convoy's, an order's, an added one), its own turn still pulls in its blockers.
+#[derive(Default)]
+struct Pass {
+    fetched: HashSet<TicketKey>,
+    expanded: HashSet<TicketKey>,
+}
+
 /// Pull the convoy's tickets (its epic's children, whatever their sprint) and their blockers into
 /// the ledger — `convoy open` runs it, so its captain starts on the whole convoy. Returns the
 /// children, as the tracker has them now.
 pub fn sync_convoy(ledger: &Ledger, tracker: &dyn Tracker, convoy: &ConvoyKey, now: &str) -> Result<Vec<TrackerTicket>> {
-    sync_convoy_with(ledger, tracker, convoy, &mut HashSet::new(), now)
+    sync_convoy_with(ledger, tracker, convoy, &mut Pass::default(), now)
 }
 
 fn sync_convoy_with(
     ledger: &Ledger,
     tracker: &dyn Tracker,
     convoy: &ConvoyKey,
-    done: &mut HashSet<TicketKey>,
+    pass: &mut Pass,
     now: &str,
 ) -> Result<Vec<TrackerTicket>> {
     let children = tracker.children(&TicketKey(convoy.0.clone()))?;
     for t in &children {
-        if !done.contains(&t.key) {
-            sync_with_blockers(ledger, tracker, t, done, now)?;
+        if !pass.expanded.contains(&t.key) {
+            sync_with_blockers(ledger, tracker, t, pass, now)?;
         }
     }
     Ok(children)
 }
 
-/// Sync `t` after any blocker not yet synced this pass, so its `is blocked by` edges have their FK.
+/// Sync `t` after any blocker not yet fetched this pass, so its `is blocked by` edges have their FK.
 fn sync_with_blockers(
     ledger: &Ledger,
     tracker: &dyn Tracker,
     t: &TrackerTicket,
-    done: &mut HashSet<TicketKey>,
+    pass: &mut Pass,
     now: &str,
 ) -> Result<()> {
-    done.insert(t.key.clone());
+    pass.fetched.insert(t.key.clone());
+    pass.expanded.insert(t.key.clone());
     for b in &t.blocked_by {
-        if done.insert(b.clone()) {
+        if pass.fetched.insert(b.clone()) {
             if let Err(e) = tracker.get(b).and_then(|bt| TicketRepo::sync(ledger, &bt, now)) {
                 tracing::warn!("sync: blocker {} of {} not refreshed: {e:#}", b.0, t.key.0);
             }
@@ -482,6 +493,40 @@ mod tests {
         let off = vec![child("PROJ-5", TicketStatus::Done, vec![]), child("PROJ-6", TicketStatus::Todo, vec!["PROJ-7"]), tt("PROJ-7", TicketStatus::InQa)];
         sync_board(&db, &FakeTracker(vec![], off), "later").unwrap();
         assert_eq!(TicketRepo::get(&db, &TicketKey("PROJ-5".into())).unwrap().unwrap().status, Some(TicketStatus::Done), "refreshed off the board");
+    }
+
+    #[test]
+    fn a_tracked_ticket_met_first_as_a_blocker_still_pulls_in_its_own_blockers() {
+        // Convoy PROJ-280's tickets, in no sprint. PROJ-1 waits on PROJ-2, added to convoy PROJ-290;
+        // PROJ-4 waits on PROJ-5, a later ticket of the same epic. Each is met first as the other's
+        // blocker, fetched alone — its own turn must still bring in what it waits on (PROJ-3, PROJ-6).
+        let db = Ledger::in_memory().unwrap();
+        let (epic, added) = (ConvoyKey("PROJ-280".into()), ConvoyKey("PROJ-290".into()));
+        let ticket = |key: &str, convoy: Option<&ConvoyKey>, blocked_by: Vec<&str>| TrackerTicket {
+            convoy: convoy.cloned(),
+            blocked_by: blocked_by.into_iter().map(|b| TicketKey(b.into())).collect(),
+            ..tt(key, TicketStatus::Todo)
+        };
+        db.open(&epic, None, false, "then").unwrap();
+        db.open(&added, None, false, "then").unwrap();
+        TicketRepo::sync(&db, &ticket("PROJ-2", None, vec![]), "then").unwrap();
+        db.add_member(&added, &TicketKey("PROJ-2".into()), "then").unwrap();
+        let off = vec![
+            ticket("PROJ-1", Some(&epic), vec!["PROJ-2"]),
+            ticket("PROJ-2", None, vec!["PROJ-3"]),
+            tt("PROJ-3", TicketStatus::InQa),
+            ticket("PROJ-4", Some(&epic), vec!["PROJ-5"]),
+            ticket("PROJ-5", Some(&epic), vec!["PROJ-6"]),
+            tt("PROJ-6", TicketStatus::InQa),
+        ];
+
+        sync_board(&db, &FakeTracker(vec![], off), "now").unwrap();
+        let get = |key: &str| TicketRepo::get(&db, &TicketKey(key.into())).unwrap();
+        for (tracked, blocker) in [("PROJ-2", "PROJ-3"), ("PROJ-5", "PROJ-6")] {
+            assert_eq!(get(tracked).unwrap().blocked_by, vec![TicketKey(blocker.into())], "{tracked}'s edge holds");
+            let b = get(blocker).unwrap_or_else(|| panic!("{tracked}'s blocker {blocker} pulled in"));
+            assert_eq!((b.status, b.synced_at.as_deref()), (Some(TicketStatus::InQa), Some("now")), "{blocker} refreshed");
+        }
     }
 
     #[test]
