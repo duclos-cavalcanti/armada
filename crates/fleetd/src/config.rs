@@ -257,6 +257,11 @@ impl Config {
         provider_env(&self.provider, &self.cogs, &self.providers, kind)
     }
 
+    /// The provider a cog of `kind` launches under, by name: `[cogs]`'s entry for it, else `provider`.
+    pub fn provider_of(&self, kind: &str) -> &str {
+        provider_of(&self.provider, &self.cogs, kind)
+    }
+
     /// The ticket key prefix — how branches, MR titles, and keys name a ticket. For Jira it is
     /// the project key; a tracker with its own key scheme would supply its own here.
     pub fn ticket_prefix(&self) -> &str {
@@ -277,8 +282,11 @@ fn resolve_project(path: &str, root: &std::path::Path) -> String {
 /// Shared by `Config::provider_env` and reconcile's `Levers`, which carries the same three fields
 /// forward from `cfg` so a reconcile pass resolves a cog's launch env without reaching for `Config`.
 pub(crate) fn provider_env(provider: &str, cogs: &BTreeMap<String, String>, providers: &BTreeMap<String, BTreeMap<String, String>>, kind: &str) -> String {
-    let name = cogs.get(kind).map(String::as_str).unwrap_or(provider);
-    providers.get(name).map(|vars| vars.iter().map(|(k, v)| format!("{k}={v} ")).collect()).unwrap_or_default()
+    providers.get(provider_of(provider, cogs, kind)).map(|vars| vars.iter().map(|(k, v)| format!("{k}={v} ")).collect()).unwrap_or_default()
+}
+
+fn provider_of<'a>(provider: &'a str, cogs: &'a BTreeMap<String, String>, kind: &str) -> &'a str {
+    cogs.get(kind).map(String::as_str).unwrap_or(provider)
 }
 
 /// Read a numeric env var. `pub(crate)` so the live `settings` overlay resolves env the same way.

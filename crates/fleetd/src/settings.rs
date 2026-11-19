@@ -168,8 +168,15 @@ pub struct LeverView {
 
 /// Every lever's effective value + source — the `settings list` read. `source` answers "is my
 /// change live?": `env` (a var shadows it), `setting` (a live override is in force), or `config`
-/// (fleet.toml/default).
+/// (fleet.toml/default). Then each cog kind's provider, as fleetd loaded it (`provider.<kind>`):
+/// read-only, a restart's to change, its env never shown.
 pub fn report(cfg: &Config, l: &Ledger) -> Vec<LeverView> {
+    use domain::CrewKind::*;
+    let providers = [Worker, Sailor, Hand, Captain, Lookout, Admiral].map(|k| LeverView {
+        key: format!("provider.{}", k.as_str()),
+        value: cfg.provider_of(k.as_str()).to_string(),
+        source: "config",
+    });
     LEVERS
         .iter()
         .map(|lever| {
@@ -182,6 +189,7 @@ pub fn report(cfg: &Config, l: &Ledger) -> Vec<LeverView> {
             };
             LeverView { key: lever.key.into(), value: value_of(cfg, l, lever.key), source }
         })
+        .chain(providers)
         .collect()
 }
 
@@ -260,5 +268,16 @@ mod tests {
         assert_eq!((sync.value.as_str(), sync.source), ("120", "setting"));
         let poll = r.iter().find(|v| v.key == "poll_secs").unwrap();
         assert_eq!(poll.source, "config", "an untouched lever reports its config base");
+    }
+
+    #[test]
+    fn report_shows_each_cog_kinds_provider_and_no_env() {
+        let l = Ledger::in_memory().unwrap();
+        let c: Config = toml::from_str("provider = \"bedrock\"\n[cogs]\nadmiral = \"local\"\n[providers.bedrock]\nAWS_PROFILE = \"p\"\n").unwrap();
+        let r = report(&c, &l);
+        let of = |k: &str| r.iter().find(|v| v.key == format!("provider.{k}")).map(|v| v.value.as_str());
+        assert_eq!((of("worker"), of("admiral")), (Some("bedrock"), Some("local")), "the fleet-wide one, else [cogs]'s");
+        assert!(r.iter().all(|v| !v.value.contains("AWS_PROFILE")), "a provider's env is never shown");
+        assert!(validate("provider.worker", "local").is_err(), "read-only: not a live lever");
     }
 }

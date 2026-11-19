@@ -74,7 +74,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc propose  --existing <KEY-N> --why <text> [--convoy <KEY>]   (a cog: propose taking on an existing ticket)\n  \
      fleetc proposal [<id> | accept <id> [--convoy <KEY>] | drop <id>]   (the open proposals; one in full; accept — official, into --convoy; drop — a proposed ticket is cancelled)\n  \
      fleetc launch   --title <t> --body <text> [--ticket <KEY-N>] [--target <branch>] [--draft] [--worktree <path>]   (open the MR for the worktree's branch; prints its URL)\n  \
-     fleetc settings [list | set <key> <value>]   (live config levers; no restart)\n  \
+     fleetc settings [list | set <key> <value>]   (live config levers, no restart; and each cog's provider, read-only)\n  \
      fleetc project                   (the project checkout's path, from fleet.toml)\n  \
      fleetc cost     [--since <RFC3339>]\n  \
      fleetc ledger   [<sql> | --full]  (read the project's ledger: one query as a table, every table, or a sqlite3 shell; read-only)\n  \
@@ -1849,9 +1849,9 @@ fn render_settings(json: &str) -> Result<String> {
     let levers: serde_json::Value = serde_json::from_str(json)?;
     let levers = levers.as_array().ok_or_else(|| anyhow!("expected a settings array"))?;
     let cell = |l: &serde_json::Value, k: &str| l.get(k).and_then(|v| v.as_str()).unwrap_or("-").to_string();
-    let mut out = format!("{:<16} {:<10} {}\n", "LEVER", "VALUE", "SOURCE");
+    let mut out = format!("{:<19} {:<10} {}\n", "LEVER", "VALUE", "SOURCE");
     for l in levers {
-        out += &format!("{:<16} {:<10} {}\n", cell(l, "key"), cell(l, "value"), cell(l, "source"));
+        out += &format!("{:<19} {:<10} {}\n", cell(l, "key"), cell(l, "value"), cell(l, "source"));
     }
     Ok(out)
 }
