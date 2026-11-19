@@ -102,6 +102,7 @@ fn handle(
         (Some("POST"), Some(p)) if p.starts_with("/rebase") => handle_rebase(cmds, p),
         (Some("GET"), Some(p)) if p.starts_with("/ci?") => handle_ci(cmds, p),
         (Some("POST"), Some("/reply")) => handle_reply(&request, cmds),
+        (Some("POST"), Some("/rereview")) => handle_rereview(&request, cmds),
         (Some("GET"), Some(p)) if p.starts_with("/ship?") => handle_ship(cmds, p),
         (Some("GET"), Some(p)) if p.starts_with("/crossings?") => handle_crossings(cmds, p),
         (Some("GET"), Some(p)) if p.starts_with("/diff?") => handle_diff(cmds, p),
@@ -472,6 +473,27 @@ fn handle_review_post(request: &str, cmds: &Sender<Command>) -> String {
     }
     match reply_rx.recv() {
         Ok(Ok(())) => http_response("200 OK", "text/plain", "posted"),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
+/// `POST /rereview` — re-request a review from a reviewer holding a change request.
+fn handle_rereview(request: &str, cmds: &Sender<Command>) -> String {
+    let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+    let cmd: wire::RereviewCmd = match serde_json::from_str(body) {
+        Ok(d) => d,
+        Err(e) => return http_response("400 Bad Request", "text/plain", &format!("bad json: {e}")),
+    };
+    if cmd.user.trim().is_empty() {
+        return http_response("400 Bad Request", "text/plain", "a re-request needs a user");
+    }
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::Rereview { cmd, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(said)) => http_response("200 OK", "text/plain", &said),
         Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
         Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
     }
@@ -1219,6 +1241,7 @@ mod tests {
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Reply { reply, .. } => { let _ = reply.send(Ok(())); }
+                    Command::Rereview { reply, .. } => { let _ = reply.send(Ok("ok".into())); }
                     Command::GetShip { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetCrossings { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetDiff { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
@@ -1291,6 +1314,7 @@ mod tests {
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Reply { reply, .. } => { let _ = reply.send(Ok(())); }
+                    Command::Rereview { reply, .. } => { let _ = reply.send(Ok("ok".into())); }
                     Command::GetShip { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetCrossings { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetDiff { reply, .. } => { let _ = reply.send(Err("n/a".into())); }

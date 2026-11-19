@@ -364,6 +364,25 @@ impl Forge for GlabForge {
         Ok(())
     }
 
+    /// The reviewer's state from the MR's reviewers, then the re-request (the sidebar's ↻), only
+    /// when it's REQUESTED_CHANGES: re-requesting resets their badge, never the merge check.
+    fn rereview(&self, iid: i64, user: &str) -> Result<bool> {
+        let repo = self.repo()?;
+        let query = format!(
+            r#"{{ project(fullPath: "{repo}") {{ mergeRequest(iid: "{iid}") {{ reviewers {{ nodes {{ id username mergeRequestInteraction {{ reviewState }} }} }} }} }} }}"#
+        );
+        let v = self.graphql("reviewers", &query)?;
+        let nodes = v.pointer("/data/project/mergeRequest/reviewers/nodes").and_then(|n| n.as_array()).cloned().unwrap_or_default();
+        let Some(id) = holding_changes(&nodes, user) else { return Ok(false) };
+        let mutation = format!(
+            r#"mutation {{ mergeRequestReviewerRereview(input: {{ projectPath: "{repo}", iid: "{iid}", userId: "{id}" }}) {{ errors }} }}"#
+        );
+        let v = self.graphql("re-request review", &mutation)?;
+        let errors = v.pointer("/data/mergeRequestReviewerRereview/errors").and_then(|e| e.as_array());
+        ensure!(errors.is_some_and(|e| e.is_empty()), "!{iid}: GitLab refused the re-request: {}", v["data"]);
+        Ok(true)
+    }
+
     /// GitLab answers 404 when the user hadn't approved: nothing to withdraw.
     fn unapprove(&self, iid: i64) -> Result<()> {
         let path = format!("projects/{}/merge_requests/{iid}/unapprove", self.project);
@@ -627,6 +646,15 @@ fn failed_children(bridges: &serde_json::Value) -> Vec<i64> {
         .collect()
 }
 
+/// A reviewer's GraphQL id, if they hold a change request on the MR.
+fn holding_changes(reviewers: &[serde_json::Value], user: &str) -> Option<String> {
+    reviewers
+        .iter()
+        .find(|r| r.get("username").and_then(|u| u.as_str()) == Some(user))
+        .filter(|r| r.pointer("/mergeRequestInteraction/reviewState").and_then(|s| s.as_str()) == Some("REQUESTED_CHANGES"))
+        .and_then(|r| r.get("id")?.as_str().map(String::from))
+}
+
 /// The pipelines a retry re-runs: those holding a failed job that isn't allowed to fail.
 fn retry_targets(tree: &[(i64, Vec<serde_json::Value>)]) -> Vec<i64> {
     tree.iter()
@@ -775,6 +803,18 @@ mod tests {
             {"name": "pending", "downstream_pipeline": null}
         ]);
         assert_eq!(failed_children(&bridges), vec![11]);
+    }
+
+    #[test]
+    fn re_requests_only_a_reviewer_holding_a_change_request() {
+        let reviewers = serde_json::json!([
+            {"id": "gid://gitlab/User/1", "username": "reviewer", "mergeRequestInteraction": {"reviewState": "REQUESTED_CHANGES"}},
+            {"id": "gid://gitlab/User/2", "username": "jack", "mergeRequestInteraction": {"reviewState": "UNREVIEWED"}}
+        ]);
+        let r = reviewers.as_array().unwrap();
+        assert_eq!(holding_changes(r, "reviewer").as_deref(), Some("gid://gitlab/User/1"));
+        assert_eq!(holding_changes(r, "jack"), None, "no change request: nothing to re-request");
+        assert_eq!(holding_changes(r, "nobody"), None);
     }
 
     #[test]

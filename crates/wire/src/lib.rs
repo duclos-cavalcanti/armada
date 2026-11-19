@@ -180,6 +180,13 @@ pub struct ReplyCmd {
     pub resolve: bool,
 }
 
+/// Re-request a review from a reviewer holding a change request (`POST /rereview`, `fleetc rereview`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RereviewCmd {
+    pub iid: i64,
+    pub user: String,
+}
+
 /// Arm a ticket's open MR to merge once its gates pass (`POST /arm`, `fleetc arm`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArmCmd {

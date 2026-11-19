@@ -271,6 +271,11 @@ pub trait Forge {
     fn request_changes(&self, iid: i64, _body: &str) -> Result<()> {
         anyhow::bail!("!{iid}: this forge can't request changes")
     }
+    /// Re-request `user`'s review once they hold a change request on the MR, so they're asked to
+    /// look again (the request itself lifts only when they approve). `false`: they hold none.
+    fn rereview(&self, iid: i64, _user: &str) -> Result<bool> {
+        anyhow::bail!("!{iid}: this forge can't re-request a review")
+    }
     /// Withdraw the fleet's user's approval of the MR; nothing to do if it hadn't approved.
     fn unapprove(&self, iid: i64) -> Result<()> {
         anyhow::bail!("!{iid}: this forge can't withdraw an approval")

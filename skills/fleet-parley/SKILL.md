@@ -147,6 +147,11 @@ by the fix and a reply naming that job: resolve it. The pipeline gates the merge
 green or red, so an open thread would only be a second gate on your sweep and your arm. Leave
 open only what you can't answer yet: an escalation, until the operator rules.
 
+**Then ask the reviewers you answered to look again:** once per author of a thread you replied to
+this sweep, `fleetc rereview --user <author>`. fleetd re-requests the review only of one holding a
+change request (GitLab's ↻ beside them), which pings them; their request lifts only when they
+approve. For anyone else it does nothing.
+
 ## Step 4 — Re-read and report
 
 Your push may have answered a floating note, or a new verdict may have landed, so re-read

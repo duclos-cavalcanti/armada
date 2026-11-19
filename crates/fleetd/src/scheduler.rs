@@ -83,6 +83,7 @@ pub enum Command {
     GetReview { iid: i64, reply: ReviewReply }, // a read: an MR's fresh review surface (forge)
     Rebase { iid: i64, reply: Reply },          // an action: server-side rebase an MR (forge)
     Reply { cmd: wire::ReplyCmd, reply: Reply },
+    Rereview { cmd: wire::RereviewCmd, reply: UrlReply }, // an action: re-ask a reviewer holding changes (forge)
     GetShip { iid: i64, reply: ShipReply },           // a read: one ship + snapshot + fetch ref (ledger + forge)
     GetCrossings { iid: i64, brief: bool, reply: CrossingsReply }, // a read: the MR beside our open tickets (ledger + forge + tracker)
     GetDiff { iid: i64, path: String, reply: UrlReply }, // a read: an MR's diff of one file (forge)
@@ -399,6 +400,12 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         Command::Reply { cmd, reply } => {
             let res = forge.reply(cmd.iid, &cmd.thread, &cmd.body, cmd.resolve).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
+        }
+        Command::Rereview { cmd, reply } => {
+            let res = forge.rereview(cmd.iid, &cmd.user).map(|asked| {
+                if asked { format!("re-requested {}'s review", cmd.user) } else { format!("{} holds no change request", cmd.user) }
+            });
+            let _ = reply.send(res.map_err(|e| format!("{e:#}")));
         }
         Command::GetCi { iid, reply } => {
             let _ = reply.send(forge.ci(iid).map_err(|e| format!("{e:#}")));

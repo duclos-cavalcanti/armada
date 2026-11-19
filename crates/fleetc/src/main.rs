@@ -54,6 +54,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc transcript --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] [--open]   (resolve a cog's transcript)\n  \
      fleetc review   [--iid <N>]       (an MR's fresh review surface: open threads + floating notes)\n  \
      fleetc reply    [--iid <N>] --thread <id> --body <text|-> [--resolve]   (answer a review thread)\n  \
+     fleetc rereview [--iid <N>] --user <username>   (re-request the review of a reviewer holding a change request; else nothing)\n  \
      fleetc ship     [--iid <N>]       (one MR, ours or an ally's: ship + snapshot + fetch ref, as JSON)\n  \
      fleetc crossings [--iid <N>] [--brief]   (the MR beside our open tickets: shared paths + folders, and each ticket's text unless --brief, as JSON)\n  \
      fleetc diff     --iid <N> --path <file>   (one MR's diff of one file)\n  \
@@ -125,6 +126,7 @@ fn run() -> Result<()> {
         Some("rebase") => rebase(&args[1..]),
         Some("ci") => ci(&args[1..]),
         Some("reply") => reply(&args[1..]),
+        Some("rereview") => rereview(&args[1..]),
         Some("ship") => ship(&args[1..]),
         Some("crossings") => crossings(&args[1..]),
         Some("diff") => diff(&args[1..]),
@@ -1184,6 +1186,23 @@ fn review(args: &[String]) -> Result<()> {
     }
     println!("{body}");
     Ok(())
+}
+
+/// `fleetc rereview --iid <N> --user <username>` — ask a reviewer holding a change request to look
+/// again (GitLab's ↻ beside them). Their request lifts only when they approve.
+fn rereview(args: &[String]) -> Result<()> {
+    let (mut iid, mut user) = (None, None);
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
+        match flag.as_str() {
+            "--iid" => iid = Some(take()?.parse::<i64>().map_err(|_| anyhow!("--iid must be a number"))?),
+            "--user" => user = Some(take()?),
+            other => bail!("unknown flag: {other}"),
+        }
+    }
+    let user = user.ok_or_else(|| anyhow!("--user required"))?;
+    post_and_print("/rereview", &wire::RereviewCmd { iid: iid_or_own(iid, "rereview")?, user })
 }
 
 /// `fleetc reply --iid <N> --thread <id> --body <text|-> [--resolve]` — answer one review thread
