@@ -687,6 +687,19 @@ pub struct Levers {
     pub groom_skill: Option<String>,
     /// The project's readiness check, handed to each captain and admiral in `FLEET_ASSESS_SKILL`.
     pub assess_skill: Option<String>,
+    /// `cfg.provider` — the fleet-wide default provider name.
+    pub provider: String,
+    /// `cfg.cogs` — a cog kind's provider override.
+    pub cogs: std::collections::BTreeMap<String, String>,
+    /// `cfg.providers` — each provider's env vars.
+    pub providers: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+}
+
+impl Levers {
+    /// The env-var prefix a cog of `kind` launches with — see `config::provider_env`.
+    fn provider_env(&self, kind: &str) -> String {
+        crate::config::provider_env(&self.provider, &self.cogs, &self.providers, kind)
+    }
 }
 
 /// Apply the reconcile plan through the ports. `dry_run=true` logs the plan and executes
@@ -747,22 +760,27 @@ fn execute<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
     levers: &Levers,
 ) -> Result<()> {
     match action {
-        Action::Spawn { ticket, kind } => spawn(ledger, tracker, host, ticket, kind),
+        Action::Spawn { ticket, kind } => spawn(ledger, tracker, host, ticket, kind, &levers.provider_env(kind)),
         Action::Handoff { ticket } => handoff(ledger, tracker, host, forge, ticket),
         Action::Reap { ticket } => reap(ledger, tracker, host, project, ticket),
-        Action::Heal { ticket, kind } => heal(ledger, host, ticket, kind),
+        Action::Heal { ticket, kind } => heal(ledger, host, ticket, kind, &levers.provider_env(kind)),
         Action::Wake { ticket } => wake(ledger, host, ticket),
         Action::ReviewWake { ticket } => review_wake(ledger, forge, host, ticket, levers.review_rounds),
         Action::StandDown { ticket, kind } => stand_down(ledger, host, ticket, kind),
-        Action::LaunchCaptain { convoy } => launch_captain(ledger, host, project, convoy, levers.assess_skill.as_deref()),
+        Action::LaunchCaptain { convoy } => launch_captain(ledger, host, project, convoy, levers.assess_skill.as_deref(), &levers.provider_env("captain")),
         Action::StandDownCaptain { convoy } => stand_down_captain(ledger, host, convoy),
-        Action::LaunchSailor { ticket } => launch_sailor(ledger, forge, host, ticket, None).map(drop),
-        Action::Capped { ticket, rulings } => capped(ledger, forge, host, ticket, *rulings),
-        Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, project, *iid, levers.review_skill.as_deref()),
+        Action::LaunchSailor { ticket } => launch_sailor(ledger, forge, host, ticket, None, &levers.provider_env("sailor")).map(drop),
+        Action::Capped { ticket, rulings } => capped(ledger, forge, host, ticket, *rulings, &levers.provider_env("sailor")),
+        Action::LaunchLookout { iid } => launch_lookout(ledger, forge, host, project, *iid, levers.review_skill.as_deref(), &levers.provider_env("lookout")),
         Action::StandDownLookout { session } => stand_down_lookout(ledger, host, project, &SessionId(*session)),
-        Action::LaunchAdmiral { ticket } => {
-            launch_admiral(ledger, host, project, ticket, &[("FLEET_GROOM_SKILL", levers.groom_skill.as_deref()), ("FLEET_ASSESS_SKILL", levers.assess_skill.as_deref())])
-        }
+        Action::LaunchAdmiral { ticket } => launch_admiral(
+            ledger,
+            host,
+            project,
+            ticket,
+            &[("FLEET_GROOM_SKILL", levers.groom_skill.as_deref()), ("FLEET_ASSESS_SKILL", levers.assess_skill.as_deref())],
+            &levers.provider_env("admiral"),
+        ),
     }
 }
 
@@ -777,6 +795,7 @@ fn spawn<T: Tracker + ?Sized, H: SessionHost>(
     host: &H,
     ticket: &str,
     kind: &str,
+    provider_env: &str,
 ) -> Result<()> {
     let tkey = TicketKey(ticket.to_string());
     let order = OrderRepo::get(ledger, &tkey)?
@@ -832,7 +851,8 @@ fn spawn<T: Tracker + ?Sized, H: SessionHost>(
         None => return Ok(()),
     };
 
-    host.spawn(&tmux_session, Path::new(&worktree), &ticket_launch_cmd(kind, ticket, Launch::Fresh(&hid)))?;
+    let cmd = format!("{provider_env}{}", ticket_launch_cmd(kind, ticket, Launch::Fresh(&hid)));
+    host.spawn(&tmux_session, Path::new(&worktree), &cmd)?;
 
     ledger.append(
         &now_rfc3339(),
@@ -849,7 +869,7 @@ fn spawn<T: Tracker + ?Sized, H: SessionHost>(
 /// and launches `claude --agent hand`. reconcile leaves ticketless cogs alone, so the operator owns
 /// its lifecycle. The tmux name is the worktree's basename (`hand-<dir>`) — one hand per worktree;
 /// a dup is refused up front so we never leave an orphan session row behind a failed tmux spawn.
-pub(crate) fn spawn_ticketless_hand<H: SessionHost>(ledger: &Ledger, host: &H, worktree: &str) -> Result<()> {
+pub(crate) fn spawn_ticketless_hand<H: SessionHost>(ledger: &Ledger, host: &H, worktree: &str, provider_env: &str) -> Result<()> {
     let base = Path::new(worktree).file_name().and_then(|s| s.to_str()).unwrap_or("hand");
     let tmux_session = format!("hand-{base}");
     if host.alive(&tmux_session)? {
@@ -874,7 +894,8 @@ pub(crate) fn spawn_ticketless_hand<H: SessionHost>(ledger: &Ledger, host: &H, w
     )?
     .ok_or_else(|| anyhow!("spawn_ticketless_hand: session not recorded"))?;
 
-    host.spawn(&tmux_session, Path::new(worktree), &launch_cmd("hand", Launch::Fresh(&hid)))?;
+    let cmd = format!("{provider_env}{}", launch_cmd("hand", Launch::Fresh(&hid)));
+    host.spawn(&tmux_session, Path::new(worktree), &cmd)?;
 
     ledger.append(
         &now_rfc3339(),
@@ -1050,7 +1071,7 @@ fn move_ticket<T: Tracker + ?Sized>(ledger: &Ledger, tracker: &T, key: &TicketKe
 /// Awareness). No new session row, so no `SessionStarted` — the `TickRan` applied[] records it.
 /// Safe because Dead means the tmux is gone (a stale-but-alive session classifies as Parked,
 /// never Dead), so the respawn can't collide with a live session.
-fn heal<H: SessionHost>(ledger: &Ledger, host: &H, ticket: &str, kind: &str) -> Result<()> {
+fn heal<H: SessionHost>(ledger: &Ledger, host: &H, ticket: &str, kind: &str, provider_env: &str) -> Result<()> {
     let tkey = TicketKey(ticket.to_string());
     let crew = CrewKind::parse(kind).ok_or_else(|| anyhow!("heal {ticket}: unknown crew kind {kind:?}"))?;
     let sessions = SessionRepo::for_ticket(ledger, &tkey)?;
@@ -1059,7 +1080,7 @@ fn heal<H: SessionHost>(ledger: &Ledger, host: &H, ticket: &str, kind: &str) -> 
         .find(|s| s.kind == crew && s.ended_at.is_none())
         .ok_or_else(|| anyhow!("heal {ticket}: no live {kind} session to respawn"))?;
     // Relaunch on the session's OWN id so the transcript stays one continuous file across the crash.
-    let cmd = ticket_launch_cmd(kind, ticket, Launch::relaunch(session));
+    let cmd = format!("{provider_env}{}", ticket_launch_cmd(kind, ticket, Launch::relaunch(session)));
     host.spawn(&session.tmux_session, Path::new(&session.worktree_path), &cmd)?;
     Ok(())
 }
@@ -1137,7 +1158,7 @@ pub(crate) const CAP_VERDICT: &str =
 /// an admiral at once. The operator's ruling weighs the ticket and goes to that sailor. Its MR is
 /// left as it stands, never disarmed or drafted (unlike `fleetc anchor`): the operator looks into
 /// the churn, then weighs it or rethinks its design.
-fn capped<H: SessionHost, F: Forge + ?Sized>(ledger: &Ledger, forge: &F, host: &H, ticket: &str, rulings: u64) -> Result<()> {
+fn capped<H: SessionHost, F: Forge + ?Sized>(ledger: &Ledger, forge: &F, host: &H, ticket: &str, rulings: u64, provider_env: &str) -> Result<()> {
     let tkey = TicketKey(ticket.to_string());
     let reason = format!("needed {rulings} rulings since it was last weighed: escalated for your ruling");
     tracing::warn!("anchor {ticket}: {reason}");
@@ -1145,7 +1166,7 @@ fn capped<H: SessionHost, F: Forge + ?Sized>(ledger: &Ledger, forge: &F, host: &
     let brief = format!(
         "fleetd escalated {ticket} for you: it needed {rulings} of the operator's rulings since it was last weighed. Don't sweep and don't report: wait for the operator's ruling, then carry it out."
     );
-    let Some(session) = launch_sailor(ledger, forge, host, ticket, Some(&brief))? else { return Ok(()) };
+    let Some(session) = launch_sailor(ledger, forge, host, ticket, Some(&brief), provider_env)? else { return Ok(()) };
     let question = format!(
         "{ticket} needed {rulings} of your rulings since it was last weighed (max_rulings): rule how it goes on, and its sailor carries it out; or recall or decommission it."
     );
@@ -1188,7 +1209,7 @@ fn stand_down<H: SessionHost>(ledger: &Ledger, host: &H, ticket: &str, kind: &st
 /// adapter-agnostic contract (no tmux/vendor leak into the agent), injected as a cmd-prefix so
 /// `TmuxHost` stays generic. `Ok(None)` from the `one_live_captain_per_convoy` lock means the slot
 /// is already held → a benign skip.
-fn launch_captain<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, convoy: &str, assess_skill: Option<&str>) -> Result<()> {
+fn launch_captain<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, convoy: &str, assess_skill: Option<&str>, provider_env: &str) -> Result<()> {
     let tmux_session = format!("captain-{convoy}");
     let hid = new_session_id();
     let session_id = match SessionRepo::start(
@@ -1212,7 +1233,7 @@ fn launch_captain<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, conv
     };
 
     let env = skill_env(&[("FLEET_ASSESS_SKILL", assess_skill)]);
-    let cmd = format!("{env}FLEET_CONVOY={convoy} {}", launch_cmd("captain", Launch::Fresh(&hid)));
+    let cmd = format!("{provider_env}{env}FLEET_CONVOY={convoy} {}", launch_cmd("captain", Launch::Fresh(&hid)));
     host.spawn(&tmux_session, Path::new(project), &cmd)?;
 
     ledger.append(
@@ -1328,6 +1349,7 @@ fn launch_sailor<H: SessionHost, F: Forge + ?Sized>(
     host: &H,
     ticket: &str,
     brief: Option<&str>,
+    provider_env: &str,
 ) -> Result<Option<SessionId>> {
     let tkey = TicketKey(ticket.to_string());
     let ship = ledger
@@ -1367,7 +1389,7 @@ fn launch_sailor<H: SessionHost, F: Forge + ?Sized>(
     };
 
     // A brief rides in as the session's first prompt, after the agent's own (`initialPrompt`).
-    let cmd = ticket_launch_cmd("sailor", ticket, Launch::Fresh(&hid));
+    let cmd = format!("{provider_env}{}", ticket_launch_cmd("sailor", ticket, Launch::Fresh(&hid)));
     let cmd = match brief {
         Some(b) => format!("{cmd} '{}'", b.replace('\'', r"'\''")),
         None => cmd,
@@ -1399,6 +1421,7 @@ fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
     project: &str,
     iid: i64,
     review_skill: Option<&str>,
+    provider_env: &str,
 ) -> Result<()> {
     let ship = ledger
         .armada()?
@@ -1444,7 +1467,7 @@ fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
     let env = skill.map(|s| format!("FLEET_REVIEW_SKILL={s} ")).unwrap_or_default();
     // Its command guard rides in as `--settings`, on this launch only: no global config changes.
     let guard = crate::health::lookout_settings().replace('\'', r"'\''");
-    let cmd = format!("{env}FLEET_SHIP={iid} {} --settings '{guard}'", launch_cmd("lookout", Launch::Fresh(&hid)));
+    let cmd = format!("{provider_env}{env}FLEET_SHIP={iid} {} --settings '{guard}'", launch_cmd("lookout", Launch::Fresh(&hid)));
     host.spawn(&tmux_session, Path::new(cwd), &cmd)?;
     ledger.append(
         &now_rfc3339(),
@@ -1493,7 +1516,7 @@ fn stand_down_lookout<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, 
 /// a cog. The ticket's worktree rides in as `--add-dir`: the admiral reads the cog's files while its
 /// cwd stays the checkout, whose CLAUDE.md and settings are the merged canon's, not the branch's.
 /// A tmux session of that name already up is one the operator opened: a benign skip.
-fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, ticket: &str, skills: &[(&str, Option<&str>)]) -> Result<()> {
+fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, ticket: &str, skills: &[(&str, Option<&str>)], provider_env: &str) -> Result<()> {
     let tmux_session = format!("admiral-{ticket}");
     if host.alive(&tmux_session)? {
         return Ok(());
@@ -1531,7 +1554,7 @@ fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, tick
         true => (format!("FLEET_DELEGATION=1 {}", skill_env(skills)), format!("Rule on the confirmed escalation of {ticket}: the operator delegated it to you.")),
         false => (skill_env(skills), format!("Rule on the confirmed escalation of {ticket}.")),
     };
-    let cmd = format!("{env}{}{add_dir} -- '{order}'", launch_cmd("admiral", Launch::Fresh(&hid)));
+    let cmd = format!("{provider_env}{env}{}{add_dir} -- '{order}'", launch_cmd("admiral", Launch::Fresh(&hid)));
     host.spawn(&tmux_session, Path::new(project), &cmd)?;
     ledger.append(
         &now_rfc3339(),
@@ -1617,8 +1640,29 @@ mod tests {
         review_skill: None,
         groom_skill: None,
         assess_skill: None,
+        provider: String::new(),
+        cogs: std::collections::BTreeMap::new(),
+        providers: std::collections::BTreeMap::new(),
     };
-    const DRY: Levers = Levers { dry_run: true, ..LIVE };
+    // Not `Levers { dry_run: true, ..LIVE }`: a `const` can't struct-update off another `const`
+    // once a field's type (`BTreeMap`) has drop glue — E0493. A plain literal sidesteps it.
+    const DRY: Levers = Levers {
+        dry_run: true,
+        healthy: true,
+        captain_sleep_secs: 0,
+        admirals: 0,
+        lookouts: 1,
+        self_lookouts: -1,
+        review_rounds: 5,
+        review_settle_secs: 0,
+        max_rulings: 6,
+        review_skill: None,
+        groom_skill: None,
+        assess_skill: None,
+        provider: String::new(),
+        cogs: std::collections::BTreeMap::new(),
+        providers: std::collections::BTreeMap::new(),
+    };
     use domain::ports::EventLog;
     use domain::*;
     use std::cell::RefCell;
@@ -2477,7 +2521,7 @@ mod tests {
         // launched as hand-<worktree-basename>.
         let db = db();
         let host = FakeHost::new();
-        spawn_ticketless_hand(&db, &host, "/wt/scratch").unwrap();
+        spawn_ticketless_hand(&db, &host, "/wt/scratch", "").unwrap();
         let live = SessionRepo::live(&db).unwrap();
         assert_eq!(live.len(), 1);
         assert_eq!(live[0].kind, CrewKind::Hand);
@@ -2530,7 +2574,7 @@ mod tests {
         let host = FakeHost::new();
         // Call the executor path directly: plan(, true) would gate this out, but the DB lock is the
         // real guard — a lock hit must be a benign skip, not a failure.
-        spawn(&db, &tracker, &host, "PROJ-1", "worker").unwrap();
+        spawn(&db, &tracker, &host, "PROJ-1", "worker", "").unwrap();
 
         // no duplicate session, no second launch.
         assert_eq!(SessionRepo::for_ticket(&db, &TicketKey("PROJ-1".into())).unwrap().len(), 1);
@@ -2546,7 +2590,7 @@ mod tests {
         *tracker.peer.borrow_mut() = true; // a teammate owns it
         let host = FakeHost::new();
 
-        spawn(&db, &tracker, &host, "PROJ-1", "worker").unwrap();
+        spawn(&db, &tracker, &host, "PROJ-1", "worker", "").unwrap();
 
         // the peer is respected: nothing moved, nothing claimed, no session, no launch.
         assert!(tracker.moves.borrow().is_empty(), "no transition on a peer's ticket");
@@ -2566,7 +2610,7 @@ mod tests {
         *tracker.fail_claim.borrow_mut() = true;
         let host = FakeHost::new();
 
-        spawn(&db, &tracker, &host, "PROJ-1", "worker").unwrap();
+        spawn(&db, &tracker, &host, "PROJ-1", "worker", "").unwrap();
 
         assert_eq!(tracker.moves.borrow().len(), 1, "transitioned despite the partial claim");
         assert_eq!(SessionRepo::for_ticket(&db, &TicketKey("PROJ-1".into())).unwrap().len(), 1);
@@ -2766,7 +2810,7 @@ mod tests {
             pipeline: None,
             merge_status: None,
         });
-        capped(&db, &forge, &host, "PROJ-1", 2).unwrap();
+        capped(&db, &forge, &host, "PROJ-1", 2, "").unwrap();
         assert!(TicketRepo::get(&db, &key).unwrap().unwrap().held, "anchored: ⚓");
         let cmd = host.spawned.borrow()[0].2.clone();
         assert!(cmd.contains("--agent sailor 'fleetd escalated PROJ-1 for you") && cmd.contains("Don'\\''t sweep"), "a sailor stands by: {cmd}");
@@ -3173,14 +3217,14 @@ mod tests {
         let host = FakeHost::new();
 
         *forge.snapshot.borrow_mut() = Some(forge_ship(7, &sha));
-        launch_lookout(&db, &forge, &host, &project, 7, Some("mr-review")).unwrap();
+        launch_lookout(&db, &forge, &host, &project, 7, Some("mr-review"), "").unwrap();
         let (name, cwd, cmd) = host.spawned.borrow()[0].clone();
         assert_eq!(name, "lookout-PROJ-1");
         assert_eq!(Path::new(&cwd), dir.join("review/7"), "ours too: berthed, not in its worker's worktree");
         assert!(cmd.starts_with("FLEET_REVIEW_SKILL=mr-review FLEET_SHIP=7 claude "), "{cmd}");
 
         *forge.snapshot.borrow_mut() = Some(forge_ship(77, &sha));
-        launch_lookout(&db, &forge, &host, &project, 77, Some("x; rm -rf /")).unwrap();
+        launch_lookout(&db, &forge, &host, &project, 77, Some("x; rm -rf /"), "").unwrap();
         let (_, cwd, cmd) = host.spawned.borrow()[1].clone();
         assert_eq!(Path::new(&cwd), dir.join("review/77"), "an ally's: berthed, not in the checkout");
         assert!(cmd.starts_with("FLEET_SHIP=77 "), "no plain name: it never reaches the shell: {cmd}");
@@ -3889,7 +3933,7 @@ mod tests {
         let db = db();
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         let host = FakeHost::new();
-        launch_admiral(&db, &host, "/project", "PROJ-1", &[]).unwrap();
+        launch_admiral(&db, &host, "/project", "PROJ-1", &[], "").unwrap();
         let (name, cwd, cmd) = host.spawned.borrow()[0].clone();
         assert_eq!((name.as_str(), cwd.as_str()), ("admiral-PROJ-1", "/project"));
         assert!(cmd.contains("--agent admiral -- 'Rule on the confirmed escalation of PROJ-1.'"), "{cmd}");
@@ -3898,7 +3942,7 @@ mod tests {
 
         ticket(&db, "PROJ-2", TicketStatus::InProgress, false, vec![]);
         let host = FakeHost::new();
-        launch_admiral(&db, &host, "/project", "PROJ-2", &[("FLEET_GROOM_SKILL", Some("groom-ticket")), ("FLEET_ASSESS_SKILL", Some("assess-ticket"))]).unwrap();
+        launch_admiral(&db, &host, "/project", "PROJ-2", &[("FLEET_GROOM_SKILL", Some("groom-ticket")), ("FLEET_ASSESS_SKILL", Some("assess-ticket"))], "").unwrap();
         let cmd = host.spawned.borrow()[0].2.clone();
         assert!(cmd.starts_with("FLEET_GROOM_SKILL=groom-ticket FLEET_ASSESS_SKILL=assess-ticket claude "), "the project's skills ride in: {cmd}");
         let live = SessionRepo::live(&db).unwrap();
@@ -3913,7 +3957,7 @@ mod tests {
         convoy_ticket(&db, "PROJ-1", "PROJ-100", TicketStatus::InProgress);
         let order = |db: &Ledger| {
             let host = FakeHost::new();
-            launch_admiral(db, &host, "/project", "PROJ-1", &[]).unwrap();
+            launch_admiral(db, &host, "/project", "PROJ-1", &[], "").unwrap();
             for s in SessionRepo::live(db).unwrap() {
                 SessionRepo::end(db, &s.id, "t2").unwrap(); // its seat freed for the next
             }
@@ -3933,7 +3977,7 @@ mod tests {
         ticket(&db, "PROJ-1", TicketStatus::InProgress, false, vec![]);
         order_wt(&db, "PROJ-1", true, Some("/wt/chore-PROJ-1-it's"));
         let host = FakeHost::new();
-        launch_admiral(&db, &host, "/project", "PROJ-1", &[]).unwrap();
+        launch_admiral(&db, &host, "/project", "PROJ-1", &[], "").unwrap();
         let (_, cwd, cmd) = host.spawned.borrow()[0].clone();
         assert_eq!(cwd, "/project", "its cwd stays the checkout");
         assert!(cmd.contains(r"--add-dir '/wt/chore-PROJ-1-it'\''s' -- 'Rule on"), "the order follows `--`, not taken as a directory: {cmd}");

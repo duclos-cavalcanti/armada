@@ -197,6 +197,9 @@ pub fn run(
                 review_skill: cfg.review_skill.clone(),
                 groom_skill: cfg.groom_skill.clone(),
                 assess_skill: cfg.assess_skill.clone(),
+                provider: cfg.provider.clone(),
+                cogs: cfg.cogs.clone(),
+                providers: cfg.providers.clone(),
             };
             let cogs = snapshot.lock().unwrap().clone();
             pulse.on("reconcile");
@@ -305,7 +308,7 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let _ = reply.send(res);
         }
         Command::LaunchHand { worktree_path, reply } => {
-            let res = reconcile::spawn_ticketless_hand(ledger, host, &worktree_path)
+            let res = reconcile::spawn_ticketless_hand(ledger, host, &worktree_path, &cfg.provider_env("hand"))
                 .map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
@@ -1523,6 +1526,9 @@ mod tests {
         review_skill: None,
         groom_skill: None,
         assess_skill: None,
+        provider: String::new(),
+        cogs: std::collections::BTreeMap::new(),
+        providers: std::collections::BTreeMap::new(),
     };
     use domain::ports::EventLog;
     use domain::*;

@@ -15,6 +15,7 @@
 use anyhow::{ensure, Context, Result};
 use domain::LivenessThresholds;
 use serde::Deserialize;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)] // any field absent from the TOML falls back to Default::default()
@@ -64,6 +65,19 @@ pub struct Config {
     pub tracker: TrackerConfig,
     /// The OTLP/HTTP receiver bind addr (the telemetry DB lives in the project's `.fleet/`).
     pub otel_addr: String,
+    /// The fleet-wide default provider every cog launches under, by name (e.g. `"bedrock"`);
+    /// `[cogs]` overrides it per cog kind. `"local"` (the default) is reserved: it carries no env,
+    /// whatever `claude`'s own host config does. Any other name must name a `[providers.<name>]`
+    /// table, checked by `validate`.
+    pub provider: String,
+    /// `[cogs]` — a cog kind (`worker`, `sailor`, `hand`, `captain`, `lookout`, `admiral`) to the
+    /// provider it launches under, overriding `provider` for that kind alone.
+    pub cogs: BTreeMap<String, String>,
+    /// `[providers.<name>]` — the env vars that provider's cogs launch with, e.g.
+    /// `[providers.bedrock]` carrying `CLAUDE_CODE_USE_BEDROCK`, `AWS_PROFILE`, `AWS_REGION`,
+    /// `ANTHROPIC_MODEL`. Composed onto the launch line as `KEY=VAL` prefixes, in key order (a
+    /// `BTreeMap`), so the composed line is deterministic across runs.
+    pub providers: BTreeMap<String, BTreeMap<String, String>>,
     /// `[project]` — the product's main checkout, which owns the ticket worktrees and the lookouts'
     /// review worktrees (`review/`, beside it). Captains carry no worktree, so they launch here.
     pub project: ProjectConfig,
@@ -156,6 +170,9 @@ impl Default for Config {
             forge: ForgeConfig::default(),
             tracker: TrackerConfig::default(),
             otel_addr: "127.0.0.1:4318".into(),
+            provider: "local".into(),
+            cogs: BTreeMap::new(),
+            providers: BTreeMap::new(),
             project: ProjectConfig::default(),
         }
     }
@@ -224,7 +241,20 @@ impl Config {
             "{path}: [tracker] project must be a key prefix like \"PROJ\" (or FLEET_TRACKER_PROJECT), got {:?}",
             self.tracker.project
         );
+        for name in std::iter::once(self.provider.as_str()).chain(self.cogs.values().map(String::as_str)) {
+            ensure!(
+                name == "local" || self.providers.contains_key(name),
+                "{path}: provider {name:?} has no [providers.{name}] table"
+            );
+        }
         Ok(())
+    }
+
+    /// The env-var prefix (`"KEY=VAL "`, one per var, in key order) a cog of `kind` launches with:
+    /// `[cogs]`'s entry for it, else the fleet-wide `provider`. `"local"` (the default) names no
+    /// `[providers]` table, so it always resolves to no env.
+    pub fn provider_env(&self, kind: &str) -> String {
+        provider_env(&self.provider, &self.cogs, &self.providers, kind)
     }
 
     /// The ticket key prefix — how branches, MR titles, and keys name a ticket. For Jira it is
@@ -242,6 +272,13 @@ impl Config {
 /// checkout may not exist yet (preflight reports that, with the clone command).
 fn resolve_project(path: &str, root: &std::path::Path) -> String {
     root.join(path).to_string_lossy().into_owned() // an absolute `path` replaces `root`
+}
+
+/// Shared by `Config::provider_env` and reconcile's `Levers`, which carries the same three fields
+/// forward from `cfg` so a reconcile pass resolves a cog's launch env without reaching for `Config`.
+pub(crate) fn provider_env(provider: &str, cogs: &BTreeMap<String, String>, providers: &BTreeMap<String, BTreeMap<String, String>>, kind: &str) -> String {
+    let name = cogs.get(kind).map(String::as_str).unwrap_or(provider);
+    providers.get(name).map(|vars| vars.iter().map(|(k, v)| format!("{k}={v} ")).collect()).unwrap_or_default()
 }
 
 /// Read a numeric env var. `pub(crate)` so the live `settings` overlay resolves env the same way.
@@ -369,5 +406,35 @@ mod tests {
     fn dry_run_can_be_turned_on_in_the_file() {
         let c: Config = toml::from_str("dry_run = true\n").unwrap();
         assert!(c.dry_run, "the parity look is opt-in via config/env");
+    }
+
+    #[test]
+    fn provider_defaults_to_local_with_no_env() {
+        let c = Config::default();
+        assert_eq!(c.provider, "local");
+        assert_eq!(c.provider_env("worker"), "", "local carries no env, by default");
+    }
+
+    const BEDROCK: &str = "[providers.bedrock]\nCLAUDE_CODE_USE_BEDROCK = \"1\"\nAWS_REGION = \"us-west-2\"\n";
+
+    #[test]
+    fn a_named_provider_composes_its_env_in_key_order() {
+        let c: Config = toml::from_str(&format!("provider = \"bedrock\"\n{BEDROCK}")).unwrap();
+        assert_eq!(c.provider_env("worker"), "AWS_REGION=us-west-2 CLAUDE_CODE_USE_BEDROCK=1 ", "BTreeMap: key order, so it's deterministic");
+    }
+
+    #[test]
+    fn a_cog_override_wins_over_the_fleet_wide_provider() {
+        let c: Config = toml::from_str(&format!("provider = \"local\"\n[cogs]\nworker = \"bedrock\"\n{BEDROCK}")).unwrap();
+        assert_eq!(c.provider_env("worker"), "AWS_REGION=us-west-2 CLAUDE_CODE_USE_BEDROCK=1 ");
+        assert_eq!(c.provider_env("sailor"), "", "untouched by [cogs]: falls back to the fleet-wide local");
+    }
+
+    #[test]
+    fn an_unknown_provider_name_fails_validation() {
+        let c: Config = toml::from_str(&format!("provider = \"bedrock\"\n{FORGE}{TRACKER}")).unwrap();
+        assert!(c.validate().is_err(), "bedrock named but no [providers.bedrock] table");
+        let c: Config = toml::from_str(&format!("{FORGE}{TRACKER}[cogs]\nworker = \"bedrock\"\n")).unwrap();
+        assert!(c.validate().is_err(), "same, via a [cogs] override");
     }
 }
