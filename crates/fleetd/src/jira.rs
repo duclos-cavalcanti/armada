@@ -48,9 +48,11 @@ impl JiraTracker {
             .collect()
     }
 
-    fn raw_page(&self, jql: &str, from: usize) -> Result<String> {
+    /// The first `PAGE` issues the JQL matches, as jira-cli prints them. Only the first: jira-cli
+    /// ignores `--paginate`'s offset and returns this page whatever it is told.
+    fn first_page(&self, jql: &str) -> Result<String> {
         let out = Command::new("jira")
-            .args(["issue", "list", "-p", &self.project, "-q", jql, "--raw", "--paginate", &format!("{from}:100")])
+            .args(["issue", "list", "-p", &self.project, "-q", jql, "--raw", "--paginate", &format!("0:{PAGE}")])
             .output_within(crate::proc::API)?;
         if !out.status.success() {
             // jira-cli fails an empty match ("No result found"): an empty page, not an error.
@@ -61,10 +63,9 @@ impl JiraTracker {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
-    /// Fetch the sprint. jira-cli caps a page at 100; most sprints fit, so we take
-    /// one page for now — multi-page pagination is a cheap refinement when needed.
+    /// Fetch the sprint: its first `PAGE` tickets, all jira-cli returns (today's sprints fit).
     fn all_issues(&self, jql: &str) -> Result<Vec<TrackerTicket>> {
-        Ok(parse_page(&self.raw_page(jql, 0)?)?.1)
+        parse_page(&self.first_page(jql)?)
     }
 
     /// Run `jira <args>` and return stdout on success (stderr on failure). The shared
@@ -256,9 +257,7 @@ impl Tracker for JiraTracker {
         let mut found = Vec::new();
         for chunk in keys.chunks(100) {
             let jql = format!("key in ({})", chunk.iter().map(|k| k.0.as_str()).collect::<Vec<_>>().join(", "));
-            let page: serde_json::Value = serde_json::from_str(&self.raw_page(&jql, 0)?)?;
-            let issues = page.get("issues").and_then(|i| i.as_array()).or_else(|| page.as_array());
-            found.extend(issues.into_iter().flatten().filter_map(|i| self.detail(i)));
+            found.extend(page_issues(&self.first_page(&jql)?)?.iter().filter_map(|i| self.detail(i)));
         }
         for key in keys {
             if !found.iter().any(|d: &TicketDetail| &d.ticket.key == key) {
@@ -329,18 +328,8 @@ impl Tracker for JiraTracker {
         self.put_issue(key, &serde_json::json!({ "fields": fields, "update": { "labels": labels } }))
     }
 
-    /// Every page of the JQL's matches, in full.
     fn search(&self, jql: &str) -> Result<Vec<TicketDetail>> {
-        let (mut found, mut from) = (Vec::new(), 0);
-        loop {
-            let page: serde_json::Value = serde_json::from_str(&self.raw_page(jql, from)?)?;
-            let issues = page.get("issues").and_then(|i| i.as_array()).or_else(|| page.as_array()).cloned().unwrap_or_default();
-            from += issues.len();
-            found.extend(issues.iter().filter_map(|i| self.detail(i)));
-            if issues.len() < 100 {
-                return Ok(found);
-            }
-        }
+        Ok(whole_page(&self.first_page(jql)?, jql)?.iter().filter_map(|i| self.detail(i)).collect())
     }
 
     fn sprint(&self, key: &TicketKey, active: bool) -> Result<()> {
@@ -569,16 +558,27 @@ fn marked(text: &str, node: &serde_json::Value) -> String {
     }
 }
 
-/// Parse one page → (raw issue count, mapped tickets). The raw count drives
-/// pagination; unknown-status issues are dropped from the mapped set.
-fn parse_page(json: &str) -> Result<(usize, Vec<TrackerTicket>)> {
-    let v: serde_json::Value = serde_json::from_str(json)?;
-    let issues = v
-        .get("issues")
-        .and_then(|i| i.as_array())
-        .or_else(|| v.as_array())
-        .context("expected {issues:[...]} (or an array) from jira")?;
-    Ok((issues.len(), issues.iter().filter_map(issue_to_ticket).collect()))
+/// The most issues jira-cli returns for one query: it never pages past the first.
+const PAGE: usize = 100;
+
+/// A page's issues: jira-cli prints `{issues:[…]}` or a bare array.
+fn page_issues(json: &str) -> Result<Vec<serde_json::Value>> {
+    let mut v: serde_json::Value = serde_json::from_str(json)?;
+    let issues = if v.is_array() { v } else { v.get_mut("issues").map(serde_json::Value::take).unwrap_or_default() };
+    serde_json::from_value(issues).context("expected {issues:[...]} (or an array) from jira")
+}
+
+/// A search's issues, all of them: a full page may not be, and jira-cli can't read past it, so
+/// the query is refused rather than its matches cut short.
+fn whole_page(json: &str, jql: &str) -> Result<Vec<serde_json::Value>> {
+    let issues = page_issues(json)?;
+    ensure!(issues.len() < PAGE, "{PAGE} or more tickets match {jql:?}, and jira-cli reads only the first {PAGE}: narrow the query");
+    Ok(issues)
+}
+
+/// Parse one page → its tickets; unknown-status issues are dropped.
+fn parse_page(json: &str) -> Result<Vec<TrackerTicket>> {
+    Ok(page_issues(json)?.iter().filter_map(issue_to_ticket).collect())
 }
 
 fn issue_to_ticket(i: &serde_json::Value) -> Option<TrackerTicket> {
@@ -765,6 +765,16 @@ mod tests {
     }
 
     #[test]
+    fn a_search_reads_one_page_and_refuses_a_full_one() {
+        let page = |n: usize| serde_json::json!({ "issues": vec![serde_json::json!({ "key": "PROJ-1" }); n] }).to_string();
+        assert_eq!(whole_page(&page(PAGE - 1), "text ~ x").unwrap().len(), PAGE - 1);
+        assert_eq!(whole_page("[]", "text ~ x").unwrap().len(), 0);
+        let full = whole_page(&page(PAGE), "text ~ x").unwrap_err().to_string();
+        assert!(full.contains("narrow the query"), "{full}");
+        assert!(page_issues(r#"{"total": 3}"#).is_err() && page_issues(r#""no""#).is_err());
+    }
+
+    #[test]
     fn markdown_becomes_jira_wiki_markup() {
         let md = "## Outcome\n\n**`neg`** works, per [the spec](https://x.io/s), *now*.\n\n- AC one\n  - nested\n\n1. first\n2. second\n\n```rust\nlet x = *y*;\n```\n\n> quoted\na * b stays";
         assert_eq!(
@@ -782,7 +792,7 @@ mod tests {
 
     #[test]
     fn parses_issues_and_maps_status() {
-        let ts = parse_page(SAMPLE).unwrap().1;
+        let ts = parse_page(SAMPLE).unwrap();
         assert_eq!(ts.len(), 2); // "Backlog" is unknown → dropped
         assert_eq!(ts[0].key, TicketKey("PROJ-6192".into()));
         assert_eq!(ts[0].status, TicketStatus::InProgress);
@@ -804,7 +814,7 @@ mod tests {
 
     #[test]
     fn maps_convoy_from_parent_and_blocked_by_from_inward_blocks_links() {
-        let ts = parse_page(LINKED).unwrap().1;
+        let ts = parse_page(LINKED).unwrap();
         let blocked = ts.iter().find(|t| t.key == TicketKey("PROJ-4160".into())).unwrap();
         assert_eq!(blocked.convoy, Some(ConvoyKey("PROJ-280".into())), "convoy = the epic (parent)");
         assert_eq!(blocked.blocked_by, vec![TicketKey("PROJ-6412".into())], "inward Blocks link = a blocker");
