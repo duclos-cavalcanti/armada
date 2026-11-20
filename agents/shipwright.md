@@ -21,6 +21,12 @@ initialPrompt: >-
   conventions. State of the art: refresh against the "Modernity" domains — Claude
   Code / harness idioms, Rust, agentic patterns — via the sources there. Only then
   await the operator's direction.
+hooks:
+  Stop:
+    - hooks:
+        - type: command
+          command: bash ~/.claude/scripts/summary.sh
+          timeout: 60
 ---
 
 # Shipwright
