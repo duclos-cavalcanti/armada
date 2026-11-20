@@ -25,6 +25,10 @@ fleetc ledger "SELECT key, status, convoy FROM tickets WHERE held = 1 AND status
 fleetc context --convoy <C> --format table   # each convoy's tickets: dispatched, cogs, ships, held
 fleetc escalations --key <KEY>     # a convoy's open cases
 fleetc plan                        # fleetd's last pass: what it planned, applied, failed
+fleetc ledger "SELECT s.ticket, s.iid, n.approved_at, n.approvals_current || '/' || n.approvals_required AS approvals,
+               n.pipeline, n.has_conflicts, n.merge_status FROM ships s JOIN ship_snapshots n ON n.ship_id = s.id
+               WHERE s.ended_at IS NULL AND s.ticket IN (SELECT ticket FROM orders)
+               AND n.approved_at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 day')"   # our MRs approved over a day ago, still open
 ```
 
 And the deadlines from the tracker: the sprint's end, and each ticket's due date where it has one
@@ -50,6 +54,12 @@ And the deadlines from the tracker: the sprint's end, and each ticket's due date
   escalated for long, a dead cog, waiting on a blocker that isn't moving, in another convoy too),
   what won't land in time, and the one action that unblocks it. A convoy with no goal has no path:
   its grooming names one (`/fleet-groom-convoy`, the admiral's).
+- **Landing.** An MR of ours approved over a day ago and still open loses time to every merge
+  that lands first: each one can conflict it, and the push that fixes that resets its approvals.
+  For each, name what holds it, from its row and `fleetc packet <KEY>`: a red pipeline (the same
+  job failing again is a flake to fix at its source), a conflict, approvals a push reset, a
+  reviewer's requested changes (`merge_status`), an open blocker (`open_blockers`), or its sailor
+  stuck; and the one action that lands it.
 - **Machinery.** fleetd up, its health light, dry-run on or off as the operator intends, and the
   last plan's failures. A fault in the kit itself is yours to fix, as any kit bug.
 
@@ -63,6 +73,7 @@ Proposals   <id> <KEY> → accept into #N | drop (<why>) | admiral (<why>)
 Anchored    <KEY> → weigh | leave | recall | decommission — <why>
 Placement   <KEY> → #N (<why>)
 At risk     <KEY> (#N) — <what's stuck> → <the unblock>
+Landing     <KEY> !<iid> approved <n>h ago — <what holds it> → <the unblock>
 Machinery   <what's off>, if anything
 Actions
   1. <exact fleetc command>
