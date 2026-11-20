@@ -90,7 +90,10 @@ both write one:
    - **the new from the routine** — a new mechanism (a wire format, a vendor, a state) is its
      own ticket, not bundled with the plumbing around it;
    - **a contract between parts deployed separately** (a message, a payload, a schema) — in
-     steps, a ticket each: both shapes accepted, the switch, the old shape removed.
+     steps, a ticket each: both shapes accepted, the switch, the old shape removed;
+   - **docs that record a decision** (a design, the decisions it settles) — their own ticket,
+     landed before the code. Docs that describe what's built (a spec's build state, user docs)
+     ship with the code, and so does a small decision made while building it.
 5. **Out of scope stated** — the edges of the work are written down.
 
 A ticket that fails one of these isn't built on guesswork: it's fixed, or anchored with the
