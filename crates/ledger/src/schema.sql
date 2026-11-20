@@ -128,7 +128,8 @@ CREATE TABLE IF NOT EXISTS ships (
     ended_at   TEXT,
     swept      TEXT,                                   -- fingerprint of the snapshot the last sailor was dispatched against
     reviewed   TEXT,                                   -- head_sha the last lookout reviewed (review cold-loop change-detector)
-    rounds     INTEGER NOT NULL DEFAULT 0 CHECK (rounds >= 0) -- sailor sweeps launched on it (a review round each)
+    rounds     INTEGER NOT NULL DEFAULT 0 CHECK (rounds >= 0), -- sailor sweeps launched on it (a review round each)
+    trials     INTEGER NOT NULL DEFAULT 0 CHECK (trials >= 0)  -- red pipelines its worker was woken on (a trial round each)
 );
 
 -- The churny forge mirror, 1:1 with a ship (PK=FK enforces one snapshot per ship).

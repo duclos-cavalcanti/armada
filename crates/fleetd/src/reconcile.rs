@@ -52,6 +52,7 @@ pub enum Action {
     Reap { ticket: String },                   // merged/terminal → end session + Jira Done
     Heal { ticket: String, kind: String },     // dead WARM session (worker/hand) → respawn in place
     Wake { ticket: String },                   // a waiting worker's blockers all merged → resume it
+    TrialsWake { ticket: String },             // a worker on trials: its MR's pipeline ended → green: up for review; red: resume it to repair
     ReviewWake { ticket: String },             // a worker in review: a lookout reviewed its head → resume it with the review
     StandDown { ticket: String, kind: String }, // dead COLD session (sailor) → end it; re-spawn on change. An admiral too
     LaunchCaptain { convoy: String },          // active convoy with a pass of work + no live captain → launch
@@ -225,6 +226,22 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
                     Liveness::Dead => Action::Heal { ticket: tkey.0.clone(), kind: "worker".into() },
                     _ => Action::Wake { ticket: tkey.0.clone() },
                 });
+            }
+            continue;
+        }
+        // A worker on TRIALS pushed and stopped while its MR's pipeline runs the tests. Once the
+        // pipeline on its head ends, fleetd takes it from there — healed first if it died meanwhile.
+        // The forge reports only the head's own pipeline (none yet, just after a push), so an
+        // earlier head's result never reads as this one's.
+        if state == Some(CogState::Worker(WorkerState::Trials)) && cog.session.anchored_at.is_none() {
+            if let Some(ship) = armada.iter().find(|s| s.ticket.as_ref() == Some(tkey) && s.ended_at.is_none()) {
+                let finished = ShipRepo::snapshot(ledger, &ship.id)?.and_then(|snap| snap.pipeline).is_some_and(|p| p.finished());
+                if finished {
+                    actions.push(match cog.liveness {
+                        Liveness::Dead => Action::Heal { ticket: tkey.0.clone(), kind: "worker".into() },
+                        _ => Action::TrialsWake { ticket: tkey.0.clone() },
+                    });
+                }
             }
             continue;
         }
@@ -678,6 +695,7 @@ pub struct Levers {
     pub lookouts: i64,
     pub self_lookouts: i64,
     pub review_rounds: u64,
+    pub trial_rounds: u64,
     /// How long an MR's review threads must hold still before a sailor answers them.
     pub review_settle_secs: u64,
     /// The operator's rulings a ticket may need, since it was last weighed, before its sailors stop.
@@ -765,6 +783,7 @@ fn execute<T: Tracker + ?Sized, H: SessionHost, F: Forge + ?Sized>(
         Action::Reap { ticket } => reap(ledger, tracker, host, project, ticket),
         Action::Heal { ticket, kind } => heal(ledger, host, ticket, kind, &levers.provider_env(kind)),
         Action::Wake { ticket } => wake(ledger, host, ticket),
+        Action::TrialsWake { ticket } => trials_wake(ledger, forge, host, ticket, levers.trial_rounds),
         Action::ReviewWake { ticket } => review_wake(ledger, forge, host, ticket, levers.review_rounds),
         Action::StandDown { ticket, kind } => stand_down(ledger, host, ticket, kind),
         Action::LaunchCaptain { convoy } => launch_captain(ledger, host, project, convoy, levers.assess_skill.as_deref(), &levers.provider_env("captain")),
@@ -1102,7 +1121,55 @@ fn wake<H: SessionHost>(ledger: &Ledger, host: &H, ticket: &str) -> Result<()> {
     })
 }
 
-const WAKE_MSG: &str = "⚓ your blockers merged — /fleet-rechart onto your target, re-run the tests, push, then report review.";
+const WAKE_MSG: &str = "⚓ your blockers merged — /fleet-rechart onto your target, push, then report trials.";
+
+/// TrialsWake — the pipeline on a worker's MR head ended. Green: its MR goes up for review (the
+/// worker sleeps on as `review`, and a lookout launches on the head). Red: the worker is woken to
+/// repair it; at the `rounds`th red pipeline, to escalate instead. Fresh-polls the ship first: a
+/// push since started a new pipeline, so no wake.
+fn trials_wake<H: SessionHost, F: Forge + ?Sized>(
+    ledger: &Ledger,
+    forge: &F,
+    host: &H,
+    ticket: &str,
+    rounds: u64,
+) -> Result<()> {
+    let tkey = TicketKey(ticket.to_string());
+    let session = SessionRepo::for_ticket(ledger, &tkey)?
+        .into_iter()
+        .find(|s| s.kind == CrewKind::Worker && s.ended_at.is_none())
+        .ok_or_else(|| anyhow!("trials wake {ticket}: no live worker"))?;
+    let ship = ledger
+        .armada()?
+        .into_iter()
+        .find(|s| s.ticket.as_ref() == Some(&tkey) && s.ended_at.is_none())
+        .ok_or_else(|| anyhow!("trials wake {ticket}: no open ship"))?;
+    let snap = fresh_snapshot(ledger, forge, &ship)?;
+    let Some(pipeline) = snap.pipeline.filter(|p| p.finished()) else {
+        return Ok(()); // a push since: its pipeline still runs
+    };
+    let (iid, head) = (ship.iid, &snap.head_sha[..snap.head_sha.len().min(8)]);
+    let (state, last_action) = if pipeline.passed() {
+        (WorkerState::Review, format!("pipeline passed at {head}: up for review"))
+    } else {
+        let round = ship.trials + 1;
+        let verdict = pipeline.as_str();
+        let msg = if round >= rounds {
+            format!("⚓ the pipeline on !{iid} {verdict} at {head}, red round {round}, the last of {rounds} — escalate with it.")
+        } else {
+            format!("⚓ the pipeline on !{iid} {verdict} at {head} (red round {round} of {rounds}) — /fleet-repair it, push, then report trials.")
+        };
+        host.send(&session.tmux_session, &msg)?;
+        ShipRepo::count_trial(ledger, &ship.id)?;
+        (WorkerState::Implementing, format!("woken: pipeline {verdict} at {head} (red round {round})"))
+    };
+    ledger.record(&Report {
+        session: session.id,
+        state: CogState::Worker(state),
+        last_action: Some(last_action),
+        reported_at: now_rfc3339(),
+    })
+}
 
 /// ReviewWake — a lookout reviewed a worker's MR at its head and stood down: resume the worker with
 /// the review. Fresh-polls the ship first: a head that moved since (a push after `review`) isn't the
@@ -1136,7 +1203,7 @@ fn review_wake<H: SessionHost, F: Forge + ?Sized>(
     } else if round >= rounds {
         format!("⚓ review round {round} on !{iid} still has {open} open threads, the last of {rounds} rounds — escalate with them.")
     } else {
-        format!("⚓ review round {round} posted on !{iid}: {open} open threads — answer them with /fleet-parley, push, then report review.")
+        format!("⚓ review round {round} posted on !{iid}: {open} open threads — answer them with /fleet-parley, push, then report trials.")
     };
     host.send(&session.tmux_session, &msg)?;
     ledger.record(&Report {
@@ -1641,6 +1708,7 @@ mod tests {
         lookouts: 1,
         self_lookouts: -1,
         review_rounds: 5,
+        trial_rounds: 5,
         review_settle_secs: 0,
         max_rulings: 6,
         review_skill: None,
@@ -1660,6 +1728,7 @@ mod tests {
         lookouts: 1,
         self_lookouts: -1,
         review_rounds: 5,
+        trial_rounds: 5,
         review_settle_secs: 0,
         max_rulings: 6,
         review_skill: None,
@@ -1782,7 +1851,7 @@ mod tests {
                 ended_at: None,
                 swept: None,
                 reviewed: None,
-                rounds: 0,
+                rounds: 0, trials: 0,
             },
         )
         .unwrap();
@@ -1834,7 +1903,7 @@ mod tests {
                 ended_at: None,
                 swept: None,
                 reviewed: None,
-                rounds: 0,
+                rounds: 0, trials: 0,
             },
         )
         .unwrap();
@@ -3154,6 +3223,97 @@ mod tests {
             [Action::Heal { ticket: "PROJ-1".into(), kind: "worker".into() }],
             "dead: healed first, woken next tick"
         );
+    }
+
+    // ── trials: the pipeline tests a worker's head ─────────────────────────────────
+
+    /// A worker on `key` on `trials`, its draft MR (`iid`) open, the pipeline on its head `pipeline`.
+    fn worker_on_trials(db: &Ledger, key: &str, iid: i64, pipeline: Option<PipelineStatus>) -> Cog {
+        let cog = worker_in_review(db, key, iid, Liveness::Quiet);
+        report(db, &cog, CogState::Worker(WorkerState::Trials));
+        pipeline_on(db, iid, pipeline);
+        cog
+    }
+
+    /// The pipeline the forge reports on ship `iid`'s head.
+    fn pipeline_on(db: &Ledger, iid: i64, pipeline: Option<PipelineStatus>) {
+        let s = db.armada().unwrap().into_iter().find(|s| s.iid == iid).unwrap();
+        let snap = ShipRepo::snapshot(db, &s.id).unwrap().unwrap();
+        db.sync_snapshot(&ShipSnapshot { pipeline, ..snap }).unwrap();
+    }
+
+    #[test]
+    fn a_worker_on_trials_is_woken_once_its_pipeline_ends_or_healed_if_dead() {
+        let db = db();
+        let wake = Action::TrialsWake { ticket: "PROJ-1".into() };
+        let wakes = |cogs: &[Cog]| plan(&db, cogs, true, &Levers { lookouts: 0, ..LIVE }).unwrap().contains(&wake);
+        let w = worker_on_trials(&db, "PROJ-1", 7, None);
+        assert!(!wakes(std::slice::from_ref(&w)), "no pipeline on its head yet");
+        pipeline_on(&db, 7, Some(PipelineStatus::Running));
+        assert!(!wakes(std::slice::from_ref(&w)), "still running");
+        assert!(!launched(plan(&db, std::slice::from_ref(&w), true, &LIVE).unwrap()).contains(&7), "untested: no lookout");
+        for ended in [PipelineStatus::Success, PipelineStatus::Failed, PipelineStatus::Canceled, PipelineStatus::Manual] {
+            pipeline_on(&db, 7, Some(ended));
+            assert!(wakes(std::slice::from_ref(&w)), "{ended:?}: it ended");
+        }
+        let dead = Cog { liveness: Liveness::Dead, ..w };
+        assert_eq!(
+            plan(&db, &[dead], true, &Levers { lookouts: 0, ..LIVE }).unwrap(),
+            [Action::Heal { ticket: "PROJ-1".into(), kind: "worker".into() }],
+            "dead: healed first, woken next tick"
+        );
+    }
+
+    #[test]
+    fn a_green_pipeline_puts_the_mr_up_for_review_and_a_red_one_wakes_the_worker_to_repair_it() {
+        let db = db();
+        let w = worker_on_trials(&db, "PROJ-1", 7, Some(PipelineStatus::Success));
+        let (forge, host) = (FakeForge::new(), FakeHost::new());
+        let fresh = |pipeline| ForgeShip {
+            iid: 7,
+            url: "u".into(),
+            target: "master".into(),
+            source: String::new(),
+            pilot: "p".into(),
+            ticket: None,
+            title: "T".into(),
+            state: ShipState::Draft,
+            head_sha: "0123456789abcdef".into(),
+            has_conflicts: false,
+            open_threads: 0,
+            total_threads: 0,
+            approvals: Approvals { current: 0, required: 0 },
+            armed: false,
+            on_merge_train: false,
+            blocked_by: vec![],
+            pipeline,
+            merge_status: None,
+        };
+        let state = || ReportRepo::latest(&db, &w.session.id).unwrap().unwrap().state;
+        let woke = |pipeline, rounds| {
+            host.sent.borrow_mut().clear();
+            *forge.snapshot.borrow_mut() = Some(fresh(pipeline));
+            trials_wake(&db, &forge, &host, "PROJ-1", rounds).unwrap();
+            host.sent.borrow().first().map(|(_, text)| text.clone())
+        };
+
+        assert_eq!(woke(Some(PipelineStatus::Running), 5), None, "a push since: its pipeline still runs");
+        assert_eq!(state(), CogState::Worker(WorkerState::Trials));
+
+        assert_eq!(woke(Some(PipelineStatus::Success), 5), None, "green: the worker sleeps on");
+        assert_eq!(state(), CogState::Worker(WorkerState::Review), "green: up for review");
+        assert_eq!(launched(plan(&db, std::slice::from_ref(&w), true, &LIVE).unwrap()), [7], "a lookout on the tested head");
+
+        report(&db, &w, CogState::Worker(WorkerState::Trials));
+        let text = woke(Some(PipelineStatus::Failed), 2).unwrap();
+        assert!(text.contains("failed at 01234567") && text.contains("red round 1 of 2") && text.contains("/fleet-repair"), "{text}");
+        assert_eq!(state(), CogState::Worker(WorkerState::Implementing), "woken: no second wake");
+
+        report(&db, &w, CogState::Worker(WorkerState::Trials));
+        let text = woke(Some(PipelineStatus::Canceled), 2).unwrap();
+        assert!(text.contains("canceled") && text.contains("the last of 2") && text.contains("escalate"), "{text}");
+        let trials = db.armada().unwrap().into_iter().find(|s| s.iid == 7).unwrap().trials;
+        assert_eq!(trials, 2, "each red pipeline is a trial round");
     }
 
     #[test]

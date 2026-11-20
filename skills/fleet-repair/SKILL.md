@@ -63,5 +63,5 @@ it produces.
 
 When the failure is unclassifiable, needs a design decision, or a fix would leave the
 ticket's scope: report the failed job, its log excerpt, your classification attempt, and
-why a fix exceeds scope, in your response. Then exit non-zero; the caller (the sailor)
-escalates.
+why a fix exceeds scope, in your response. Then exit non-zero; the caller (a sailor, or a
+worker on trials) escalates.

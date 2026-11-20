@@ -156,6 +156,16 @@ pub fn current_branch(path: &str) -> Option<String> {
         .filter(|b| !b.is_empty())
 }
 
+/// The commit checked out in the worktree at `path`; `None` if not a git work tree.
+pub fn head(path: &str) -> Option<String> {
+    Command::new("git")
+        .args(["-C", path, "rev-parse", "HEAD"])
+        .output_within(crate::proc::GIT)
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

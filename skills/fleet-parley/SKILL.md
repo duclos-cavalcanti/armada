@@ -1,5 +1,5 @@
 ---
-description: Answer the open review threads on the ticket's MR — treat each finding as false until you prove it against the code, docs and a run, then fix it your way (its remedy tested against every case), propose it when no AC of the ticket needs it, send a fix that's a ticket edit to that ticket, or push back with the evidence; escalate a finding that keeps coming back, and a ratified design re-opened once for the design; defer nits to one follow-up ticket; reply, resolve — through `fleetc review` / `fleetc reply` (forge-neutral). Count-gated, and surfaces floating review notes before declaring the MR clean.
+description: Answer the open review threads on the ticket's MR — treat each finding as false until you prove it against the code, docs and CI, then fix it your way (its remedy checked against every case), propose it when no AC of the ticket needs it, send a fix that's a ticket edit to that ticket, or push back with the evidence; escalate a finding that keeps coming back, and a ratified design re-opened once for the design; defer nits to one follow-up ticket; reply, resolve — through `fleetc review` / `fleetc reply` (forge-neutral). Count-gated, and surfaces floating review notes before declaring the MR clean.
 argument-hint:
 ---
 
@@ -48,7 +48,8 @@ Treat every finding as **false until you prove it** against the ground truth:
 - **the code** — at your HEAD and on `origin/HEAD`: read it, grep it, trace the path it names;
 - **the docs** — the project's design records, doctrine and specs on `origin/HEAD`;
 - **the ticket** (`fleetc ticket`) — its acceptance criteria and its *Out of scope*;
-- **a run** — where the claim is testable, a test or command you execute.
+- **a run** — a command you execute (a grep, a build), or the pipeline's test run on your head
+  (`fleetc ci`). Never run the tests yourself: the pipeline does.
 
 Keep the evidence either way: `file:line`, the doc §, the command and what it printed.
 
@@ -91,7 +92,7 @@ Then classify each proven finding — the first that fires wins:
 5. **Apply** — the fix is yours, held to the same proof as the finding:
    - **Prove the remedy.** A reviewer's suggested fix or text is a second claim, and it can be
      wrong where the finding was right. Never paste it: write the fix from your own reading, and
-     prove every statement your fix makes as you proved the finding. Test the remedy, the
+     prove every statement your fix makes as you proved the finding. Check the remedy, the
      reviewer's or yours, against **every case** the rule or text covers, not just the one
      reported, and list the cases in the reply. **Right problem, wrong remedy**: "Right problem;
      your remedy fails <case> (<file:line>). Applied <X> instead."
@@ -119,8 +120,8 @@ back. Nothing is "ticketed for later" otherwise.
 
 ## Step 2 — Fix, verify, push
 
-Only once every thread is settled (Step 1) and every fix is in the worktree: run the tests,
-then commit and push **once**, never per thread. After a rebase, push with
+Only once every thread is settled (Step 1) and every fix is in the worktree: commit and push
+**once**, never per thread; the pipeline runs the tests on it. After a rebase, push with
 `--force-with-lease`, never plain `--force`.
 
 ## Step 3 — Reply and resolve
@@ -168,7 +169,7 @@ printf '%s' "$REVIEW" | jq -r '.floating_notes[] | "  floating-note [\(.created_
 |---|---|---|
 | Every thread handled, fixes pushed | the `OPEN=N REVIEW_NOTES=M` line above | 0 |
 | An escalation | report the thread, what it asks, and the ruling it needs, in your response | 1 |
-| Tests fail or the push is refused | report the error in your response | 1 |
+| The push is refused | report the error in your response | 1 |
 
 The caller (the sailor) reads `OPEN` (the merge-blocking threads) and `REVIEW_NOTES` (read
 them before treating the MR as clean), and escalates on exit 1.

@@ -98,3 +98,14 @@ Accepted edge cases: understood, not fixed, each with its workaround.
   (`fleetc ticket <KEY>`, and its MRs). Triage's pace check names a convoy ticket that's stuck.
   *Fix if it bites:* put `own` (scheduler.rs) in front of each of those verbs, on the ticket acted
   on (not a `--by` / `--to` one), and have sync flag a convoy ticket a teammate takes.
+
+- **A worker on trials waits for a pipeline that may never come.**
+  *Scenario:* a worker reports `trials` and sleeps until the pipeline on its MR's head ends. Two
+  cases never end it: (1) a project with no CI, whose MRs get no pipeline at all; (2) a pipeline
+  that hangs in `running` (a stuck runner, a job waiting on a resource). Either way the worker
+  sleeps on, and nothing reports it.
+  *Workaround:* the dashboard shows the worker on `trials`. Check its MR's pipeline
+  (`fleetc ci`): retry or cancel a stuck one on the forge (an ended pipeline wakes the worker), or
+  `fleetc send` the worker on. A project with no CI can't run workers until it has a pipeline.
+  *Fix if it bites:* a deadline on trials. Past it, reconcile wakes the worker to check the pipeline
+  or escalate.

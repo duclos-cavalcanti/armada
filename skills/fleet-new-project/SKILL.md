@@ -91,6 +91,7 @@ admirals           = 3
 lookouts           = 3
 self_lookouts      = -1                # lookouts on our own MRs, apart from the allies': -1 = no cap
 review_rounds      = 5
+trial_rounds       = 5                 # red pipelines a worker repairs on its MR before it escalates
 review_settle_secs = 300               # how long an MR's review threads hold still before a sailor answers them
 max_rulings        = 6                 # the operator's rulings a ticket may need, since last weighed, before it's anchored + escalated
 # review_skill     = "<name>"          # the project's own review skill; unset = /fleet-review

@@ -307,6 +307,8 @@ const MIGRATIONS: &[&str] = &[
     // v15: when an MR was first fully approved, so a push that resets its approvals keeps the bar.
     "ALTER TABLE ship_snapshots ADD COLUMN approved_at TEXT;
     UPDATE ship_snapshots SET approved_at = synced_at WHERE approvals_current > 0 AND approvals_current >= approvals_required;",
+    // v16: a ship's trial rounds (red pipelines its worker was woken on), so the worker escalates at the cap.
+    "ALTER TABLE ships ADD COLUMN trials INTEGER NOT NULL DEFAULT 0 CHECK (trials >= 0);",
 ];
 
 /// The ledger's schema version (SQLite `user_version`): one past its last migration.
@@ -808,7 +810,7 @@ mod tests {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; \
-             ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; ALTER TABLE ship_snapshots DROP COLUMN approved_at; PRAGMA user_version = 1;",
+             ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; ALTER TABLE ship_snapshots DROP COLUMN approved_at; ALTER TABLE ships DROP COLUMN trials; PRAGMA user_version = 1;",
         )
         .unwrap();
         drop(conn);
@@ -832,7 +834,7 @@ mod tests {
         drop(Ledger::open(&path).unwrap());
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; ALTER TABLE ship_snapshots DROP COLUMN approved_at;
+            "DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; ALTER TABLE ship_snapshots DROP COLUMN approved_at; ALTER TABLE ships DROP COLUMN trials;
              INSERT INTO convoys(key, created_at) VALUES ('PROJ-9', 't2'), ('PROJ-5', 't1'), ('PROJ-7', 't3');
              PRAGMA user_version = 10;",
         )
@@ -856,7 +858,7 @@ mod tests {
         let ship = |iid, current| {
             let s = Ship {
                 id: ShipId(0), ticket: None, iid, url: "u".into(), target: "master".into(), source: String::new(),
-                pilot: "ally".into(), created_at: "t".into(), ended_at: None, swept: None, reviewed: None, rounds: 0,
+                pilot: "ally".into(), created_at: "t".into(), ended_at: None, swept: None, reviewed: None, rounds: 0, trials: 0,
             };
             let id = ShipRepo::upsert(&db, &s).unwrap();
             db.sync_snapshot(&ShipSnapshot {
@@ -870,7 +872,7 @@ mod tests {
         let (approved, unapproved) = (ship(1, 1), ship(2, 0));
         drop(db);
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch("ALTER TABLE ship_snapshots DROP COLUMN approved_at; PRAGMA user_version = 14;").unwrap();
+        conn.execute_batch("ALTER TABLE ship_snapshots DROP COLUMN approved_at; ALTER TABLE ships DROP COLUMN trials; PRAGMA user_version = 14;").unwrap();
         drop(conn);
 
         let db = Ledger::open(&path).unwrap();
@@ -890,7 +892,7 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO convoys(key, created_at) VALUES ('PROJ-100', 't1');
              INSERT INTO convoy_plans(convoy, body, updated_at) VALUES ('PROJ-100', 'ship the seed', 't2');
-             ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; ALTER TABLE ship_snapshots DROP COLUMN approved_at; PRAGMA user_version = 7;",
+             ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; ALTER TABLE ship_snapshots DROP COLUMN approved_at; ALTER TABLE ships DROP COLUMN trials; PRAGMA user_version = 7;",
         )
         .unwrap();
         drop(conn);
@@ -917,7 +919,7 @@ mod tests {
         // Back to v4: the same rebuild, without the admiral kind.
         let v4 = MIGRATIONS[3].replace(",'admiral'", ""); // v5's rebuild
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; ALTER TABLE ship_snapshots DROP COLUMN approved_at; PRAGMA user_version = 4;"))
+        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; ALTER TABLE ship_snapshots DROP COLUMN approved_at; ALTER TABLE ships DROP COLUMN trials; PRAGMA user_version = 4;"))
             .unwrap();
         drop(conn);
 
@@ -1434,6 +1436,7 @@ fn row_to_ship(r: &rusqlite::Row) -> rusqlite::Result<Ship> {
         swept: r.get("swept")?,
         reviewed: r.get("reviewed")?,
         rounds: r.get("rounds")?,
+        trials: r.get("trials")?,
     })
 }
 
@@ -1573,6 +1576,11 @@ impl ShipRepo for Ledger {
 
     fn count_round(&self, id: &ShipId) -> Result<()> {
         self.conn.execute("UPDATE ships SET rounds = rounds + 1 WHERE id = ?1", params![id.0])?;
+        Ok(())
+    }
+
+    fn count_trial(&self, id: &ShipId) -> Result<()> {
+        self.conn.execute("UPDATE ships SET trials = trials + 1 WHERE id = ?1", params![id.0])?;
         Ok(())
     }
 
@@ -2375,7 +2383,7 @@ mod repo_tests {
             ended_at: None,
             swept: None,
             reviewed: None,
-            rounds: 0,
+            rounds: 0, trials: 0,
         };
         let id = ShipRepo::upsert(&db, &ship).unwrap();
         assert_eq!(db.armada().unwrap().len(), 1);
@@ -2420,7 +2428,7 @@ mod repo_tests {
             target: "master".into(), source: String::new(), pilot: "ally".into(), created_at: "t".into(), ended_at: None,
             swept: None,
             reviewed: None,
-            rounds: 0,
+            rounds: 0, trials: 0,
         };
         ShipRepo::upsert(&db, &ally).unwrap();
         assert_eq!(db.armada().unwrap().len(), 2);
@@ -2661,7 +2669,7 @@ mod repo_tests {
             format!("INSERT INTO inspections(session_id, reported_at, verdict, body, inspected_at) VALUES ({}, '{at}', '{v}', 'b', '{at}9');", s.0)
         };
         conn.execute_batch(&format!(
-            "DELETE FROM cases; DROP INDEX one_open_case; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; ALTER TABLE ship_snapshots DROP COLUMN approved_at; DROP TABLE cases;
+            "DELETE FROM cases; DROP INDEX one_open_case; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; ALTER TABLE ship_snapshots DROP COLUMN approved_at; ALTER TABLE ships DROP COLUMN trials; DROP TABLE cases;
              {} {} {} {} {} {} {}
              INSERT INTO reports(session_id, state, last_action, reported_at) VALUES ({}, 'escalated', 'Y?', 't3'), ({}, 'escalated', 'Z?', 't4');
              PRAGMA user_version = 8;",

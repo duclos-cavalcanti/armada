@@ -808,7 +808,7 @@ fn state_style(state: &str) -> Style {
         "escalated" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         "flagged" => yellow().add_modifier(Modifier::BOLD),
         "triage" | "ruled" => Style::default().fg(Color::Cyan),
-        "review" => Style::default().fg(Color::Blue),
+        "trials" | "review" => Style::default().fg(Color::Blue),
         "anchored" => Style::default().fg(Color::Magenta),
         "started" | "implementing" | "sailing" | "analyzing" | "concluded" | "merged" => green(),
         "sleeping" | "waiting" | "awaiting" | "unmanned" | "done" | "·" => dim(),

@@ -112,12 +112,14 @@ pub enum HealthStatus { Ok, Warn, Fail, Unset }
 // write (the enum IS the lint — a worker can't report a sailor state). Stored as the
 // string form; reconcile reads it back and reacts.
 
-/// A worker's lifecycle while it builds the ship. `waiting`: done, but a blocker hasn't merged —
-/// it can't conclude until fleetd wakes it. `review`: its MR is pushed for a lookout to review —
-/// it waits until fleetd wakes it with the review.
+/// A worker's lifecycle while it builds the ship. `trials`: it pushed, and its MR's pipeline runs
+/// the tests — it waits until the pipeline ends: green, fleetd puts the MR up for `review`; red,
+/// fleetd wakes it to repair it. `review`: a lookout reviews its head — it waits until fleetd wakes
+/// it with the review. `waiting`: done, but a blocker hasn't merged — it can't conclude until
+/// fleetd wakes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum WorkerState { Started, Implementing, Review, Waiting, Concluded, Escalated, Anchored }
+pub enum WorkerState { Started, Implementing, Trials, Review, Waiting, Concluded, Escalated, Anchored }
 
 /// What a sailor reports: its sweep is done (`sleeping`), or it holds for the operator (`escalated`,
 /// `anchored`). Working, it reports nothing — fleetd sees the MR itself.
@@ -427,6 +429,8 @@ pub struct Ship {
     /// The `head_sha` the last lookout reviewed (the review cold-loop change-detector).
     /// `None` = never reviewed → the first review always fires.
     pub reviewed: Option<String>,
+    /// Red pipelines its worker was woken on (trial rounds): at `trial_rounds`, it escalates.
+    pub trials: u64,
     /// Sailor sweeps launched on it — a review round each. At 10 its sailor escalates.
     #[serde(default)]
     pub rounds: i64,
@@ -1063,6 +1067,7 @@ impl WorkerState {
         match self {
             WorkerState::Started => "started",
             WorkerState::Implementing => "implementing",
+            WorkerState::Trials => "trials",
             WorkerState::Review => "review",
             WorkerState::Waiting => "waiting",
             WorkerState::Concluded => "concluded",
@@ -1074,6 +1079,7 @@ impl WorkerState {
         match s {
             "started" => Some(Self::Started),
             "implementing" => Some(Self::Implementing),
+            "trials" => Some(Self::Trials),
             "review" => Some(Self::Review),
             "waiting" => Some(Self::Waiting),
             "concluded" => Some(Self::Concluded),
@@ -1231,13 +1237,13 @@ impl CogState {
                 | CogState::Admiral(AdmiralState::Escalated)
         )
     }
-    /// A DELIBERATE non-terminal hold (a wait on blockers or on a review, an anchor).
+    /// A DELIBERATE non-terminal hold (a wait on blockers, a pipeline or a review, an anchor).
     /// reconcile must not heal or stand down a cog reporting this even when its liveness is Dead —
     /// it stopped on purpose. An escalation isn't one: a dead escalated cog is healed in place.
     pub fn is_paused(&self) -> bool {
         matches!(
             self,
-            CogState::Worker(WorkerState::Review | WorkerState::Waiting | WorkerState::Anchored)
+            CogState::Worker(WorkerState::Trials | WorkerState::Review | WorkerState::Waiting | WorkerState::Anchored)
                 | CogState::Sailor(SailorState::Anchored)
                 | CogState::Hand(HandState::Anchored)
         )
@@ -1297,6 +1303,14 @@ impl ShipState {
 }
 
 impl PipelineStatus {
+    /// It has stopped: passed, failed, canceled, or held on a manual job.
+    pub fn finished(&self) -> bool {
+        *self != PipelineStatus::Running
+    }
+    /// It passed: every job that runs on its own went green (`manual`: only manual ones are left).
+    pub fn passed(&self) -> bool {
+        matches!(self, PipelineStatus::Success | PipelineStatus::Manual)
+    }
     pub fn as_str(&self) -> &'static str {
         match self {
             PipelineStatus::Running => "running",

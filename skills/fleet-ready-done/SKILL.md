@@ -104,7 +104,9 @@ reason (`fleetc anchor <KEY> --reason "<what's missing>"`).
 ## Done — before a ticket is concluded
 
 1. **Every acceptance criterion met, each proven** — by a test, or by a verification
-   stated in the MR. Believed-done isn't done.
+   stated in the MR. Believed-done isn't done. Tests run in the MR's pipeline, never on a
+   cog's machine, which builds only the code (crates, binaries), never an image the pipeline
+   builds.
 2. **Tests ship in the same MR** as the change they cover.
 3. **Review reaches nits only** — every finding above a nit is fixed or answered. For a
    worker, that's the lookout's review of the MR's head: an independent reviewer, never the

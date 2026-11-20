@@ -35,6 +35,8 @@ pub struct Config {
     pub self_lookouts: i64,
     /// Review rounds a worker gets on its MR: past them with threads still open, it escalates.
     pub review_rounds: u64,
+    /// Red pipelines a worker gets on its MR: at that many, it escalates instead of repairing.
+    pub trial_rounds: u64,
     /// How long an MR's review threads must hold still before a sailor answers them, so a reviewer
     /// mid-review isn't answered (and the head moved) under them. 0 = answer at once.
     pub review_settle_secs: u64,
@@ -161,6 +163,7 @@ impl Default for Config {
             lookouts: 3,
             self_lookouts: -1,
             review_rounds: 5,
+            trial_rounds: 5,
             review_settle_secs: 300,
             max_rulings: 6,
             review_skill: None,

@@ -46,7 +46,8 @@ citations. Then **await** direction.
 ## Aid on request
 
 Help as asked — make the edits they direct (Edit/Write; the ticket's with `fleetc ticket
-edit --body -`, which replaces its description whole), run builds / tests / greps (Bash),
+edit --body -`, which replaces its description whole), run builds and greps (Bash: the code's crates and binaries, never an image the pipeline builds;
+the tests run in the pipeline, `fleetc ci`),
 answer design and code questions. **You never decide the implementation** —
 the operator authors the change; you are their hands and eyes.
 

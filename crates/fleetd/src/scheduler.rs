@@ -198,6 +198,7 @@ pub fn run(
                 lookouts: settings::lookouts(&cfg, &ledger),
                 self_lookouts: settings::self_lookouts(&cfg, &ledger),
                 review_rounds: settings::review_rounds(&cfg, &ledger),
+                trial_rounds: settings::trial_rounds(&cfg, &ledger),
                 review_settle_secs: settings::review_settle_secs(&cfg, &ledger),
                 max_rulings: settings::max_rulings(&cfg, &ledger),
                 review_skill: cfg.review_skill.clone(),
@@ -1418,19 +1419,33 @@ fn record_status(
             bail!("{} has an open MR — yield it to a sailor (/fleet-yield), not done", ticket.0);
         }
     }
-    // A worker's MR goes up for review, and concludes only reviewed: a lookout reviewed its current
-    // head, no lookout is still on it, and no thread is open. Fresh-polled, so a push just made
-    // counts: `review` records the head the lookout will review.
-    if let (CogState::Worker(s @ (WorkerState::Review | WorkerState::Concluded)), ControlTarget::Cog { ticket, .. }) = (state, target) {
+    // A worker's MR goes up for review only from trials: fleetd moves it once the pipeline on its
+    // head passes, so the lookout reviews tested code.
+    anyhow::ensure!(
+        state != CogState::Worker(WorkerState::Review),
+        "a worker reports trials, not review: once the pipeline on your MR's head passes, fleetd puts it up for review"
+    );
+    // A worker goes on trials with its pushed head, and concludes only reviewed: a lookout reviewed
+    // its current head, no lookout is still on it, and no thread is open. Fresh-polled, so a push
+    // just made counts.
+    if let (CogState::Worker(s @ (WorkerState::Trials | WorkerState::Concluded)), ControlTarget::Cog { ticket, .. }) = (state, target) {
         let ship = open_ship(ledger, ticket)?
-            .ok_or_else(|| anyhow!("{} has no open MR — open its draft first (/fleet-launch)", ticket.0))?;
+            .ok_or_else(|| anyhow!("{} has no open MR — open its draft first (/fleet-launch --draft)", ticket.0))?;
         let snap = reconcile::fresh_snapshot(ledger, forge, &ship)?;
+        if s == WorkerState::Trials {
+            let (iid, at) = (ship.iid, &snap.head_sha);
+            let local = crate::git::head(&session.worktree_path).unwrap_or_default();
+            anyhow::ensure!(
+                &local == at,
+                "!{iid}'s head is {at}, not your HEAD {local}: push it, then report trials (a push just made may take a moment to reach the MR)"
+            );
+        }
         if s == WorkerState::Concluded {
             let iid = ship.iid;
             let reviewed = ship.reviewed.as_deref() == Some(snap.head_sha.as_str()) && !reconcile::lookout_on(ledger, &ship.id)?;
-            anyhow::ensure!(reviewed, "!{iid} isn't reviewed at its head — report review, and conclude once the lookout's review is clean");
+            anyhow::ensure!(reviewed, "!{iid} isn't reviewed at its head — report trials, and conclude once the lookout's review is clean");
             let open = snap.open_threads;
-            anyhow::ensure!(open == 0, "!{iid} has {open} open review threads — answer them (/fleet-parley), then report review");
+            anyhow::ensure!(open == 0, "!{iid} has {open} open review threads — answer them (/fleet-parley), then report trials");
         }
     }
     let before = ledger.open_case(&session.id)?.map(|c| c.id);
@@ -1548,6 +1563,7 @@ mod tests {
         lookouts: 1,
         self_lookouts: -1,
         review_rounds: 5,
+        trial_rounds: 5,
         review_settle_secs: 0,
         max_rulings: 6,
         review_skill: None,
@@ -1574,6 +1590,7 @@ mod tests {
         state: Option<ShipState>, // what `snapshot` reports (None: Open)
         threads: i64,             // the open review threads `snapshot` reports
         paths: Vec<(i64, Vec<String>)>, // what `changed_paths` reports
+        head: Option<String>,     // the head `snapshot` reports (None: "sha")
     }
     impl Forge for FakeForge {
         fn preflight(&self) -> Result<String> {
@@ -1603,7 +1620,7 @@ mod tests {
                 ticket: None,
                 title: "T".into(),
                 state,
-                head_sha: "sha".into(),
+                head_sha: self.head.clone().unwrap_or_else(|| "sha".into()),
                 has_conflicts: false,
                 open_threads: self.threads,
                 total_threads: 0,
@@ -2027,7 +2044,7 @@ mod tests {
                 ended_at: None,
                 swept: None,
                 reviewed: None,
-                rounds: 0,
+                rounds: 0, trials: 0,
             },
         )
         .unwrap()
@@ -2083,7 +2100,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
-            rounds: 0,
+            rounds: 0, trials: 0,
         };
         ShipRepo::upsert(&db, &ally).unwrap();
         let p = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -2101,6 +2118,41 @@ mod tests {
         assert!(c.tickets[1].iid.is_none() && c.tickets[1].shared_paths.is_empty(), "no MR: nothing shared, only its text");
         assert!(c.tickets.iter().all(|t| t.text.is_some()), "each with its text");
         assert!(crate::crossings::crossings(&db, &tracker, &forge, 77, true).unwrap().tickets.iter().all(|t| t.text.is_none()), "brief");
+    }
+
+    #[test]
+    fn a_worker_goes_on_trials_at_its_pushed_head_and_never_reports_review() {
+        let (dir, checkout, sha) = crate::git::fixture::checkout("trials", &[]);
+        let db = Ledger::in_memory().unwrap();
+        sync::sync_board(&db, &FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]), "now").unwrap();
+        let key = TicketKey("PROJ-1".into());
+        let worker = Session {
+            id: SessionId(0),
+            kind: CrewKind::Worker,
+            ticket: Some(key.clone()),
+            convoy: None,
+            worktree_path: checkout,
+            tmux_session: "worker-PROJ-1".into(),
+            harness_session_id: None,
+            created_at: "t".into(),
+            ended_at: None,
+            anchored_at: None,
+            ship: None,
+        };
+        SessionRepo::start(&db, &worker).unwrap().expect("session start");
+        let me = ControlTarget::Cog { cog: CrewKind::Worker, ticket: key.clone() };
+        let (trials, review) = (CogState::Worker(WorkerState::Trials), CogState::Worker(WorkerState::Review));
+        let pushed = FakeForge { head: Some(sha.clone()), ..Default::default() };
+
+        let e = record_status(&db, &pushed, &me, review, None).unwrap_err().to_string();
+        assert!(e.contains("reports trials"), "review is fleetd's to record: {e}");
+        let e = record_status(&db, &pushed, &me, trials, None).unwrap_err().to_string();
+        assert!(e.contains("no open MR"), "trials needs the draft: {e}");
+        our_ship(&db, "PROJ-1", 7);
+        let e = record_status(&db, &FakeForge::default(), &me, trials, None).unwrap_err().to_string();
+        assert!(e.contains("push it"), "the MR's head isn't the worktree's: {e}");
+        record_status(&db, &pushed, &me, trials, None).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -2123,13 +2175,12 @@ mod tests {
         };
         SessionRepo::start(&db, &worker).unwrap().expect("session start");
         let me = ControlTarget::Cog { cog: CrewKind::Worker, ticket: key.clone() };
-        let (review, concluded) = (CogState::Worker(WorkerState::Review), CogState::Worker(WorkerState::Concluded));
+        let concluded = CogState::Worker(WorkerState::Concluded);
         let forge = FakeForge::default();
 
-        let e = record_status(&db, &forge, &me, review, None).unwrap_err().to_string();
-        assert!(e.contains("no open MR"), "review needs the draft: {e}");
+        let e = record_status(&db, &forge, &me, concluded, None).unwrap_err().to_string();
+        assert!(e.contains("no open MR"), "concluding needs the draft: {e}");
         let ship = our_ship(&db, "PROJ-1", 7);
-        record_status(&db, &forge, &me, review, None).unwrap();
         let e = record_status(&db, &forge, &me, concluded, None).unwrap_err().to_string();
         assert!(e.contains("isn't reviewed"), "{e}");
 
@@ -2260,7 +2311,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
-            rounds: 0,
+            rounds: 0, trials: 0,
         };
         ShipRepo::upsert(&db, &ship).unwrap();
         let me = ControlTarget::Cog { cog: CrewKind::Hand, ticket: key.clone() };
@@ -2304,7 +2355,7 @@ mod tests {
                 ended_at: None,
                 swept: None,
                 reviewed: None,
-                rounds: 0,
+                rounds: 0, trials: 0,
             };
             let ship = ShipRepo::upsert(&db, &ship).unwrap();
             let id = start_ticketless(&db, CrewKind::Lookout, None, &format!("lookout-{iid}"));
@@ -2373,7 +2424,7 @@ mod tests {
         let ally = |k: &str, iid: i64| {
             let ticket = Some(TicketKey(k.into()));
             let (url, target, source, pilot, created_at) = ("u".into(), "master".into(), String::new(), "edavis".into(), "t".into());
-            let ship = Ship { id: ShipId(0), ticket, iid, url, target, source, pilot, created_at, ended_at: None, swept: None, reviewed: None, rounds: 0 };
+            let ship = Ship { id: ShipId(0), ticket, iid, url, target, source, pilot, created_at, ended_at: None, swept: None, reviewed: None, rounds: 0, trials: 0 };
             ShipRepo::upsert(&db, &ship).unwrap();
         };
         sync::sync_board(&db, &tracker, "now").unwrap();
@@ -2489,7 +2540,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
-            rounds: 0,
+            rounds: 0, trials: 0,
         };
         ShipRepo::upsert(&db, &ship).unwrap();
         let sailor = Session {
@@ -2563,7 +2614,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
-            rounds: 0,
+            rounds: 0, trials: 0,
         };
         ShipRepo::upsert(&db, &ship).unwrap();
         let sailor = Session {
@@ -2621,7 +2672,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
-            rounds: 0,
+            rounds: 0, trials: 0,
         };
         let sid = ShipRepo::upsert(&db, &ship).unwrap();
         db.set_swept(&sid, Some("fp")).unwrap();
@@ -2734,7 +2785,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
-            rounds: 0,
+            rounds: 0, trials: 0,
         };
         ShipRepo::upsert(&db, &ship).unwrap();
         assert_eq!(launch(&db, &forge, req(Some(TicketKey("PROJ-2".into())), None)).unwrap(), "https://forge/mr/9");
@@ -2762,7 +2813,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
-            rounds: 0,
+            rounds: 0, trials: 0,
         };
         ShipRepo::upsert(&db, &ship).unwrap();
         let (forge, key) = (FakeForge::default(), TicketKey("PROJ-2".into()));
@@ -3016,7 +3067,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
-            rounds: 0,
+            rounds: 0, trials: 0,
         };
         ShipRepo::upsert(&db, &ship(7)).unwrap();
         let tracker = FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress)]);
@@ -3055,7 +3106,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
-            rounds: 0,
+            rounds: 0, trials: 0,
         };
         ShipRepo::upsert(&db, &ship).unwrap();
         let mut claimed = tt("PROJ-1", TicketStatus::InProgress);
@@ -3231,7 +3282,7 @@ mod tests {
                 ended_at: None,
                 swept: None,
                 reviewed: None,
-                rounds: 0,
+                rounds: 0, trials: 0,
             },
         )
         .unwrap();
@@ -3287,7 +3338,7 @@ mod tests {
             ended_at: None,
             swept: None,
             reviewed: None,
-            rounds: 0,
+            rounds: 0, trials: 0,
         };
         ShipRepo::upsert(&db, &parent).unwrap();
 
