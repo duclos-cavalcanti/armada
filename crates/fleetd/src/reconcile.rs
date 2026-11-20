@@ -148,7 +148,7 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
             let live_builder = live.iter().any(|k| matches!(k, CrewKind::Worker | CrewKind::Hand));
             let blocked = has_open_blocker(ledger, tkey)?;
             let changed = Some(ship_fingerprint(&snap, blocked)) != ship.swept;
-            let urgent = snap.has_conflicts || snap.pipeline == Some(PipelineStatus::Failed);
+            let urgent = conflicted(&snap) || snap.pipeline == Some(PipelineStatus::Failed);
             let settled = urgent || rested(ledger.threads_changed_at(&ship.id)?.as_deref(), review_settle_secs);
             if auto && !held && !todo && !live_sailor && !live_builder && settled && (needs_work(&snap, blocked) || changed) {
                 let rulings = ledger.rulings_since_weigh(tkey)?;
@@ -1350,7 +1350,13 @@ fn needs_work(s: &ShipSnapshot, blocked: bool) -> bool {
     if s.merge_status.as_deref() == Some("merge_request_blocked") {
         return false;
     }
-    s.has_conflicts || s.open_threads > 0 || (s.pipeline == Some(PipelineStatus::Failed) && !blocked)
+    conflicted(s) || s.open_threads > 0 || (s.pipeline == Some(PipelineStatus::Failed) && !blocked)
+}
+
+/// The MR conflicts with its target: on a merge, or on a rebase the forge tried and couldn't finish
+/// (`merge_status` `conflict`). Either way only a local rebase resolves it (`/fleet-rechart`).
+fn conflicted(s: &ShipSnapshot) -> bool {
+    s.has_conflicts || s.merge_status.as_deref() == Some("conflict")
 }
 
 /// What a sweep was launched against: the fields a sailor would act on (state, head, conflicts,
@@ -2971,6 +2977,18 @@ mod tests {
             plan(&db, &[], true, &LIVE).unwrap(),
             vec![Action::LaunchSailor { ticket: "PROJ-1".into() }]
         );
+    }
+
+    #[test]
+    fn relaunches_a_sailor_on_a_rebase_the_forge_could_not_finish() {
+        // GitLab's own rebase failed: no merge conflict, but `merge_status` `conflict`. Only a
+        // local rebase resolves it, so it's work for a sailor even when unchanged since its sweep.
+        let db = db();
+        ticket(&db, "PROJ-1", TicketStatus::InQa, false, vec![]);
+        order_wt(&db, "PROJ-1", true, Some("/wt/PROJ-1"));
+        ship(&db, 10, "PROJ-1", ShipState::Open);
+        swept_with(&db, 10, |s| s.merge_status = Some("conflict".into()));
+        assert_eq!(plan(&db, &[], true, &LIVE).unwrap(), vec![Action::LaunchSailor { ticket: "PROJ-1".into() }]);
     }
 
     #[test]

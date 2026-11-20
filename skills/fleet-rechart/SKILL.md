@@ -11,7 +11,9 @@ on **whether the MR is conflicted**:
   trigger the forge's server-side rebase (`fleetc rebase`) and exit. You do **not**
   wait for it — the sailor re-fires when the result lands (the rebase moves
   `head_sha`, which the fleet's fingerprint watches).
-- **Conflicted** → a server-side rebase can't resolve it (GitLab aborts). This is
+- **Conflicted** (`has_conflicts`, or `merge_status` `conflict`: a merge conflict, or a
+  server-side rebase the forge tried and couldn't finish) → a server-side rebase can't resolve
+  it (GitLab aborts). This is
   the one part that needs judgment — **resolving a real conflict using
   understanding of the project's code** — so do it locally and force-push.
 

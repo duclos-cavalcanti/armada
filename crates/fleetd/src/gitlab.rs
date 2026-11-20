@@ -566,7 +566,7 @@ fn is_armed(mr: &serde_json::Value) -> bool {
 /// What the fleet reads of an MR, as GraphQL selects it. `resolvable - resolved` discussions is the
 /// open-thread count (resolvable, unresolved, non-system), matching `count_open_threads` on REST.
 const MR_FIELDS: &str = "iid title webUrl sourceBranch targetBranch state draft author { username } diffHeadSha \
-    conflicts detailedMergeStatus autoMergeEnabled mergeTrainCar { id } approvalsRequired approvalsLeft \
+    conflicts detailedMergeStatus mergeError autoMergeEnabled mergeTrainCar { id } approvalsRequired approvalsLeft \
     resolvableDiscussionsCount resolvedDiscussionsCount headPipeline { status } \
     blockingMergeRequests { visibleMergeRequests { iid state } }";
 
@@ -626,12 +626,24 @@ fn gql_to_ship(m: &serde_json::Value, prefix: &str) -> Option<ForgeShip> {
         pipeline: lower("/headPipeline/status").as_deref().and_then(pipeline_status),
         open_threads: (i("resolvableDiscussionsCount") - i("resolvedDiscussionsCount")).max(0),
         total_threads: i("resolvableDiscussionsCount"),
-        merge_status: lower("/detailedMergeStatus"),
+        merge_status: merge_status(m),
         approvals: Approvals { current: (required - i("approvalsLeft")).max(0), required },
         armed: b("autoMergeEnabled"),
         on_merge_train: m.get("mergeTrainCar").is_some_and(|c| !c.is_null()),
         blocked_by,
     })
+}
+
+/// The MR's merge readiness, in REST's vocabulary. GitLab still calls an MR `mergeable` after its
+/// own rebase of it failed (no merge conflict, but a commit that won't replay): that one reads
+/// `conflict`, since only a local rebase resolves it. A push clears GitLab's error.
+fn merge_status(m: &serde_json::Value) -> Option<String> {
+    let armed = m.get("autoMergeEnabled").and_then(|v| v.as_bool()).unwrap_or(false);
+    let rebase_failed = m.get("mergeError").and_then(|e| e.as_str()).is_some_and(|e| e.starts_with("Rebase failed"));
+    if rebase_failed && !armed {
+        return Some("conflict".into());
+    }
+    m.get("detailedMergeStatus").and_then(|v| v.as_str()).map(str::to_lowercase)
 }
 
 /// The downstream pipelines of a pipeline's failed bridge (trigger) jobs.
@@ -751,6 +763,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read_blocks(&v), (vec![11], vec![2361, 2300]));
+    }
+
+    #[test]
+    fn a_rebase_gitlab_could_not_finish_reads_as_a_conflict() {
+        let status = |json: &str| merge_status(&serde_json::from_str(json).unwrap());
+        let failed = r#"{"detailedMergeStatus":"MERGEABLE","autoMergeEnabled":false,
+                         "mergeError":"Rebase failed: Rebase locally, resolve all conflicts, then push the branch."}"#;
+        assert_eq!(status(failed).as_deref(), Some("conflict"), "only a local rebase resolves it");
+        assert_eq!(status(r#"{"detailedMergeStatus":"MERGEABLE","autoMergeEnabled":false,"mergeError":null}"#).as_deref(), Some("mergeable"), "behind but never failed: the train rebases it");
+        assert_eq!(status(r#"{"detailedMergeStatus":"MERGEABLE","autoMergeEnabled":true,"mergeError":"Rebase failed: x"}"#).as_deref(), Some("mergeable"), "armed again since");
     }
 
     #[test]
