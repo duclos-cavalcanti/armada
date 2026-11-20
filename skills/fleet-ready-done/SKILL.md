@@ -81,7 +81,9 @@ both write one:
 
 1. **Goal clear** — one action on a named thing; not two outcomes joined by "and also";
    the body says more than the title.
-2. **Acceptance criteria testable** — each one checkable, none vague ("works well").
+2. **Acceptance criteria testable** — each one checkable, none vague ("works well"). None pins
+   a number other tickets also claim (a doc revision, a migration number): whichever MR merges
+   first takes it.
 3. **Dependencies discharged** — blockers are edges; an open blocker means wait (fleetd
    holds the ticket off the frontier on its own). An open design question is a blocker too:
    the ticket that decides it lands first, so review doesn't decide it.

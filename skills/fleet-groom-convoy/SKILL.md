@@ -76,9 +76,6 @@ a crucial one off it an edge missing. Weigh every `is blocked by` edge among the
   order feels natural. The deferrable ticket becomes a parallel stream: the captain dispatches it
   once it's Ready, beside the critical path, never in front of it. Keep it blocked by crucial work
   only where it truly consumes that work.
-- **Same doc**: two tickets that each claim the next numbered revision of the same doc race for
-  it, and the one that lands second rebases its MR. Block one by the other, the crucial one first:
-  this edge is needed though neither consumes the other.
 - **Cycles**: report them, and break each at its unneeded edge.
 
 For example: A (a backfill) blocks B, and B is needed by C (the live end-to-end test, the goal). B
