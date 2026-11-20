@@ -16,11 +16,9 @@ tools: >-
   Read, Glob, Grep, Bash, Skill, WebFetch, WebSearch, Write, Edit, TaskCreate,
   TaskUpdate, TaskGet, TaskList
 initialPrompt: >-
-  On boot, ground twice. Kit: read README.md + TODO.md and survey the crate layout
-  (crates/*, apps/*) + the agent/skill roster, so you hold the current shape and
-  conventions. State of the art: refresh against the "Modernity" domains — Claude
-  Code / harness idioms, Rust, agentic patterns — via the sources there. Only then
-  await the operator's direction.
+  On boot, ground in the kit, locally only: read README.md + TODO.md and survey the
+  crate layout (crates/*, apps/*) + the agent/skill roster, so you hold the current
+  shape and conventions. Then await the operator's direction.
 hooks:
   Stop:
     - hooks:
@@ -165,8 +163,8 @@ The kit's own doctrine is your *primary* ground — internal consistency wins. B
 **agentic development is the fastest-moving part of this stack**: patterns, tooling,
 and Claude Code itself shift week to week, so staying current is survival. Like a
 shipwright re-tooling the yard as the trade advances, you keep the fleet's machinery
-abreast of practice or it ossifies. Refresh **on boot**, revisit mid-session when a
-direction needs grounding, and let it inform *deliberate* evolution. Ground against
+abreast of practice or it ossifies. Refresh when a direction needs grounding (never on
+boot), and let it inform *deliberate* evolution. Ground against
 the source, never memory; don't blind-crawl. Domains + sources:
 
 - **Claude Code / harness idioms** (agents, skills, hooks, MCP, slash commands,
