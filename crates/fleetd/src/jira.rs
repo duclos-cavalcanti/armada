@@ -63,6 +63,30 @@ impl JiraTracker {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
+    /// Several tickets by key: one JQL search (`key in (…)`) per `PAGE` keys, each issue read with
+    /// `map`. A key the search leaves out is read alone with `one`: the search index lags a create by
+    /// seconds, and a search's issue carries a status's name but not its category, so a status of
+    /// the project's own maps only from a view. A key `one` can't read is left out.
+    fn by_keys<T>(
+        &self,
+        keys: &[TicketKey],
+        map: impl Fn(&serde_json::Value) -> Option<T>,
+        key_of: impl Fn(&T) -> &TicketKey,
+        one: impl Fn(&TicketKey) -> Result<T>,
+    ) -> Result<Vec<T>> {
+        let mut found = Vec::new();
+        for chunk in keys.chunks(PAGE) {
+            let jql = format!("key in ({})", chunk.iter().map(|k| k.0.as_str()).collect::<Vec<_>>().join(", "));
+            found.extend(page_issues(&self.first_page(&jql)?)?.iter().filter_map(&map));
+        }
+        for key in keys {
+            if !found.iter().any(|t| key_of(t) == key) {
+                found.extend(one(key).ok());
+            }
+        }
+        Ok(found)
+    }
+
     /// Fetch the sprint: its first `PAGE` tickets, all jira-cli returns (today's sprints fit).
     fn all_issues(&self, jql: &str) -> Result<Vec<TrackerTicket>> {
         parse_page(&self.first_page(jql)?)
@@ -171,6 +195,10 @@ impl Tracker for JiraTracker {
         issue_to_ticket(&self.view(key)?).with_context(|| format!("jira issue view {}: unexpected shape", key.0))
     }
 
+    fn get_many(&self, keys: &[TicketKey]) -> Result<Vec<TrackerTicket>> {
+        self.by_keys(keys, issue_to_ticket, |t| &t.key, |k| self.get(k))
+    }
+
     fn comment(&self, key: &TicketKey, body: &str) -> Result<()> {
         self.jira(&["issue", "comment", "add", &key.0, body, "--no-input"]).map(drop)
     }
@@ -251,20 +279,8 @@ impl Tracker for JiraTracker {
         self.detail(&self.view(key)?).with_context(|| format!("jira issue view {}: unexpected shape", key.0))
     }
 
-    /// One JQL search (`key in (…)`) per hundred keys. The search index lags a create by seconds,
-    /// so a key it doesn't return yet is read directly.
     fn read_many(&self, keys: &[TicketKey]) -> Result<Vec<TicketDetail>> {
-        let mut found = Vec::new();
-        for chunk in keys.chunks(100) {
-            let jql = format!("key in ({})", chunk.iter().map(|k| k.0.as_str()).collect::<Vec<_>>().join(", "));
-            found.extend(page_issues(&self.first_page(&jql)?)?.iter().filter_map(|i| self.detail(i)));
-        }
-        for key in keys {
-            if !found.iter().any(|d: &TicketDetail| &d.ticket.key == key) {
-                found.extend(self.read(key).ok());
-            }
-        }
-        Ok(found)
+        self.by_keys(keys, |i| self.detail(i), |d| &d.ticket.key, |k| self.read(k))
     }
 
     fn create(&self, d: &TicketDraft) -> Result<TicketKey> {

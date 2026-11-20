@@ -310,6 +310,11 @@ pub trait Tracker {
     /// The board — the tickets the fleet works from (Jira: the open sprint; filesystem: every file).
     fn board(&self) -> Result<Vec<TrackerTicket>>;
     fn get(&self, key: &TicketKey) -> Result<TrackerTicket>;
+    /// Several tickets, in one call where the tracker allows (one search on Jira); one `get` each
+    /// otherwise. A key it can't read is left out.
+    fn get_many(&self, keys: &[TicketKey]) -> Result<Vec<TrackerTicket>> {
+        Ok(keys.iter().filter_map(|k| self.get(k).ok()).collect())
+    }
     fn transition(&self, key: &TicketKey, to: TicketStatus) -> Result<()>;
     /// Of `keys`, those assigned to someone OTHER than the operator, each with the teammate's name —
     /// the ownership gate (never stomp a peer). One left out is unassigned or already ours.

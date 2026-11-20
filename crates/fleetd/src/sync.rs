@@ -12,92 +12,72 @@ use ledger::Ledger;
 /// preserving our own `held`/`created_at`. Run this BEFORE `sync_armada` so ships
 /// can link their `ticket` FK.
 pub fn sync_board(ledger: &Ledger, tracker: &dyn Tracker, now: &str) -> Result<usize> {
-    let tickets = tracker.board()?;
+    let mut tickets = tracker.board()?;
     let count = tickets.len();
-    for t in &tickets {
-        TicketRepo::sync(ledger, t, now)?;
-    }
-    let mut pass = Pass { fetched: tickets.iter().map(|t| t.key.clone()).collect(), ..Pass::default() };
-    // A board ticket's blocker off the board (another convoy's, out of sprint) isn't in the ledger,
-    // so its edge was dropped: pull the blocker in, then re-write the edges, or the ticket reads as
-    // unblocked — dispatched early, and its worker can't report `waiting` on it.
-    for t in &tickets {
-        if t.blocked_by.iter().any(|b| !pass.fetched.contains(b)) {
-            sync_with_blockers(ledger, tracker, t, &mut pass, now)?;
-        }
-    }
-    pass.expanded.extend(tickets.iter().map(|t| t.key.clone())); // every board blocker is in now
     // Off the board (no sprint, or another team's), the fleet still tracks an open convoy's
     // tickets, what it works (an order), and what those wait on: refresh them too, or their status
     // and `is blocked by` edges go stale — a captain would miss a ticket, a sailor would boot blind
     // to its blocker, and the gate would never lift.
     for convoy in ConvoyRepo::active(ledger)? {
-        if let Err(e) = sync_convoy_with(ledger, tracker, &convoy.key, &mut pass, now) {
-            tracing::warn!("sync: convoy {} not refreshed: {e:#}", convoy.key.0);
+        match tracker.children(&TicketKey(convoy.key.0.clone())) {
+            Ok(children) => tickets.extend(children),
+            Err(e) => tracing::warn!("sync: convoy {} not refreshed: {e:#}", convoy.key.0),
         }
     }
     let tracked = OrderRepo::queue(ledger)?.into_iter().map(|o| o.ticket).chain(ledger.added_members()?);
-    for key in tracked {
-        if pass.expanded.contains(&key) {
-            continue;
-        }
-        if let Err(e) = tracker.get(&key).and_then(|t| sync_with_blockers(ledger, tracker, &t, &mut pass, now)) {
-            tracing::warn!("sync: {} (off the board) not refreshed: {e:#}", key.0);
-        }
-    }
+    let off_board = missing(&tickets, tracked);
+    tickets.extend(fetch(tracker, &off_board, "off the board"));
+    sync_with_blockers(ledger, tracker, &tickets, now)?;
     Ok(count)
-}
-
-/// What one sync pass has refreshed: every ticket it `fetched`, and the ones it `expanded` — fetched
-/// with their blockers. A ticket fetched only as another's blocker isn't expanded, so if the fleet
-/// tracks it too (a convoy's, an order's, an added one), its own turn still pulls in its blockers.
-#[derive(Default)]
-struct Pass {
-    fetched: HashSet<TicketKey>,
-    expanded: HashSet<TicketKey>,
 }
 
 /// Pull the convoy's tickets (its epic's children, whatever their sprint) and their blockers into
 /// the ledger — `convoy open` runs it, so its captain starts on the whole convoy. Returns the
 /// children, as the tracker has them now.
 pub fn sync_convoy(ledger: &Ledger, tracker: &dyn Tracker, convoy: &ConvoyKey, now: &str) -> Result<Vec<TrackerTicket>> {
-    sync_convoy_with(ledger, tracker, convoy, &mut Pass::default(), now)
-}
-
-fn sync_convoy_with(
-    ledger: &Ledger,
-    tracker: &dyn Tracker,
-    convoy: &ConvoyKey,
-    pass: &mut Pass,
-    now: &str,
-) -> Result<Vec<TrackerTicket>> {
     let children = tracker.children(&TicketKey(convoy.0.clone()))?;
-    for t in &children {
-        if !pass.expanded.contains(&t.key) {
-            sync_with_blockers(ledger, tracker, t, pass, now)?;
-        }
-    }
+    sync_with_blockers(ledger, tracker, &children, now)?;
     Ok(children)
 }
 
-/// Sync `t` after any blocker not yet fetched this pass, so its `is blocked by` edges have their FK.
-fn sync_with_blockers(
-    ledger: &Ledger,
-    tracker: &dyn Tracker,
-    t: &TrackerTicket,
-    pass: &mut Pass,
-    now: &str,
-) -> Result<()> {
-    pass.fetched.insert(t.key.clone());
-    pass.expanded.insert(t.key.clone());
-    for b in &t.blocked_by {
-        if pass.fetched.insert(b.clone()) {
-            if let Err(e) = tracker.get(b).and_then(|bt| TicketRepo::sync(ledger, &bt, now)) {
-                tracing::warn!("sync: blocker {} of {} not refreshed: {e:#}", b.0, t.key.0);
+/// Sync `tickets` and each one's blockers, the ones not among them fetched in one call: the
+/// blockers first, then the tickets, then the tickets' edges again, so an edge between two tickets
+/// new to the ledger has both ends when it's written.
+fn sync_with_blockers(ledger: &Ledger, tracker: &dyn Tracker, tickets: &[TrackerTicket], now: &str) -> Result<()> {
+    let blockers = fetch(tracker, &missing(tickets, tickets.iter().flat_map(|t| t.blocked_by.iter().cloned())), "blocker");
+    for t in blockers.iter().chain(tickets) {
+        TicketRepo::sync(ledger, t, now)?;
+    }
+    for t in tickets {
+        ledger.set_blocked_by(&t.key, &t.blocked_by)?;
+    }
+    Ok(())
+}
+
+/// The keys of `wanted` not among `have`, each once, in order.
+fn missing(have: &[TrackerTicket], wanted: impl IntoIterator<Item = TicketKey>) -> Vec<TicketKey> {
+    let mut seen: HashSet<TicketKey> = have.iter().map(|t| t.key.clone()).collect();
+    wanted.into_iter().filter(|k| seen.insert(k.clone())).collect()
+}
+
+/// The tickets of `keys` the tracker returns, in one call; one it doesn't is logged and left for
+/// the next sync.
+fn fetch(tracker: &dyn Tracker, keys: &[TicketKey], what: &str) -> Vec<TrackerTicket> {
+    if keys.is_empty() {
+        return vec![];
+    }
+    match tracker.get_many(keys) {
+        Ok(found) => {
+            for k in keys.iter().filter(|k| !found.iter().any(|t| &t.key == *k)) {
+                tracing::warn!("sync: {} ({what}) not refreshed", k.0);
             }
+            found
+        }
+        Err(e) => {
+            tracing::warn!("sync: {} tickets ({what}) not refreshed: {e:#}", keys.len());
+            vec![]
         }
     }
-    TicketRepo::sync(ledger, t, now)
 }
 
 /// Fetch the armada from the forge and upsert each ship (+ its snapshot). A ship's
@@ -349,6 +329,10 @@ mod tests {
 
     /// The sprint board (`.0`) plus tickets only `get` reaches (`.1`): off the board, in no sprint.
     struct FakeTracker(Vec<TrackerTicket>, Vec<TrackerTicket>);
+    thread_local! {
+        /// Each `get_many` call's keys, on this test's thread.
+        static CALLS: std::cell::RefCell<Vec<Vec<String>>> = const { std::cell::RefCell::new(vec![]) };
+    }
     impl Tracker for FakeTracker {
         fn preflight(&self) -> Result<String> {
             Ok("fake".into())
@@ -358,6 +342,10 @@ mod tests {
         }
         fn get(&self, key: &TicketKey) -> Result<TrackerTicket> {
             self.0.iter().chain(&self.1).find(|t| &t.key == key).cloned().ok_or_else(|| anyhow::anyhow!("no {}", key.0))
+        }
+        fn get_many(&self, keys: &[TicketKey]) -> Result<Vec<TrackerTicket>> {
+            CALLS.with(|c| c.borrow_mut().push(keys.iter().map(|k| k.0.clone()).collect()));
+            Ok(keys.iter().filter_map(|k| self.get(k).ok()).collect())
         }
         fn transition(&self, _: &TicketKey, _: TicketStatus) -> Result<()> {
             Ok(())
@@ -475,7 +463,10 @@ mod tests {
         moved.blocked_by = vec![TicketKey("PROJ-4".into())];
         let tracker = FakeTracker(vec![tt("PROJ-1", TicketStatus::Todo)], vec![moved, tt("PROJ-4", TicketStatus::InQa)]);
 
+        CALLS.with(|c| c.borrow_mut().clear());
         sync_board(&db, &tracker, "now").unwrap();
+        let calls = CALLS.with(|c| c.borrow().clone());
+        assert_eq!(calls, [vec!["PROJ-3".to_string()], vec!["PROJ-4".to_string()]], "one call for the off-board tickets, one for their blockers");
         let t = TicketRepo::get(&db, &TicketKey("PROJ-3".into())).unwrap().unwrap();
         assert_eq!(t.status, Some(TicketStatus::InQa), "refreshed off the board");
         assert_eq!(t.blocked_by, vec![TicketKey("PROJ-4".into())], "its blocker synced first, so the edge holds");
