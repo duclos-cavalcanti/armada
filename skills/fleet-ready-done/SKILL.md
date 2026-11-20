@@ -83,9 +83,14 @@ both write one:
    the body says more than the title.
 2. **Acceptance criteria testable** — each one checkable, none vague ("works well").
 3. **Dependencies discharged** — blockers are edges; an open blocker means wait (fleetd
-   holds the ticket off the frontier on its own).
-4. **Sized to one MR** — if it needs several independent changes, split it: each piece
-   Ready on its own, their order wired as "is blocked by" edges.
+   holds the ticket off the frontier on its own). An open design question is a blocker too:
+   the ticket that decides it lands first, so review doesn't decide it.
+4. **Sized to one MR** — one behaviour change. If it needs several independent changes, split
+   it: each piece Ready on its own, their order wired as "is blocked by" edges. Split out:
+   - **the new from the routine** — a new mechanism (a wire format, a vendor, a state) is its
+     own ticket, not bundled with the plumbing around it;
+   - **a contract between parts deployed separately** (a message, a payload, a schema) — in
+     steps, a ticket each: both shapes accepted, the switch, the old shape removed.
 5. **Out of scope stated** — the edges of the work are written down.
 
 A ticket that fails one of these isn't built on guesswork: it's fixed, or anchored with the
@@ -102,3 +107,5 @@ reason (`fleetc anchor <KEY> --reason "<what's missing>"`).
 4. **CI green** on the MR's head.
 5. **Scope held** — the MR does what the ticket says. Anything found along the way that
    isn't in it becomes its own ticket (a cog proposes it with `/fleet-propose`), not a note.
+   So does an acceptance criterion a ruling adds while the MR is in review, unless the
+   ticket's own criteria are wrong without it.
