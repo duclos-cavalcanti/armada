@@ -19,12 +19,6 @@ initialPrompt: >-
   On boot, ground in the kit, locally only: read README.md + TODO.md and survey the
   crate layout (crates/*, apps/*) + the agent/skill roster, so you hold the current
   shape and conventions. Then await the operator's direction.
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: bash ~/.claude/scripts/summary.sh
-          timeout: 60
 ---
 
 # Shipwright

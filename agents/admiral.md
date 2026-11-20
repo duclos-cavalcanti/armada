@@ -20,12 +20,6 @@ skills: >-
 mcpServers:
   - "claude.ai Atlassian Rovo"
   - "claude.ai Slack"
-hooks:
-  Stop:
-    - hooks:
-        - type: command
-          command: bash ~/.claude/scripts/summary.sh
-          timeout: 60
 ---
 
 # Admiral
