@@ -1,5 +1,5 @@
 // Read-only embed of the fleet viewer's renderer (vendored from
-// demos/fleet/src/Topology.jsx) — same crossing-aware orthogonal routing and
+// demos/fleet/viewer/src/Topology.jsx) — same crossing-aware orthogonal routing and
 // node/group/edge look, with all the editing UI (dropdowns, layout/PNG,
 // resizer, detail pane) stripped. Takes a graph ({ groups, nodes, base }) and
 // renders it static inside a slide. Theme vars are set locally so it carries

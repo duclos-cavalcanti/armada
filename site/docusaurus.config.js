@@ -69,8 +69,8 @@ async function fileTree({ defaultSidebarItemsGenerator, ...args }) {
   return relabel(await defaultSidebarItemsGenerator(args));
 }
 
-// The fleet viewer (demos/fleet) imports its packages by name: resolve them from site/, so the page
-// runs on the site's React, not on a second copy from demos/fleet/node_modules.
+// The fleet viewer (demos/fleet/viewer) imports its packages by name: resolve them from site/, so
+// the page runs on the site's React, not on a second copy from demos/node_modules.
 function demoPackages(context) {
   const packages = ['react', 'react-dom', '@xyflow/react', 'html-to-image'];
   return {

@@ -29,6 +29,6 @@ brew "node"            # Node.js + npm/npx — builds & serves the open-slide de
 # brew "duckdb"        # Parquet + SQL for usage / cost rollups
 
 # --- Not on Homebrew — install separately ---
-# npm install -g @excalidraw/cli   # optional: renders demos/draw/ (README, Notes)
+# npm install -g @excalidraw/cli   # optional: renders demos/*/drawings/ (README, Notes)
 # (The kit's Jira CLI need is met by `jira-cli` above. Atlassian's official `acli` is an
 #  alternative but not preferred — ankitpokhrel/jira-cli is more mature for headless use.)

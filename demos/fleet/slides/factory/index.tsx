@@ -75,15 +75,25 @@ function Row({ color, glyph, name, role }: { color: string; glyph: string; name:
   );
 }
 
+// repo link shown at the bottom of every page
+const REPO = 'https://github.com/duclos-cavalcanti/armada';
+function Footer() {
+  return (
+    <a href={REPO} target="_blank" rel="noreferrer" style={{
+      position: 'absolute', right: 80, top: 1034, font: `500 16px ${MONO}`, color: C.dim, textDecoration: 'none',
+    }}>{REPO}</a>
+  );
+}
+
 // ─── 1 · cover ──────────────────────────────────────────────────────────────
 const Cover: Page = () => (
   <div style={stage}>
     <div style={{ position: 'absolute', left: 120, top: 380 }}>
-      <div style={{ font: `700 22px ${MONO}`, letterSpacing: '0.2em', color: C.accent, textTransform: 'uppercase' }}>Armada</div>
-      <div style={{ fontSize: 132, fontWeight: 700, fontFamily: 'var(--osd-font-display)', letterSpacing: '-0.03em', marginTop: 10 }}>Factory</div>
+      <div style={{ fontSize: 132, fontWeight: 700, fontFamily: 'var(--osd-font-display)', letterSpacing: '-0.03em' }}>Armada</div>
       <div style={{ fontSize: 40, fontWeight: 500, color: C.dim, marginTop: 8 }}>Agentic Software Factory</div>
-      <div style={{ fontSize: 26, color: C.dim, marginTop: 40 }}>Daniel Duclos-Cavalcanti — SWE II</div>
+      <div style={{ fontSize: 26, color: C.dim, marginTop: 40 }}>Daniel Duclos-Cavalcanti</div>
     </div>
+    <Footer />
   </div>
 );
 
@@ -286,6 +296,7 @@ Must: diagnose every ✗ job`}</GsFile>
         </div>
       </Beat>
     </Steps>
+    <Footer />
   </div>
 );
 
@@ -378,6 +389,7 @@ const Sdlc: Page = () => (
     <div style={{ position: 'absolute', left: 80, top: 200, width: 1760, height: 780 }}>
       <SdlcDiagram />
     </div>
+    <Footer />
   </div>
 );
 
@@ -460,6 +472,7 @@ const PhaseTickets: Page = () => (
       <SmNode x={1500} y={300} label="Jira" sub="tracker · To Do" color={C.external} />
       <SmNote x={880} y={420}>Draft Tickets to DoR</SmNote>
     </SmCanvas>
+    <Footer />
   </div>
 );
 
@@ -483,6 +496,7 @@ const PhaseDispatch: Page = () => (
       <SmNode x={300} y={560} label="Queue" sub="convoy" color={C.skill} />
       <SmNode x={720} y={560} w={260} label="Hold" color={C.warn} />
     </SmCanvas>
+    <Footer />
   </div>
 );
 
@@ -506,6 +520,7 @@ const PhaseImplementation: Page = () => (
       <SmNode x={1610} y={260} w={260} label="Concluded" sub="→ handoff · In QA" color={C.cog} />
       <SmNode x={1610} y={600} w={260} label="Escalate" sub="→ TRIAGE" color={C.warn} />
     </SmCanvas>
+    <Footer />
   </div>
 );
 
@@ -540,6 +555,7 @@ const PhaseMerge: Page = () => (
       <SmNode x={520} y={600} w={260} label="Escalate" sub="→ TRIAGE" color={C.warn} />
       <SmNode x={1610} y={640} w={260} label="Merged" sub="the forge merges" color={C.sqlite} />
     </SmCanvas>
+    <Footer />
   </div>
 );
 
@@ -562,6 +578,7 @@ const PhaseDone: Page = () => (
       <SmNode x={890} y={560} label="Dispatch" sub="next frontier" color={C.daemon} />
       <SmNote x={150} y={380}>AC · reviewed · CI green</SmNote>
     </SmCanvas>
+    <Footer />
   </div>
 );
 
@@ -572,6 +589,7 @@ const Sightline: Page = () => (
     <div style={{ position: 'absolute', left: 60, top: 150, width: 1800, height: 870 }}>
       <FleetGraph graph={overviewGraph} />
     </div>
+    <Footer />
   </div>
 );
 
@@ -694,6 +712,7 @@ const Engine: Page = () => (
         </ul>
       </Pane>
     </div>
+    <Footer />
   </div>
 );
 
@@ -828,25 +847,11 @@ const QualityGates: Page = () => (
   </div>
 );
 
-// ─── demo (video placeholder) ───────────────────────────────────────────────
-const Demo: Page = () => (
-  <div style={stage}>
-    <Title kicker="see it run">Demo</Title>
-    {/* Video goes here — swap the placeholder for a <video>/<iframe> when the link is ready. */}
-    <div style={{
-      position: 'absolute', left: 160, top: 210, width: 1600, height: 760,
-      border: `2px dashed ${C.border}`, borderRadius: 14,
-      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30, color: C.dim,
-    }}>
-      Video — coming soon
-    </div>
-  </div>
-);
-
 // ─── q&a ─────────────────────────────────────────────────────────────────────
 const QA: Page = () => (
   <div style={stage}>
     <div style={{ position: 'absolute', left: 120, top: 440, fontSize: 132, fontWeight: 700, fontFamily: 'var(--osd-font-display)', letterSpacing: '-0.03em' }}>Q&amp;A</div>
+    <Footer />
   </div>
 );
 
@@ -888,7 +893,6 @@ const pages: Page[] = [
   PhaseDone,
   Sightline,
   Engine,
-  Demo,
   QA,
 ];
 
@@ -897,7 +901,7 @@ const pages: Page[] = [
 void [TwoInterfaces, LedgerLive, Reconcile, Crew, TicketJourney, QualityGates, Close];
 
 export const notes: (string | undefined)[] = [
-  `The Armada — Factory's always-on agentic software factory. Daniel Duclos-Cavalcanti, SWE II. The pitch in one breath: a daemon that runs Claude agents as a crew, and keeps the whole thing honest against a ledger.`,
+  `The Armada — an always-on agentic software factory. The pitch in one breath: a daemon that runs Claude agents as a crew, and keeps the whole thing honest against a ledger.`,
   `Getting started — the 0-to-100 of an intelligent loop, built one beat at a time. ① A process worth improving: a failing pipeline that a human babysits by clicking through jobs. ② A skill: plain markdown that says "given an MR, find its pipeline, report every stage and job with its state". ③ We notice status-querying is deterministic, so a script moves into the skill folder — fewer tokens, same answer; the model spends tokens only on judgment. ④ An agent: one more markdown file — what it knows, may do, must do — whose initialPrompt is a /loop over the skill, diagnosing failed jobs against a runbook plus the repo and job config. ⑤ Like any algorithm it now has a loop, a goal, accepted states, and a break condition where it asks a human. That's a live, somewhat autonomous loop over a real slice of the SDLC — and every cog in the Armada is built this same way.`,
   `SDLC — the line at a glance. The operator files work as tickets (the admiral grooms them to Ready); a captain dispatches them; a worker (or a hand, with you at the keyboard) implements; a sailor lands the MR; reconcile reaps it to Done. When implementation or merge hits something it can't settle, it escalates to TRIAGE — the captain that dispatched the work (planned: today this isn't wired yet). The captain runs the same loop as any other process: if it's fixable, it resolves it and the cog resumes; if not, it goes back to the operator for a human decision.`,
   `Tickets. This is me: I bring intent — epics, stories — and an agent (the admiral, via /fleet-commission) drafts each one to the Definition of Ready: four-section body, testable acceptance criteria, dependencies wired as blocked-by edges. They land in Jira as To Do. I review, refine, prioritise — and the loop goes round until the backlog is Ready.`,
@@ -905,9 +909,8 @@ export const notes: (string | undefined)[] = [
   `Implementation. Reconcile sees the order and spawns a worker in its worktree (or a hand, when I want to write the code myself). It implements to the acceptance criteria with tests and lint, opens a draft MR, then has a reviewer agent review it in a fresh context. Fixes needed → fix and review again. Clean → concluded: fleetd hands off, ticket goes to In QA. If it crosses its threshold (today: five rounds) → escalate to triage.`,
   `Merge. The merge driver (the sailor) sweeps the open MR. It reads the MR's state and acts: conflicts → rebase, review threads → reply and apply the fixes found, failed CI → repair, clean → arm auto-merge. Then it sleeps — roughly a minute — and sweeps again. If something crosses its threshold, it escalates to triage, same as the worker. Once the forge's gates pass — pipeline, threads, approvals — the forge merges it.`,
   `Done. The merged MR has met the Definition of Done. On its next tick reconcile reaps it: Jira → Done, sessions end, the worktree is freed, and the ledger records one event. Closing the ticket clears blockers for its dependents — so the captain's next pass has a new frontier, and the line keeps moving.`,
-  `The sightline — the whole system in one opaque view, rendered live by the same React-Flow renderer as the demos/fleet viewer (vendored, read-only), so it always matches the code. Operator → wraps judgment in /fleet-* skills → fleetc (the CLI) → fleetd (the daemon) → which actuates the tracker and forge, spawns the crew, works the project worktrees, and persists everything to the ledger, which the dashboard reads. Pan/zoom to walk it.`,
+  `The sightline — the whole system in one opaque view, rendered live by the same React-Flow renderer as the demos/fleet/viewer viewer (vendored, read-only), so it always matches the code. Operator → wraps judgment in /fleet-* skills → fleetc (the CLI) → fleetd (the daemon) → which actuates the tracker and forge, spawns the crew, works the project worktrees, and persists everything to the ledger, which the dashboard reads. Pan/zoom to walk it.`,
   `The engine — fleetd's heart is one loop on one thread (scheduler.rs::run). It isn't a pipeline: each pass just runs whatever is due, then waits up to half a second for a command. Observe, every ~5s: which agent sessions are alive — read-only, nothing written. Sync, every ~5 minutes: copy Jira tickets and GitLab MRs into the ledger, our database. Actuate: this is where the world changes — immediately when a fleetc command arrives (from me or from an agent), and every ~60s when reconcile compares intent with reality and spawns, hands off, reaps or heals. All writes go through this one thread, so there's never a race. Stop fleetd and the loop ends — the factory is off.`,
-  `Demo — video placeholder; link to be added.`,
   `Open the floor for questions.`,
 ];
 

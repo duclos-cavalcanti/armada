@@ -1,16 +1,8 @@
 # Armada — operator entry points.
-#
-# The kit is the fleet: one self-ticking daemon (fleetd) + its client (fleetc).
-# `install.sh` gates the Brewfile, stows agents/skills (+ the .claude config) and installs fleetc;
-# `fleet.sh` builds + runs a project's fleet. A project is a folder, projects/<name>/ (its
-# fleet.toml + .fleet/ state + checkout): every fleet target takes FLEET_PROJECT=<name> (only help / install / uninstall / serve / slides don't). Run from
-# the repo: `make <target> FLEET_PROJECT=<name>` — or `export FLEET_PROJECT=<name>` once per shell.
-#
-# `make` with no target prints the help summary.
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install uninstall serve slides preflight run restart stop dashboard snapshot import
+.PHONY: help install uninstall serve slides viewer preflight run restart stop dashboard snapshot import
 
 help:                            ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / { printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -24,11 +16,21 @@ uninstall:                       ## Uninstall the kit and remove fleetc
 demos/node_modules site/node_modules:
 	npm ci --prefix $(@D)
 
-slides: demos/node_modules             ## Serve the slides on :5174, until Ctrl-C
-	npm --prefix demos run dev -- --port 5174 --no-skills-check
+DEMO        ?= fleet
+SLIDES_PORT ?= 5174
+VIEWER_PORT ?= 5177
 
-# The dev server holds every page (~800, with the product's docs) in memory: room past node's 4GB.
-serve: site/node_modules               ## Serve the notes (markdown, fleet viewer, reports/) on :5175, until Ctrl-C
+slides: demos/node_modules             ## Serve a demos project's slides: DEMO=<project> (default fleet), on :5174 (SLIDES_PORT), until Ctrl-C
+	@test -d demos/$(DEMO)/slides || { echo "DEMO=$(DEMO): no demos/$(DEMO)/slides/" >&2; exit 1; }
+	DEMO=$(DEMO) npm --prefix demos run dev -- --port $(SLIDES_PORT) --no-skills-check
+
+viewer: demos/node_modules             ## Serve a demos project's architecture viewer alone: DEMO=<project> (default fleet), on :5177 (VIEWER_PORT), until Ctrl-C
+	@test -d demos/$(DEMO)/viewer || { echo "DEMO=$(DEMO): no demos/$(DEMO)/viewer/" >&2; exit 1; }
+	cd demos && node --input-type=module -e "const { createServer } = await import('vite'); \
+	  const server = await createServer({ configFile: false, root: '$(DEMO)/viewer', cacheDir: '$(CURDIR)/demos/node_modules/.vite-viewer-$(DEMO)', server: { port: $(VIEWER_PORT), strictPort: true } }); \
+	  await server.listen(); server.printUrls();"
+
+serve: site/node_modules         ## Serve the notes (markdown, fleet viewer, reports/) on :5175, until Ctrl-C
 	NODE_OPTIONS=--max-old-space-size=8192 npm --prefix site start -- --port 5175
 
 preflight:                       ## Check the project's setup: runtime state, checkout, forge + tracker CLIs, tmux + claude

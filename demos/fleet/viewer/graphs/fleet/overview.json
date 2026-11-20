@@ -64,7 +64,7 @@
     { "id": "sk_triage", "kind": "skill", "label": "/fleet-triage", "x": 40, "y": 552, "w": 180, "h": 28,
       "detail": { "type": "skill · the operator's sweep", "summary": "Settles the open proposals, re-judges the anchored tickets, keeps every ticket in the convoy it belongs to, and checks the fleet's pace against its deadlines and its machinery's health. One numbered action each with its fleetc command; acts only on the operator's OK. For the shipwright." } },
     { "id": "sk_more", "kind": "more", "label": "more skills", "x": 40, "y": 584, "w": 180, "h": 28,
-      "detail": { "type": "the rest of the toolkit", "summary": "Six of the kit's /fleet-* skills are shown; the rest wrap fleetc the same way: /fleet-new-project, /fleet-bearings, /fleet-groom-convoy, /fleet-ready-done, /fleet-convoy-report, /fleet-cost-report, /fleet-publish, /fleet-inspect, /fleet-review, /fleet-repair, /fleet-propose, /fleet-yield. Every one lives in skills/." } },
+      "detail": { "type": "the rest of the toolkit", "summary": "Six of the kit's /fleet-* skills are shown; the rest wrap fleetc the same way: /fleet-new-project, /fleet-bearings, /fleet-groom-convoy, /fleet-ready-done, /fleet-convoy-report, /fleet-cost-report, /fleet-inspect, /fleet-review, /fleet-repair, /fleet-propose, /fleet-yield. Every one lives in skills/." } },
     {
       "id": "fleetc",
       "kind": "cli",

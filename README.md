@@ -12,7 +12,7 @@ plan, cogs, transcripts, and cost. `fleetd` owns the state and drives the line;
 
 Forward backlog: [`TODO.md`](TODO.md).
 
-![Fleet overview — operator → fleetc → fleetd → crew → project, with the skills, external systems, ledger and dashboard](demos/assets/fleet-overview.png)
+![Fleet overview — operator → fleetc → fleetd → crew → project, with the skills, external systems, ledger and dashboard](demos/fleet/drawings/fleet-overview.png)
 
 ---
 
@@ -88,7 +88,8 @@ make stop FLEET_PROJECT=<name>        # stop that project's fleet daemon
 make dashboard FLEET_PROJECT=<name>   # build + run the TUI dashboard
 make snapshot FLEET_PROJECT=<name>    # snapshot the project's ledger → projects/<name>/exports/<name>-<UTC stamp>.db
 make import FILE=<snapshot> FLEET_PROJECT=<name>   # restore a ledger snapshot (the fleet must be stopped)
-make slides                           # serve the slides on :5174, until Ctrl-C
+make slides DEMO=<project>            # serve a demos project's slides on its port, until Ctrl-C
+make viewer DEMO=<project>            # serve a demos project's architecture viewer alone on its port
 ```
 
 `export FLEET_PROJECT=<name>` once per shell and the `FLEET_PROJECT=` on each target can go.
@@ -139,7 +140,7 @@ skills' reports (`reports/`) at `/reports/`. The site is `site/`; what it reads 
 make serve                            # http://localhost:5175, until Ctrl-C; reloads as pages change
 ```
 
-The drawings in `demos/draw/` are Excalidraw files: open them at [excalidraw.com](https://excalidraw.com).
+The drawings in `demos/<project>/drawings/` are Excalidraw files: open them at [excalidraw.com](https://excalidraw.com).
 For Claude to render them, and to draw in your Excalidraw+ workspace:
 
 ```bash
@@ -168,7 +169,8 @@ armada/
 │                root session adds with `--mcp-config`)
 ├── hooks/       the guards: git's ref guard (linked into each checkout by `install.sh --hooks`)
 │                and the lookouts' command guard (attached to each lookout by fleetd)
-├── demos/       architecture decks (open-slide) + the fleet viewer's source (React Flow; served at /fleet by the notes)
+├── demos/       one folder per project (fleet/ is the factory's own), each with slides/
+│                (open-slide decks), drawings/ (Excalidraw) and viewer/ (a React Flow map)
 ├── site/        the notes: a Docusaurus site over the repo's markdown + the fleet viewer (`make serve`)
 ├── Brewfile     dependency manifest
 ├── install.sh   install / --uninstall (gates on Brewfile + stows + installs fleetc) / --hooks
@@ -182,3 +184,20 @@ armada/
 └── reports/     the skills' reports, one folder per project (convoy progress, fleet spend):
                  gitignored, served by `make serve`
 ```
+
+### Demos
+
+Each project in demos/ has the same three folders:
+
+- slides/: its open-slide decks, one folder per deck (`make slides DEMO=<project>`); AGENTS.md (+ CLAUDE.md) holds the deck rules for Claude
+- drawings/: Excalidraw files; the live copies are in Excalidraw+
+- viewer/: its React Flow architecture map (`make viewer DEMO=<project>`; the notes also serve fleet's at /fleet)
+  - index.html: the standalone page
+  - src/main.jsx: mounts App into the page
+  - src/App.jsx: the root component (React Flow's CSS, the theme, Topology)
+  - src/Topology.jsx: the renderer (graph registry, node kinds, legend, detail pane; fleet's adds PNG export)
+  - src/obstacleRouter.js: routes edges orthogonally around nodes
+  - src/theme.css: the dark palette
+  - graphs/: one JSON per view (groups, nodes, edges, detail text)
+
+demos/ itself holds the one open-slide install both projects' decks share.

@@ -5,27 +5,19 @@ import {
   NodeResizer, useReactFlow,
 } from '@xyflow/react'
 import overview from '../graphs/fleet/overview.json'
-import data from '../graphs/fleet/data.json'
 import { toPng } from 'html-to-image'
 import { routeOrthogonal, simplify, roundedPath, polylineMidpoint } from './obstacleRouter'
 
 // renderable graphs share one schema (groups + x/y nodes + base edges). Pick
 // which one to render via ?graph=<name>; defaults to the overview.
-const GRAPHS = {
-  overview,
-  data,
-}
-const GRAPH_LABELS = {
-  overview: 'Overview',
-  data: 'Data model',
-}
+const GRAPHS = { overview }
+const GRAPH_LABELS = { overview: 'Overview' }
 // two-level nav: the main dropdown picks a group; a multi-member group gets a
 // second dropdown for the aspect within it. The group is derived from ?graph,
 // so the URL stays graph-addressed. Add more under graphs/fleet/ and register
 // them here.
 const GROUPS = [
   { id: 'overview', label: 'Overview', graphs: ['overview'] },
-  { id: 'data', label: 'Data model', graphs: ['data'] },
 ]
 const graphName = new URLSearchParams(window.location.search).get('graph') || 'overview'
 const arch = GRAPHS[graphName] ?? overview
@@ -53,11 +45,6 @@ const KIND = {
   cog:          { c: '#3FB950', g: '⚙'  },  // a crew cog — a Claude session in a tmux pane
   config:       { c: '#9DA7B3', g: '⚙'  },  // repo / hub
   external:     { c: '#DB6D28', g: '☁'  },  // GitLab / Jira / Claude Code
-  // data-diagram taxonomy (the `data` graph): rust domain types + ledger tables.
-  struct:       { c: '#D2A8FF', g: '◆'  },  // domain entity (a persisted Rust struct)
-  dto:          { c: '#39C5CF', g: '◇'  },  // read-model / port DTO (never a table)
-  enum:         { c: '#F0883E', g: '▸'  },  // domain enum (a vocabulary)
-  table:        { c: '#56D364', g: '▤'  },  // a ledger.db / telemetry.db table
   skill:        { c: '#D2A8FF', g: '✦'  },  // an operator /fleet-* skill (judgment over fleetc)
 }
 
@@ -66,7 +53,6 @@ const LEGEND = [
   ['socket', 'control bus'], ['daemon', 'fleetd module'], ['adapter', 'driven adapter'],
   ['sqlite', 'ledger / telemetry'], ['cog', 'crew cog (tmux)'], ['config', 'repo / hub'],
   ['external', 'external system'],
-  ['struct', 'domain struct'], ['dto', 'read-model / DTO'], ['enum', 'domain enum'], ['table', 'ledger table'],
   ['skill', 'operator skill (/fleet-*)'],
 ]
 // only show legend rows for kinds actually present in the active graph, so each
