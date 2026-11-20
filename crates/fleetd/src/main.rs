@@ -100,14 +100,14 @@ fn main() -> Result<()> {
 
 /// The deployment's forge + tracker, built from fleet.toml (`[forge] kind` picks the adapter;
 /// `Config::load` already rejected a missing or unknown kind).
-fn forge(cfg: &config::Config) -> Box<dyn Forge + Send> {
+fn forge(cfg: &config::Config) -> Box<dyn Forge + Send + Sync> {
     let (project, prefix) = (&cfg.forge.project, cfg.ticket_prefix());
     match cfg.forge.kind {
         Some(config::ForgeKind::Github) => Box::new(github::GhForge::new(project, prefix)),
         Some(config::ForgeKind::Gitlab) | None => Box::new(gitlab::GlabForge::new(project, prefix)),
     }
 }
-fn tracker(cfg: &config::Config) -> Box<dyn Tracker + Send> {
+fn tracker(cfg: &config::Config) -> Box<dyn Tracker + Send + Sync> {
     let t = &cfg.tracker;
     match t.kind {
         Some(config::TrackerKind::Filesystem) => {
@@ -209,6 +209,8 @@ fn boot(project: &wire::Project, cfg: config::Config) -> Result<()> {
         stacks: forge.stacks(),
         provider_env: domain::CrewKind::ALL.iter().map(|k| (k.as_str().to_string(), cfg.provider_env(k.as_str()))).collect(),
     };
+    // The server's own adapters + the ledger's path: it answers reads off the loop.
+    let reader = server::Reader { ledger: project.ledger(), forge: self::forge(&cfg), tracker: self::tracker(&cfg) };
     let sched_snapshot = snapshot.clone();
     let pulse = scheduler::Pulse::default();
     let sched_pulse = pulse.clone();
@@ -231,7 +233,7 @@ fn boot(project: &wire::Project, cfg: config::Config) -> Result<()> {
     std::thread::spawn(move || scheduler::run(ledger, host, forge, tracker, sched_snapshot, cfg, cmd_rx, sched_pulse));
 
     tracing::info!("serving context on {socket}");
-    server::serve(&socket, snapshot, cmd_tx, deployment, pulse) // blocks forever
+    server::serve(&socket, snapshot, cmd_tx, deployment, reader, pulse) // blocks forever
 }
 
 #[cfg(test)]

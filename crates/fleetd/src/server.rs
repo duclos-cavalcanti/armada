@@ -1,16 +1,19 @@
-//! A tiny HTTP-over-UDS server (PLAN §5). Reads serve the in-memory snapshot; the one
-//! write route (`POST /status`) relays to the single-writer scheduler over a channel.
+//! A tiny HTTP-over-UDS server (PLAN §5). Reads are answered here, on the connection's own
+//! thread: from the poll's snapshot, the ledger opened read-only, and the server's own forge and
+//! tracker adapters, so a read never waits on the scheduler's loop. Every write relays to the
+//! single-writer scheduler over a channel, as a `Command`.
 //!
 //! HTTP is the *language* (GET /context → JSON); a Unix-domain socket *file* is the
 //! *door* (no TCP port; auth = filesystem permissions; SSH-forwardable later). It
 //! doesn't justify an async runtime — a `UnixListener` + a thread per connection is
-//! plenty. Reads never touch the ledger (they serve the poll's snapshot); the write
-//! route never touches the ledger *here* either — it hands a `Command` to the writer.
+//! plenty.
 
 use crate::scheduler::{Command, ControlTarget, Pulse, STALLED};
 use crate::Snapshot;
 use anyhow::Result;
+use domain::ports::{Forge, Tracker};
 use domain::{CogState, ConvoyKey, Order, Ruler, TicketKey};
+use ledger::Ledger;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
@@ -29,6 +32,20 @@ pub struct Deployment {
     pub provider_env: std::collections::BTreeMap<String, String>,
 }
 
+/// What the server reads with, off the loop: the ledger's path (each read opens it read-only, which
+/// WAL lets run beside the writer) and its own forge and tracker adapters.
+pub struct Reader {
+    pub ledger: String,
+    pub forge: Box<dyn Forge + Send + Sync>,
+    pub tracker: Box<dyn Tracker + Send + Sync>,
+}
+
+impl Reader {
+    fn ledger(&self) -> Result<Ledger> {
+        Ledger::open_readonly(&self.ledger)
+    }
+}
+
 /// Refuse to start when another fleetd already answers on `path` — one writer per ledger. A socket
 /// file nobody answers is a crash's leftover, which `serve` clears.
 pub fn refuse_if_running(path: &str) -> Result<()> {
@@ -38,8 +55,8 @@ pub fn refuse_if_running(path: &str) -> Result<()> {
 
 /// Bind the socket (clearing any stale file) and serve forever. `cmds` is the write
 /// channel to the scheduler; each connection gets its own clone.
-pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, deployment: Deployment, pulse: Pulse) -> Result<()> {
-    let deployment = std::sync::Arc::new(deployment);
+pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, deployment: Deployment, reader: Reader, pulse: Pulse) -> Result<()> {
+    let (deployment, reader) = (std::sync::Arc::new(deployment), std::sync::Arc::new(reader));
     let _ = std::fs::remove_file(path); // a leftover socket from a crash would block bind
     let listener = UnixListener::bind(path)?;
     for stream in listener.incoming() {
@@ -47,10 +64,10 @@ pub fn serve(path: &str, snapshot: Snapshot, cmds: Sender<Command>, deployment: 
             Ok(mut s) => {
                 let snapshot = snapshot.clone();
                 let cmds = cmds.clone();
-                let deployment = deployment.clone();
+                let (deployment, reader) = (deployment.clone(), reader.clone());
                 let pulse = pulse.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = handle(&mut s, &snapshot, &cmds, &deployment, &pulse) {
+                    if let Err(e) = handle(&mut s, &snapshot, &cmds, &deployment, &reader, &pulse) {
                         tracing::warn!("connection error: {e}");
                     }
                 });
@@ -66,16 +83,31 @@ fn handle(
     snapshot: &Snapshot,
     cmds: &Sender<Command>,
     deployment: &Deployment,
+    reader: &Reader,
     pulse: &Pulse,
 ) -> std::io::Result<()> {
     let request = read_request(stream)?;
     let (method, path) = parse_request_line(&request);
-    if let Some(busy) = busy(path.as_deref(), pulse, STALLED) {
-        return stream.write_all(busy.as_bytes());
-    }
+    let (method, path) = (method.as_deref(), path.as_deref());
+    let response = match read_route(method, path, &request, snapshot, deployment, reader) {
+        Some(answer) => answer,
+        None => busy(pulse, STALLED).unwrap_or_else(|| write_route(method, path, &request, cmds, deployment)),
+    };
+    stream.write_all(response.as_bytes())
+}
 
-    let response = match (method.as_deref(), path.as_deref()) {
-        (Some("GET"), Some(p)) if p.starts_with("/context?convoy=") => handle_convoy_view(cmds, p),
+/// The reads, answered on this thread, never queued on the loop (so never refused as busy). `None`:
+/// not a read.
+fn read_route(
+    method: Option<&str>,
+    path: Option<&str>,
+    request: &str,
+    snapshot: &Snapshot,
+    deployment: &Deployment,
+    reader: &Reader,
+) -> Option<String> {
+    Some(match (method, path) {
+        (Some("GET"), Some(p)) if p.starts_with("/context?convoy=") => handle_convoy_view(reader, p),
         (Some("GET"), Some("/context")) => {
             let body = serde_json::to_string(&*snapshot.lock().unwrap())
                 .unwrap_or_else(|_| "[]".into());
@@ -87,64 +119,66 @@ fn handle(
             Some(env) => http_response("200 OK", "text/plain", env),
             None => http_response("400 Bad Request", "text/plain", "unknown cog kind"),
         },
-        (Some("POST"), Some("/status")) => handle_status(&request, cmds),
-        (Some("POST"), Some("/dispatch")) => handle_dispatch(&request, cmds, deployment),
-        (Some("POST"), Some("/hand")) => handle_hand(&request, cmds),
-        (Some("POST"), Some("/convoy-open")) => handle_convoy(&request, cmds, true),
-        (Some("POST"), Some("/convoy-close")) => handle_convoy(&request, cmds, false),
-        (Some("POST"), Some("/convoy-add")) => handle_convoy_member(&request, cmds, true),
-        (Some("POST"), Some("/convoy-remove")) => handle_convoy_member(&request, cmds, false),
-        (Some("POST"), Some("/anchor")) => handle_hold(&request, cmds, Hold::Anchor),
-        (Some("POST"), Some("/weigh")) => handle_hold(&request, cmds, Hold::Weigh),
-        (Some("POST"), Some("/sink")) => handle_hold(&request, cmds, Hold::Sink),
-        (Some("POST"), Some("/send")) => handle_send(&request, cmds),
-        (Some("POST"), Some("/anchor-ticket")) => handle_anchor_ticket(&request, cmds, true),
-        (Some("POST"), Some("/weigh-ticket")) => handle_anchor_ticket(&request, cmds, false),
-        (Some("POST"), Some("/rework")) => handle_rework(&request, cmds),
-        (Some("POST"), Some("/inspection")) => handle_inspection(&request, cmds),
-        (Some("POST"), Some("/ruling")) => handle_ruling(&request, cmds),
-        (Some("POST"), Some("/memory")) => handle_memory(&request, cmds),
-        (Some("GET"), Some(p)) if p.starts_with("/packet") => handle_packet(cmds, p),
-        (Some("GET"), Some(p)) if p.starts_with("/review") => handle_review(cmds, p),
-        (Some("POST"), Some(p)) if p.starts_with("/rebase") => handle_rebase(cmds, p),
-        (Some("GET"), Some(p)) if p.starts_with("/ci?") => handle_ci(cmds, p),
-        (Some("POST"), Some("/reply")) => handle_reply(&request, cmds),
-        (Some("POST"), Some("/rereview")) => handle_rereview(&request, cmds),
-        (Some("GET"), Some(p)) if p.starts_with("/ship?") => handle_ship(cmds, p),
-        (Some("GET"), Some(p)) if p.starts_with("/crossings?") => handle_crossings(cmds, p),
-        (Some("GET"), Some(p)) if p.starts_with("/diff?") => handle_diff(cmds, p),
-        (Some("POST"), Some("/review-post")) => handle_review_post(&request, cmds),
-        (Some("POST"), Some(p)) if p.starts_with("/retry-ci?") => handle_retry_ci(cmds, p),
-        (Some("POST"), Some("/launch")) => handle_launch(&request, cmds, deployment),
-        (Some("POST"), Some("/arm")) => handle_arm(&request, cmds),
-        (Some("GET"), Some(p)) if p.starts_with("/ticket?") => handle_ticket_view(cmds, p),
-        (Some("POST"), Some("/ticket-new")) => handle_ticket_new(&request, cmds),
-        (Some("POST"), Some("/ticket-link")) => handle_ticket_link(&request, cmds),
-        (Some("POST"), Some("/ticket-epic")) => handle_ticket_epic(&request, cmds),
-        (Some("POST"), Some("/ticket-sprint")) => handle_ticket_sprint(&request, cmds),
-        (Some("POST"), Some("/ticket-edit")) => handle_ticket_text(&request, cmds, false),
-        (Some("POST"), Some("/ticket-fields")) => handle_ticket_fields(&request, cmds),
-        (Some("POST"), Some("/ticket-search")) => handle_ticket_search(&request, cmds),
-        (Some("POST"), Some("/ticket-comment")) => handle_ticket_text(&request, cmds, true),
-        (Some("POST"), Some("/propose")) => handle_propose(&request, cmds),
-        (Some("POST"), Some("/decommission")) => handle_decommission(&request, cmds, false),
-        (Some("POST"), Some("/recall")) => handle_decommission(&request, cmds, true),
-        (Some("POST"), Some("/proposal-accept")) => handle_proposal(&request, cmds, true),
-        (Some("POST"), Some("/proposal-drop")) => handle_proposal(&request, cmds, false),
-        (Some("GET"), Some("/settings")) => handle_settings_list(cmds),
-        (Some("POST"), Some("/settings")) => handle_setting(&request, cmds),
-        _ => http_response("404 Not Found", "text/plain", "not found"),
-    };
-    stream.write_all(response.as_bytes())
+        (Some("GET"), Some(p)) if p.starts_with("/packet") => handle_packet(reader, p),
+        (Some("GET"), Some(p)) if p.starts_with("/review") => handle_review(reader, p),
+        (Some("GET"), Some(p)) if p.starts_with("/ci?") => handle_ci(reader, p),
+        (Some("GET"), Some(p)) if p.starts_with("/ship?") => handle_ship(reader, p),
+        (Some("GET"), Some(p)) if p.starts_with("/crossings?") => handle_crossings(reader, p),
+        (Some("GET"), Some(p)) if p.starts_with("/diff?") => handle_diff(reader, p),
+        (Some("GET"), Some(p)) if p.starts_with("/ticket?") => handle_ticket_view(reader, p),
+        (Some("POST"), Some("/ticket-search")) => handle_ticket_search(request, reader),
+        _ => return None,
+    })
 }
 
-/// The `503` for a request that needs the scheduler while one step has held its loop `after` or
-/// more (`STALLED`): refused, never queued, so it can't run late behind the stall (or twice, on a retry).
-/// The answers that never touch the scheduler (`/context`, `/project`, `/settings-env`) still serve.
-fn busy(path: Option<&str>, pulse: &Pulse, after: std::time::Duration) -> Option<String> {
-    if matches!(path, Some("/context" | "/project")) || path.is_some_and(|p| p.starts_with("/settings-env?")) {
-        return None;
+/// The writes (and the reads that need the scheduler's config): each relayed to the loop.
+fn write_route(method: Option<&str>, path: Option<&str>, request: &str, cmds: &Sender<Command>, deployment: &Deployment) -> String {
+    match (method, path) {
+        (Some("POST"), Some("/status")) => handle_status(request, cmds),
+        (Some("POST"), Some("/dispatch")) => handle_dispatch(request, cmds, deployment),
+        (Some("POST"), Some("/hand")) => handle_hand(request, cmds),
+        (Some("POST"), Some("/convoy-open")) => handle_convoy(request, cmds, true),
+        (Some("POST"), Some("/convoy-close")) => handle_convoy(request, cmds, false),
+        (Some("POST"), Some("/convoy-add")) => handle_convoy_member(request, cmds, true),
+        (Some("POST"), Some("/convoy-remove")) => handle_convoy_member(request, cmds, false),
+        (Some("POST"), Some("/anchor")) => handle_hold(request, cmds, Hold::Anchor),
+        (Some("POST"), Some("/weigh")) => handle_hold(request, cmds, Hold::Weigh),
+        (Some("POST"), Some("/sink")) => handle_hold(request, cmds, Hold::Sink),
+        (Some("POST"), Some("/send")) => handle_send(request, cmds),
+        (Some("POST"), Some("/anchor-ticket")) => handle_anchor_ticket(request, cmds, true),
+        (Some("POST"), Some("/weigh-ticket")) => handle_anchor_ticket(request, cmds, false),
+        (Some("POST"), Some("/rework")) => handle_rework(request, cmds),
+        (Some("POST"), Some("/inspection")) => handle_inspection(request, cmds),
+        (Some("POST"), Some("/ruling")) => handle_ruling(request, cmds),
+        (Some("POST"), Some("/memory")) => handle_memory(request, cmds),
+        (Some("POST"), Some(p)) if p.starts_with("/rebase") => handle_rebase(cmds, p),
+        (Some("POST"), Some("/reply")) => handle_reply(request, cmds),
+        (Some("POST"), Some("/rereview")) => handle_rereview(request, cmds),
+        (Some("POST"), Some("/review-post")) => handle_review_post(request, cmds),
+        (Some("POST"), Some(p)) if p.starts_with("/retry-ci?") => handle_retry_ci(cmds, p),
+        (Some("POST"), Some("/launch")) => handle_launch(request, cmds, deployment),
+        (Some("POST"), Some("/arm")) => handle_arm(request, cmds),
+        (Some("POST"), Some("/ticket-new")) => handle_ticket_new(request, cmds),
+        (Some("POST"), Some("/ticket-link")) => handle_ticket_link(request, cmds),
+        (Some("POST"), Some("/ticket-epic")) => handle_ticket_epic(request, cmds),
+        (Some("POST"), Some("/ticket-sprint")) => handle_ticket_sprint(request, cmds),
+        (Some("POST"), Some("/ticket-edit")) => handle_ticket_text(request, cmds, false),
+        (Some("POST"), Some("/ticket-fields")) => handle_ticket_fields(request, cmds),
+        (Some("POST"), Some("/ticket-comment")) => handle_ticket_text(request, cmds, true),
+        (Some("POST"), Some("/propose")) => handle_propose(request, cmds),
+        (Some("POST"), Some("/decommission")) => handle_decommission(request, cmds, false),
+        (Some("POST"), Some("/recall")) => handle_decommission(request, cmds, true),
+        (Some("POST"), Some("/proposal-accept")) => handle_proposal(request, cmds, true),
+        (Some("POST"), Some("/proposal-drop")) => handle_proposal(request, cmds, false),
+        (Some("GET"), Some("/settings")) => handle_settings_list(cmds),
+        (Some("POST"), Some("/settings")) => handle_setting(request, cmds),
+        _ => http_response("404 Not Found", "text/plain", "not found"),
     }
+}
+
+/// The `503` for a write while one step has held the loop `after` or more (`STALLED`): refused,
+/// never queued, so it can't run late behind the stall (or twice, on a retry). Reads never ask.
+fn busy(pulse: &Pulse, after: std::time::Duration) -> Option<String> {
     let (step, held) = pulse.stalled(after)?;
     let why = format!("fleetd busy: its {step} has held the loop for {}; nothing was queued, try again later", span(held));
     tracing::warn!("{why}");
@@ -334,9 +368,9 @@ fn handle_convoy_member(request: &str, cmds: &Sender<Command>, add: bool) -> Str
     }
 }
 
-/// `GET /context?convoy=PROJ-N` — relay a convoy-view read to the writer and return the convoy's
-/// ticket slice (each with `ready`/`dispatched`) as JSON. The captain's boot read.
-fn handle_convoy_view(cmds: &Sender<Command>, path: &str) -> String {
+/// `GET /context?convoy=PROJ-N` — the convoy's ticket slice (each with `ready`/`dispatched`) as
+/// JSON. The captain's boot read.
+fn handle_convoy_view(reader: &Reader, path: &str) -> String {
     let convoy = path
         .split_once("?convoy=")
         .map(|(_, rest)| rest.split('&').next().unwrap_or("").trim())
@@ -348,24 +382,12 @@ fn handle_convoy_view(cmds: &Sender<Command>, path: &str) -> String {
         Ok(k) => k,
         Err(e) => return http_response("400 Bad Request", "text/plain", &e.to_string()),
     };
-    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    let cmd = Command::GetConvoyView { convoy, reply: reply_tx };
-    if cmds.send(cmd).is_err() {
-        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
-    }
-    match reply_rx.recv() {
-        Ok(Ok(view)) => {
-            let body = serde_json::to_string(&view).unwrap_or_else(|_| "{}".into());
-            http_response("200 OK", "application/json", &body)
-        }
-        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
-        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
-    }
+    answer(reader.ledger().and_then(|l| crate::scheduler::build_convoy_view(&l, &convoy, reader.forge.stacks())))
 }
 
-/// `GET /packet?ticket=PROJ-N` — relay a packet read to the writer (it owns the ledger) and
-/// return the composed `{order, ship, snapshot, ticket}` as JSON. The sailor's boot read.
-fn handle_packet(cmds: &Sender<Command>, path: &str) -> String {
+/// `GET /packet?ticket=PROJ-N` — the composed `{order, ship, snapshot, ticket}` as JSON. The
+/// sailor's boot read.
+fn handle_packet(reader: &Reader, path: &str) -> String {
     let ticket = path
         .split_once("?ticket=")
         .map(|(_, rest)| rest.split('&').next().unwrap_or("").trim())
@@ -377,88 +399,43 @@ fn handle_packet(cmds: &Sender<Command>, path: &str) -> String {
         Ok(t) => t,
         Err(r) => return r,
     };
-    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    let cmd = Command::GetPacket { ticket, reply: reply_tx };
-    if cmds.send(cmd).is_err() {
-        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
-    }
-    match reply_rx.recv() {
-        Ok(Ok(packet)) => {
-            let body = serde_json::to_string(&packet).unwrap_or_else(|_| "{}".into());
-            http_response("200 OK", "application/json", &body)
-        }
-        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
-        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
-    }
+    answer(reader.ledger().and_then(|l| crate::scheduler::build_packet(&l, &ticket)))
 }
 
-/// `GET /review?iid=N` — relay an MR-review read to the writer (it owns the forge) and return the
-/// fresh `{open_threads, floating_notes}` as JSON. Replaces the bash mr-open-threads + mr-floating-notes.
-fn handle_review(cmds: &Sender<Command>, path: &str) -> String {
+/// `GET /review?iid=N` — the MR's fresh `{open_threads, floating_notes}` as JSON.
+fn handle_review(reader: &Reader, path: &str) -> String {
     let Some(iid) = parse_iid(path) else {
         return http_response("400 Bad Request", "text/plain", "missing/invalid ?iid=");
     };
-    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    if cmds.send(Command::GetReview { iid, reply: reply_tx }).is_err() {
-        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
-    }
-    match reply_rx.recv() {
-        Ok(Ok(review)) => {
-            let body = serde_json::to_string(&review).unwrap_or_else(|_| "{}".into());
-            http_response("200 OK", "application/json", &body)
-        }
-        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
-        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
-    }
+    answer(reader.forge.review_state(iid))
 }
 
 /// `GET /ship?iid=N` — one ship (ours or an ally's) with its snapshot and fetch ref.
-fn handle_ship(cmds: &Sender<Command>, path: &str) -> String {
+fn handle_ship(reader: &Reader, path: &str) -> String {
     let Some(iid) = parse_iid(path) else {
         return http_response("400 Bad Request", "text/plain", "missing/invalid ?iid=");
     };
-    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    if cmds.send(Command::GetShip { iid, reply: reply_tx }).is_err() {
-        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
-    }
-    match reply_rx.recv() {
-        Ok(Ok(view)) => http_response("200 OK", "application/json", &serde_json::to_string(&view).unwrap_or_default()),
-        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
-        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
-    }
+    answer(reader.ledger().and_then(|l| crate::scheduler::ship_view(&l, &*reader.forge, iid)))
 }
 
 /// `GET /crossings?iid=N[&brief=1]` — the MR beside our open tickets: what their MRs share with it,
 /// and (unless brief) each ticket's text.
-fn handle_crossings(cmds: &Sender<Command>, path: &str) -> String {
+fn handle_crossings(reader: &Reader, path: &str) -> String {
     let Some(iid) = parse_iid(path) else {
         return http_response("400 Bad Request", "text/plain", "missing/invalid ?iid=");
     };
     let brief = query(path, "brief").is_some_and(|b| b == "1");
-    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    if cmds.send(Command::GetCrossings { iid, brief, reply: reply_tx }).is_err() {
-        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
-    }
-    match reply_rx.recv() {
-        Ok(Ok(c)) => http_response("200 OK", "application/json", &serde_json::to_string(&c).unwrap_or_default()),
-        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
-        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
-    }
+    answer(reader.ledger().and_then(|l| crate::crossings::crossings(&l, &*reader.tracker, &*reader.forge, iid, brief)))
 }
 
 /// `GET /diff?iid=N&path=<percent-encoded>` — the MR's diff of one file.
-fn handle_diff(cmds: &Sender<Command>, path: &str) -> String {
+fn handle_diff(reader: &Reader, path: &str) -> String {
     let (Some(iid), Some(file)) = (parse_iid(path), query(path, "path").and_then(wire::pct_decode)) else {
         return http_response("400 Bad Request", "text/plain", "missing/invalid ?iid= or &path=");
     };
-    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    if cmds.send(Command::GetDiff { iid, path: file, reply: reply_tx }).is_err() {
-        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
-    }
-    match reply_rx.recv() {
-        Ok(Ok(diff)) => http_response("200 OK", "text/plain", &diff),
-        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
-        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    match reader.forge.file_diff(iid, &file) {
+        Ok(diff) => http_response("200 OK", "text/plain", &diff),
+        Err(e) => http_response("409 Conflict", "text/plain", &format!("{e:#}")),
     }
 }
 
@@ -531,19 +508,11 @@ fn handle_reply(request: &str, cmds: &Sender<Command>) -> String {
 }
 
 /// `GET /ci?iid=N` — the MR's CI: status + every failed job with its log tail.
-fn handle_ci(cmds: &Sender<Command>, path: &str) -> String {
+fn handle_ci(reader: &Reader, path: &str) -> String {
     let Some(iid) = parse_iid(path) else {
         return http_response("400 Bad Request", "text/plain", "missing/invalid ?iid=");
     };
-    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    if cmds.send(Command::GetCi { iid, reply: reply_tx }).is_err() {
-        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
-    }
-    match reply_rx.recv() {
-        Ok(Ok(ci)) => http_response("200 OK", "application/json", &serde_json::to_string(&ci).unwrap_or_default()),
-        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
-        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
-    }
+    answer(reader.forge.ci(iid))
 }
 
 /// `POST /retry-ci?iid=N` — re-run the MR's failed CI jobs.
@@ -601,21 +570,13 @@ fn handle_arm(request: &str, cmds: &Sender<Command>) -> String {
 }
 
 /// `GET /ticket?ticket=<KEY>` — a ticket's full text, read through the tracker.
-fn handle_ticket_view(cmds: &Sender<Command>, path: &str) -> String {
+fn handle_ticket_view(reader: &Reader, path: &str) -> String {
     let key = path.split_once("?ticket=").map(|(_, rest)| rest.split('&').next().unwrap_or("").trim()).unwrap_or("");
     let ticket = match parse_ticket(key) {
         Ok(t) => t,
         Err(r) => return r,
     };
-    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    if cmds.send(Command::GetTicket { ticket, reply: reply_tx }).is_err() {
-        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
-    }
-    match reply_rx.recv() {
-        Ok(Ok(detail)) => http_response("200 OK", "application/json", &serde_json::to_string(&detail).unwrap_or_default()),
-        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
-        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
-    }
+    answer(reader.ledger().and_then(|l| crate::scheduler::read_ticket(&l, &*reader.tracker, &ticket)))
 }
 
 /// `POST /ticket-new` — create a ticket; reply with its key.
@@ -795,20 +756,20 @@ fn handle_ticket_fields(request: &str, cmds: &Sender<Command>) -> String {
 }
 
 /// `POST /ticket-search` — the tickets a query matches, in full (JSON).
-fn handle_ticket_search(request: &str, cmds: &Sender<Command>) -> String {
+fn handle_ticket_search(request: &str, reader: &Reader) -> String {
     let query = match parse_body::<wire::TicketSearchCmd>(request) {
         Ok(dto) if !dto.query.trim().is_empty() => dto.query,
         Ok(_) => return http_response("400 Bad Request", "text/plain", "an empty query"),
         Err(r) => return r,
     };
-    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    if cmds.send(Command::SearchTickets { query, reply: reply_tx }).is_err() {
-        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
-    }
-    match reply_rx.recv() {
-        Ok(Ok(found)) => http_response("200 OK", "application/json", &serde_json::to_string(&found).unwrap_or_default()),
-        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
-        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    answer(reader.tracker.search(&query))
+}
+
+/// A read's answer: its JSON, or the `409` its error is.
+fn answer<T: serde::Serialize>(read: Result<T>) -> String {
+    match read {
+        Ok(v) => http_response("200 OK", "application/json", &serde_json::to_string(&v).unwrap_or_default()),
+        Err(e) => http_response("409 Conflict", "text/plain", &format!("{e:#}")),
     }
 }
 
@@ -1194,18 +1155,45 @@ mod tests {
     }
 
     #[test]
-    fn a_stalled_loop_refuses_what_needs_it_and_serves_the_rest() {
+    fn a_stalled_loop_refuses_a_write() {
         let (pulse, now) = (Pulse::default(), std::time::Duration::ZERO);
-        assert!(busy(Some("/dispatch"), &pulse, now).is_none(), "an idle loop takes it");
+        assert!(busy(&pulse, now).is_none(), "an idle loop takes it");
         pulse.on("health check");
-        let refused = busy(Some("/dispatch"), &pulse, now).unwrap();
+        let refused = busy(&pulse, now).unwrap();
         assert!(refused.starts_with("HTTP/1.1 503") && refused.contains("its health check has held the loop"), "{refused}");
-        assert!(busy(Some("/project"), &pulse, now).is_none() && busy(Some("/context"), &pulse, now).is_none());
-        assert!(busy(Some("/settings-env?kind=admiral"), &pulse, now).is_none());
-        assert!(busy(Some("/dispatch"), &pulse, STALLED).is_none(), "not held long enough yet");
+        assert!(busy(&pulse, STALLED).is_none(), "not held long enough yet");
         pulse.off();
-        assert!(busy(Some("/dispatch"), &pulse, now).is_none());
+        assert!(busy(&pulse, now).is_none());
         assert_eq!((span(std::time::Duration::from_secs(45)), span(std::time::Duration::from_secs(190)), span(std::time::Duration::from_secs(137_000))), ("45s".into(), "3m 10s".into(), "38h 3m".into()));
+    }
+
+    /// A reader over the ledger at `ledger`, with adapters no test reaches the network through.
+    fn reader(ledger: &str) -> Reader {
+        Reader {
+            ledger: ledger.into(),
+            forge: Box::new(crate::gitlab::GlabForge::new("1", "PROJ")),
+            tracker: Box::new(crate::filesystem::FsTracker::new(std::env::temp_dir().join("fleetd-test-no-tickets"), "PROJ", "me")),
+        }
+    }
+
+    #[test]
+    fn a_read_is_answered_here_from_the_ledger_and_a_write_goes_to_the_loop() {
+        let path = std::env::temp_dir().join(format!("fleetd-test-reads-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let ledger = path.to_string_lossy().to_string();
+        drop(Ledger::open(&ledger).unwrap());
+        let (snapshot, reader) = (Arc::new(Mutex::new(vec![])), reader(&ledger));
+        let deployment = Deployment { project: "/wt/project".into(), default_branch: "origin/main".into(), stacks: true, provider_env: Default::default() };
+        let route = |method, path: &str| read_route(Some(method), Some(path), "", &snapshot, &deployment, &reader);
+
+        let packet = route("GET", "/packet?ticket=PROJ-1").unwrap();
+        assert!(packet.starts_with("HTTP/1.1 200") && packet.contains(r#""order":null"#), "no scheduler needed: {packet}");
+        assert!(route("GET", "/ticket?ticket=nope").unwrap().starts_with("HTTP/1.1 400"));
+        assert!(route("GET", "/project").unwrap().ends_with("/wt/project"));
+        for write in ["/status", "/review-post", "/launch", "/ticket-new"] {
+            assert!(route("POST", write).is_none(), "{write} goes to the loop");
+        }
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -1232,7 +1220,7 @@ mod tests {
             let provider_env = [("admiral".to_string(), "AWS_REGION=us-west-2 CLAUDE_CODE_USE_BEDROCK=1 ".to_string())].into();
             let deployment =
                 Deployment { project: "/wt/project".into(), default_branch: "origin/main".into(), stacks, provider_env };
-            let _ = serve(&sock2, snapshot, cmds, deployment, Pulse::default());
+            let _ = serve(&sock2, snapshot, cmds, deployment, reader("/nonexistent/ledger.db"), Pulse::default());
         });
         for _ in 0..100 {
             if std::path::Path::new(&sock).exists() {
@@ -1313,13 +1301,8 @@ mod tests {
                     | Command::Inspect { reply, .. }
                     | Command::SetSetting { reply, .. }
                     | Command::Rebase { reply, .. } => { let _ = reply.send(Ok(())); }
-                    Command::GetPacket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::GetConvoyView { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::GetReview { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetSettings { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Launch { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::GetTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::SearchTickets { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::NewTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Propose { reply, .. }
                     | Command::AcceptProposal { reply, .. }
@@ -1338,12 +1321,8 @@ mod tests {
                     | Command::SetEpic { reply, .. }
                     | Command::SprintTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
-                    Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Reply { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Rereview { reply, .. } => { let _ = reply.send(Ok("ok".into())); }
-                    Command::GetShip { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::GetCrossings { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::GetDiff { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::PostReview { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::RetryCi { reply, .. } => { let _ = reply.send(Ok(())); }
                 }
@@ -1389,13 +1368,8 @@ mod tests {
                     | Command::Inspect { reply, .. }
                     | Command::SetSetting { reply, .. }
                     | Command::Rebase { reply, .. } => { let _ = reply.send(Ok(())); }
-                    Command::GetPacket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::GetConvoyView { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::GetReview { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetSettings { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Launch { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::GetTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::SearchTickets { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::NewTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Propose { reply, .. }
                     | Command::AcceptProposal { reply, .. }
@@ -1414,12 +1388,8 @@ mod tests {
                     | Command::SetEpic { reply, .. }
                     | Command::SprintTicket { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
-                    Command::GetCi { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Reply { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Rereview { reply, .. } => { let _ = reply.send(Ok("ok".into())); }
-                    Command::GetShip { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::GetCrossings { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
-                    Command::GetDiff { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::PostReview { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::RetryCi { reply, .. } => { let _ = reply.send(Ok(())); }
                 }

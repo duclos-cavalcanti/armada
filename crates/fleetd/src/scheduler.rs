@@ -40,22 +40,6 @@ pub struct Launch {
 
 /// The outcome channel a `Command` carries so the server can relay it as HTTP.
 type Reply = std::sync::mpsc::Sender<std::result::Result<(), String>>;
-/// A read command's reply — carries the composed packet (reads return data, not just a status).
-type PacketReply = std::sync::mpsc::Sender<std::result::Result<Packet, String>>;
-/// A convoy-view read's reply.
-type ConvoyReply = std::sync::mpsc::Sender<std::result::Result<ConvoyView, String>>;
-/// An MR-review read's reply — the fresh open-thread count + floating notes.
-type ReviewReply = std::sync::mpsc::Sender<std::result::Result<domain::ReviewState, String>>;
-/// A ship read's reply — the ship, its snapshot, and its fetch ref.
-type ShipReply = std::sync::mpsc::Sender<std::result::Result<domain::ShipView, String>>;
-/// A CI read's reply — status + failed jobs with log tails.
-type CiReply = std::sync::mpsc::Sender<std::result::Result<domain::CiReport, String>>;
-/// A ticket read's reply — its full text.
-type TicketReply = std::sync::mpsc::Sender<std::result::Result<domain::TicketDetail, String>>;
-/// A search's matches, in full.
-type TicketsReply = std::sync::mpsc::Sender<std::result::Result<Vec<domain::TicketDetail>, String>>;
-/// A crossings read's reply — the MR under review beside our open tickets.
-type CrossingsReply = std::sync::mpsc::Sender<std::result::Result<domain::Crossings, String>>;
 /// A launch's reply — the new MR's URL.
 type UrlReply = std::sync::mpsc::Sender<std::result::Result<String, String>>;
 /// A settings-list read's reply — every live lever's effective value + source.
@@ -80,26 +64,17 @@ pub enum Command {
     Rule { ticket: TicketKey, question: String, answer: String, by: Ruler, reply: UrlReply }, // a ruling → what it did
     Remember { memory: domain::Memory, reply: UrlReply }, // set entries of the project's memory → what it holds
     Forget { id: String, reply: UrlReply },               // drop one → what it holds
-    GetPacket { ticket: TicketKey, reply: PacketReply }, // a read: the cog's composed work-packet
-    GetConvoyView { convoy: ConvoyKey, reply: ConvoyReply }, // a read: the captain's convoy slice
-    GetReview { iid: i64, reply: ReviewReply }, // a read: an MR's fresh review surface (forge)
     Rebase { iid: i64, reply: Reply },          // an action: server-side rebase an MR (forge)
     Reply { cmd: wire::ReplyCmd, reply: Reply },
     Rereview { cmd: wire::RereviewCmd, reply: UrlReply }, // an action: re-ask a reviewer holding changes (forge)
-    GetShip { iid: i64, reply: ShipReply },           // a read: one ship + snapshot + fetch ref (ledger + forge)
-    GetCrossings { iid: i64, brief: bool, reply: CrossingsReply }, // a read: the MR beside our open tickets (ledger + forge + tracker)
-    GetDiff { iid: i64, path: String, reply: UrlReply }, // a read: an MR's diff of one file (forge)
     PostReview { cmd: wire::ReviewPostCmd, reply: Reply }, // an action: a summary review comment (+ approve) (forge) // an action: answer (and resolve) a review thread (forge)
-    GetCi { iid: i64, reply: CiReply },         // a read: an MR's CI status + failed jobs (forge)
     RetryCi { iid: i64, reply: Reply },         // an action: re-run an MR's failed CI jobs (forge)
     Launch { launch: Launch, reply: UrlReply }, // an action: open a ticket's MR (forge)
     Arm { ticket: TicketKey, reply: Reply }, // an action: arm the ticket's MR, unless held/blocked (forge)
-    GetTicket { ticket: TicketKey, reply: TicketReply }, // a read: a ticket's full text (tracker)
     NewTicket { draft: domain::TicketDraft, reply: UrlReply }, // an action: create a ticket → its key (tracker)
     LinkTicket { ticket: TicketKey, other: TicketKey, link: domain::TicketLink, on: bool, captain: Option<ConvoyKey>, reply: Reply }, // an action: add or remove a link (tracker, + ledger)
     EditTicket { ticket: TicketKey, description: String, amend: Option<Amend>, reply: Reply }, // an action: replace its description (tracker)
     SetTicketFields { ticket: TicketKey, fields: domain::TicketFields, captain: Option<ConvoyKey>, reply: Reply }, // an action: its title, components, labels, points (tracker)
-    SearchTickets { query: String, reply: TicketsReply }, // a read: the tickets a query matches (tracker)
     CommentTicket { ticket: TicketKey, body: String, reply: Reply }, // an action: comment on it (tracker)
     SetEpic { ticket: TicketKey, epic: ConvoyKey, reply: Reply }, // an action: move it under an epic (tracker, + ledger)
     SprintTicket { ticket: TicketKey, active: bool, reply: Reply }, // an action: into the active sprint, or to the backlog (tracker)
@@ -375,30 +350,9 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let res = MemoryRepo::forget(ledger, &id, &now_rfc3339()).and_then(|_| held(ledger, &format!("dropped {id}"))).map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }
-        Command::GetPacket { ticket, reply } => {
-            let res = build_packet(ledger, &ticket).map_err(|e| e.to_string());
-            let _ = reply.send(res);
-        }
-        Command::GetConvoyView { convoy, reply } => {
-            let res = build_convoy_view(ledger, &convoy, forge.stacks()).map_err(|e| e.to_string());
-            let _ = reply.send(res);
-        }
-        Command::GetReview { iid, reply } => {
-            let res = forge.review_state(iid).map_err(|e| e.to_string());
-            let _ = reply.send(res);
-        }
         Command::Rebase { iid, reply } => {
             let res = forge.rebase(iid).map_err(|e| e.to_string());
             let _ = reply.send(res);
-        }
-        Command::GetShip { iid, reply } => {
-            let _ = reply.send(ship_view(ledger, forge, iid).map_err(|e| format!("{e:#}")));
-        }
-        Command::GetCrossings { iid, brief, reply } => {
-            let _ = reply.send(crate::crossings::crossings(ledger, tracker, forge, iid, brief).map_err(|e| format!("{e:#}")));
-        }
-        Command::GetDiff { iid, path, reply } => {
-            let _ = reply.send(forge.file_diff(iid, &path).map_err(|e| format!("{e:#}")));
         }
         Command::PostReview { cmd, reply } => {
             let _ = reply.send(post_review(ledger, forge, &cmd).map_err(|e| format!("{e:#}")));
@@ -413,9 +367,6 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             });
             let _ = reply.send(res.map_err(|e| format!("{e:#}")));
         }
-        Command::GetCi { iid, reply } => {
-            let _ = reply.send(forge.ci(iid).map_err(|e| format!("{e:#}")));
-        }
         Command::RetryCi { iid, reply } => {
             let _ = reply.send(forge.retry_ci(iid).map_err(|e| format!("{e:#}")));
         }
@@ -425,9 +376,6 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         }
         Command::Arm { ticket, reply } => {
             let _ = reply.send(arm(ledger, forge, &ticket, cfg.forge.auto_merge).map_err(|e| format!("{e:#}")));
-        }
-        Command::GetTicket { ticket, reply } => {
-            let _ = reply.send(read_ticket(ledger, tracker, &ticket).map_err(|e| format!("{e:#}")));
         }
         Command::NewTicket { draft, reply } => {
             let _ = reply.send(tracker.create(&draft).map(|k| k.0).map_err(|e| format!("{e:#}")));
@@ -453,9 +401,6 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
                 None => Ok(()),
             };
             let _ = reply.send(res.and_then(|()| tracker.set_fields(&ticket, &fields)).map_err(|e| format!("{e:#}")));
-        }
-        Command::SearchTickets { query, reply } => {
-            let _ = reply.send(tracker.search(&query).map_err(|e| format!("{e:#}")));
         }
         Command::CommentTicket { ticket, body, reply } => {
             let _ = reply.send(tracker.comment(&ticket, &body).map_err(|e| format!("{e:#}")));
@@ -785,7 +730,7 @@ fn post_review(ledger: &Ledger, forge: &dyn Forge, cmd: &wire::ReviewPostCmd) ->
     forge.post_review(cmd.iid, &cmd.body, cmd.approve)
 }
 
-fn ship_view(ledger: &Ledger, forge: &dyn Forge, iid: i64) -> Result<domain::ShipView> {
+pub(crate) fn ship_view(ledger: &Ledger, forge: &dyn Forge, iid: i64) -> Result<domain::ShipView> {
     let ship = ShipRepo::get_by_iid(ledger, iid)?.ok_or_else(|| anyhow!("!{iid}: not in the armada (synced yet?)"))?;
     let snapshot = ShipRepo::snapshot(ledger, &ship.id)?;
     let ours = reconcile::is_ours(ledger, &ship)?;
@@ -793,7 +738,7 @@ fn ship_view(ledger: &Ledger, forge: &dyn Forge, iid: i64) -> Result<domain::Shi
 }
 
 /// A ticket's full text from the tracker, plus the fleet's hold on it from the ledger.
-fn read_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey) -> Result<domain::TicketDetail> {
+pub(crate) fn read_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey) -> Result<domain::TicketDetail> {
     let mut detail = tracker.read(key)?;
     if TicketRepo::get(ledger, key)?.is_some_and(|t| t.held) {
         detail.held = Some(ledger.held_reason(key)?.unwrap_or_default());
@@ -1092,7 +1037,7 @@ fn anchor_ticket<H: SessionHost>(
 /// Compose a captain's convoy slice: every ticket in the convoy, each marked `ready` (fleetd's
 /// `is_ready` frontier) + `dispatched` (an order exists), plus a light cog/ship awareness. The
 /// captain dispatches `ready && !dispatched` and closes the convoy once every ticket is terminal.
-fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Result<ConvoyView> {
+pub(crate) fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Result<ConvoyView> {
     let armada = ShipRepo::armada(ledger)?;
     let board = TicketRepo::board(ledger)?;
     let goal = ConvoyRepo::goal(ledger, convoy)?;
@@ -1146,7 +1091,7 @@ fn build_convoy_view(ledger: &Ledger, convoy: &ConvoyKey, stacks: bool) -> Resul
 /// Compose a cog's work-packet from the ledger: its dispatch order, its open ship + the ship's
 /// latest snapshot, the cached ticket, and which of its blockers are still open. A pure read (the fresh-poll that keeps the snapshot
 /// current happens at LaunchSailor); the sailor calls this at boot to decide its sweep.
-fn build_packet(ledger: &Ledger, ticket: &TicketKey) -> Result<Packet> {
+pub(crate) fn build_packet(ledger: &Ledger, ticket: &TicketKey) -> Result<Packet> {
     let order = OrderRepo::get(ledger, ticket)?;
     let ship = ShipRepo::armada(ledger)?
         .into_iter()
