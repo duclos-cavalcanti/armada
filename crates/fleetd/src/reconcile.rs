@@ -1373,27 +1373,32 @@ fn ship_fingerprint(s: &ShipSnapshot, blocked: bool) -> String {
     )
 }
 
+/// One ship as the forge has it now (a read: nothing is recorded).
+pub(crate) fn poll<F: Forge + ?Sized>(forge: &F, ship: &Ship) -> Result<ShipSnapshot> {
+    let fs = forge.snapshot(ship.iid)?;
+    Ok(ShipSnapshot {
+        ship: ship.id.clone(),
+        title: fs.title,
+        state: fs.state,
+        head_sha: fs.head_sha,
+        has_conflicts: fs.has_conflicts,
+        open_threads: fs.open_threads,
+        total_threads: fs.total_threads,
+        approvals: fs.approvals,
+        armed: fs.armed,
+        on_merge_train: fs.on_merge_train,
+        blocked_by: fs.blocked_by,
+        pipeline: fs.pipeline,
+        merge_status: fs.merge_status,
+        synced_at: now_rfc3339(),
+    })
+}
+
 /// Fresh-poll one ship (by iid) so a cog's packet carries current state; fall back to the last sync
 /// on a poll failure. Shared by the sailor + lookout launches.
 pub(crate) fn fresh_snapshot<F: Forge + ?Sized>(ledger: &Ledger, forge: &F, ship: &Ship) -> Result<ShipSnapshot> {
-    match forge.snapshot(ship.iid) {
-        Ok(fs) => {
-            let snap = ShipSnapshot {
-                ship: ship.id.clone(),
-                title: fs.title,
-                state: fs.state,
-                head_sha: fs.head_sha,
-                has_conflicts: fs.has_conflicts,
-                open_threads: fs.open_threads,
-                total_threads: fs.total_threads,
-                approvals: fs.approvals,
-                armed: fs.armed,
-                on_merge_train: fs.on_merge_train,
-                blocked_by: fs.blocked_by,
-                pipeline: fs.pipeline,
-                merge_status: fs.merge_status,
-                synced_at: now_rfc3339(),
-            };
+    match poll(forge, ship) {
+        Ok(snap) => {
             ShipRepo::sync_snapshot(ledger, &snap)?;
             Ok(snap)
         }
