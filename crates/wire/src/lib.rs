@@ -209,6 +209,10 @@ pub struct TicketNewCmd {
     pub components: Vec<String>,
     #[serde(default)]
     pub points: Option<u32>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub fix_versions: Vec<String>,
 }
 
 /// Set a ticket's fields (`POST /ticket-fields`, `fleetc ticket edit --title|--component|--label|--points`):
@@ -224,6 +228,10 @@ pub struct TicketFieldsCmd {
     pub labels: Vec<String>,
     #[serde(default)]
     pub points: Option<u32>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub fix_versions: Option<Vec<String>>,
     /// Sent by a captain: its convoy, which the ticket must be in.
     #[serde(default)]
     pub captain: Option<String>,

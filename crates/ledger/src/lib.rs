@@ -2173,6 +2173,8 @@ fn row_to_proposal(r: &rusqlite::Row) -> rusqlite::Result<Proposal> {
                 labels: vec![],
                 components: vec![],
                 points: None,
+                priority: None,
+                fix_versions: vec![],
             })
         }
     };
@@ -2711,6 +2713,8 @@ mod repo_tests {
             labels: vec![],
             components: vec![],
             points: None,
+            priority: None,
+            fix_versions: vec![],
         };
         let proposal = |proposed| Proposal {
             id: ProposalId(0),

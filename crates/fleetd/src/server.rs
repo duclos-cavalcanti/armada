@@ -700,8 +700,8 @@ fn parse_draft(dto: wire::TicketNewCmd) -> Result<domain::TicketDraft, String> {
     if dto.title.trim().is_empty() {
         return Err(bad("a ticket needs a title".into()));
     }
-    let wire::TicketNewCmd { title, kind, description, labels, components, points, .. } = dto;
-    Ok(domain::TicketDraft { title, kind, description, convoy, blocked_by, labels, components, points })
+    let wire::TicketNewCmd { title, kind, description, labels, components, points, priority, fix_versions, .. } = dto;
+    Ok(domain::TicketDraft { title, kind, description, convoy, blocked_by, labels, components, points, priority, fix_versions })
 }
 
 /// Relay a command to the writer and await its reply: 200 with the reply's text, 409 with the
@@ -733,7 +733,10 @@ fn handle_ticket_link(request: &str, cmds: &Sender<Command>) -> String {
         "blocked-by" => domain::TicketLink::BlockedBy,
         "relates" => domain::TicketLink::Relates,
         "duplicates" => domain::TicketLink::Duplicates,
-        other => return http_response("400 Bad Request", "text/plain", &format!("unknown link {other:?}: blocked-by, relates or duplicates")),
+        other => match other.strip_prefix("type:").map(str::trim).filter(|t| !t.is_empty()) {
+            Some(name) => domain::TicketLink::Named(name.to_string()),
+            None => return http_response("400 Bad Request", "text/plain", &format!("unknown link {other:?}: blocked-by, relates, duplicates or type:<name>")),
+        },
     };
     if ticket == other {
         return http_response("400 Bad Request", "text/plain", "a ticket can't link to itself");
@@ -762,9 +765,16 @@ fn handle_ticket_fields(request: &str, cmds: &Sender<Command>) -> String {
         if dto.title.as_deref().is_some_and(|t| t.trim().is_empty()) {
             return Err(bad("an empty title".into()));
         }
-        let fields = domain::TicketFields { title: dto.title, components: dto.components, labels: dto.labels, points: dto.points };
+        let fields = domain::TicketFields {
+            title: dto.title,
+            components: dto.components,
+            labels: dto.labels,
+            points: dto.points,
+            priority: dto.priority,
+            fix_versions: dto.fix_versions,
+        };
         if fields.is_empty() {
-            return Err(bad("no field to set: --title, --component, --label or --points".into()));
+            return Err(bad("no field to set: --title, --component, --label, --points, --priority or --fix-version".into()));
         }
         Ok((ticket, fields, captain))
     });

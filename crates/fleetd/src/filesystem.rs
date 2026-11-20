@@ -52,6 +52,9 @@ struct Header {
     /// The tickets it duplicates.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     duplicates: Vec<String>,
+    /// Its links of other types, by type name: "`key` <type> `other`".
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    links: std::collections::BTreeMap<String, Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     assignee: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,6 +65,10 @@ struct Header {
     components: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     points: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    priority: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    fix_versions: Vec<String>,
 }
 
 /// A folder scan: `(key, ticket)` per good file, `(file, why)` per bad one.
@@ -146,8 +153,12 @@ impl FsTracker {
             description: t.body.clone(),
             related: keys(&t.header.related),
             duplicates: keys(&t.header.duplicates),
+            links: t.header.links.iter().flat_map(|(verb, ks)| ks.iter().filter_map(|k| TicketKey::parse(k).ok()).map(|other| domain::NamedLink { verb: verb.clone(), other })).collect(),
             components: t.header.components.clone(),
             points: t.header.points,
+            priority: t.header.priority.clone(),
+            fix_versions: t.header.fix_versions.clone(),
+            sprints: vec![],
             ticket: self.to_ticket(key.clone(), t),
             held: None,
             location: self.path(key).to_string_lossy().into_owned(),
@@ -297,11 +308,14 @@ impl Tracker for FsTracker {
                 blocked_by: d.blocked_by.iter().map(|b| b.0.clone()).collect(),
                 related: vec![],
                 duplicates: vec![],
+                links: Default::default(),
                 assignee: None,
                 parent: None,
                 labels: d.labels.clone(),
                 components: d.components.clone(),
                 points: d.points,
+                priority: d.priority.clone(),
+                fix_versions: d.fix_versions.clone(),
             },
             body: d.description.clone(),
         };
@@ -338,6 +352,12 @@ impl Tracker for FsTracker {
             if f.points.is_some() {
                 h.points = f.points;
             }
+            if f.priority.is_some() {
+                h.priority = f.priority.clone();
+            }
+            if let Some(versions) = &f.fix_versions {
+                h.fix_versions = versions.clone();
+            }
         })
     }
 
@@ -368,6 +388,13 @@ impl Tracker for FsTracker {
                 self.update(other, |h| set(&mut h.related, key))
             }
             TicketLink::Duplicates => self.update(key, |h| set(&mut h.duplicates, other)),
+            TicketLink::Named(name) => self.update(key, |h| {
+                let keys = h.links.entry(name.clone()).or_default();
+                set(keys, other);
+                if keys.is_empty() {
+                    h.links.remove(&name);
+                }
+            }),
         }
     }
 
@@ -439,13 +466,25 @@ mod tests {
     fn fields_search_and_duplicates_round_trip() {
         let (t, dir) = tracker("fields", &[("ARMT-4.md", ARMT_4), ("ARMT-5.md", &ARMT_4.replace("neg", "mul"))]);
         let key = TicketKey("ARMT-4".into());
-        let fields = TicketFields { title: Some("Add neg and abs".into()), components: Some(vec!["core".into()]), labels: vec!["math".into()], points: Some(3) };
+        let fields = TicketFields {
+            title: Some("Add neg and abs".into()),
+            components: Some(vec!["core".into()]),
+            labels: vec!["math".into()],
+            points: Some(3),
+            priority: Some("Major".into()),
+            fix_versions: Some(vec!["v1".into()]),
+        };
         t.set_fields(&key, &fields).unwrap();
         t.set_fields(&key, &fields).unwrap(); // idempotent: the label isn't added twice
         t.link(&key, &TicketKey("ARMT-5".into()), TicketLink::Duplicates, true).unwrap();
+        t.link(&key, &TicketKey("ARMT-5".into()), TicketLink::Named("split to".into()), true).unwrap();
         let d = t.read(&key).unwrap();
         assert_eq!((d.ticket.title.as_str(), d.components.as_slice(), d.points), ("Add neg and abs", ["core".to_string()].as_slice(), Some(3)));
         assert_eq!((d.ticket.labels, d.duplicates), (vec!["math".to_string()], vec![TicketKey("ARMT-5".into())]));
+        assert_eq!((d.priority.as_deref(), d.fix_versions.as_slice()), (Some("Major"), ["v1".to_string()].as_slice()));
+        assert_eq!(d.links, [domain::NamedLink { verb: "split to".into(), other: TicketKey("ARMT-5".into()) }]);
+        t.link(&key, &TicketKey("ARMT-5".into()), TicketLink::Named("split to".into()), false).unwrap();
+        assert!(t.read(&key).unwrap().links.is_empty(), "unlinked, and the empty type is gone");
         let found = |q: &str| t.search(q).unwrap().into_iter().map(|d| d.ticket.key.0).collect::<Vec<_>>();
         assert_eq!(found("NEG works"), ["ARMT-4"], "every word, in the title or body, case aside");
         assert_eq!(found("works"), ["ARMT-4", "ARMT-5"]);
@@ -478,6 +517,8 @@ mod tests {
             labels: vec!["fleet-proposed".into()],
             components: vec![],
             points: None,
+            priority: None,
+            fix_versions: vec![],
         };
         let key = t.create(&draft).unwrap();
         assert_eq!(key, TicketKey("ARMT-10".into()), "after the highest number, bad files included");

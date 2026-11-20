@@ -31,18 +31,18 @@ impl JiraTracker {
         detail_from_issue(issue, self.points_field.as_deref())
     }
 
-    /// The project's components by name → their ids: Jira refuses a component set by name ("not
-    /// valid") that it accepts by id.
-    fn component_ids(&self, names: &[String]) -> Result<Vec<serde_json::Value>> {
-        let all = self.rest_json("GET", &format!("/rest/api/2/project/{}/components", self.project), None)?;
-        let all = all.as_array().context("jira components: not a list")?;
+    /// The project's `what` (`components`, `versions`) by name → their ids: Jira refuses a
+    /// component set by name ("not valid") that it accepts by id. An archived one isn't offered.
+    fn ids_by_name(&self, what: &str, names: &[String]) -> Result<Vec<serde_json::Value>> {
+        let all = self.rest_json("GET", &format!("/rest/api/2/project/{}/{what}", self.project), None)?;
+        let live: Vec<&serde_json::Value> = all.as_array().with_context(|| format!("jira {what}: not a list"))?.iter().filter(|c| c["archived"].as_bool() != Some(true)).collect();
         names
             .iter()
             .map(|name| {
-                let id = all.iter().find(|c| c["name"].as_str() == Some(name.as_str()) && c["archived"].as_bool() != Some(true));
-                id.and_then(|c| c["id"].as_str()).map(|id| serde_json::json!({ "id": id })).with_context(|| {
-                    let known: Vec<&str> = all.iter().filter(|c| c["archived"].as_bool() != Some(true)).filter_map(|c| c["name"].as_str()).collect();
-                    format!("no component {name:?} in {} (it has: {})", self.project, known.join(", "))
+                let id = live.iter().find(|c| c["name"].as_str() == Some(name.as_str())).and_then(|c| c["id"].as_str());
+                id.map(|id| serde_json::json!({ "id": id })).with_context(|| {
+                    let known: Vec<&str> = live.iter().filter_map(|c| c["name"].as_str()).collect();
+                    format!("no {what} entry {name:?} in {} (it has: {})", self.project, known.join(", "))
                 })
             })
             .collect()
@@ -287,8 +287,15 @@ impl Tracker for JiraTracker {
         for blocker in &d.blocked_by {
             self.link(&key, blocker, TicketLink::BlockedBy, true)?;
         }
-        // jira-cli sets components by name, which Jira refuses: they (and the points) go over REST.
-        let fields = TicketFields { components: Some(d.components.clone()).filter(|c| !c.is_empty()), points: d.points, ..Default::default() };
+        // jira-cli sets components by name, which Jira refuses: they (and the rest) go over REST.
+        let set = |v: &[String]| Some(v.to_vec()).filter(|v| !v.is_empty());
+        let fields = TicketFields {
+            components: set(&d.components),
+            fix_versions: set(&d.fix_versions),
+            points: d.points,
+            priority: d.priority.clone(),
+            ..Default::default()
+        };
         if !fields.is_empty() {
             self.set_fields(&key, &fields).with_context(|| format!("{} filed, but its fields weren't set", key.0))?;
         }
@@ -306,7 +313,13 @@ impl Tracker for JiraTracker {
             fields.insert("summary".into(), title.as_str().into());
         }
         if let Some(names) = &f.components {
-            fields.insert("components".into(), self.component_ids(names)?.into());
+            fields.insert("components".into(), self.ids_by_name("components", names)?.into());
+        }
+        if let Some(names) = &f.fix_versions {
+            fields.insert("fixVersions".into(), self.ids_by_name("versions", names)?.into());
+        }
+        if let Some(priority) = &f.priority {
+            fields.insert("priority".into(), serde_json::json!({ "name": priority }));
         }
         if let Some(points) = f.points {
             let id = self.points_field.as_deref().context("story points need [tracker] points_field in fleet.toml (Jira's field id, e.g. customfield_10004)")?;
@@ -352,10 +365,11 @@ impl Tracker for JiraTracker {
         let fields = issue.get("fields").context("jira issue view: no fields")?;
         // Which side `other` is on: inward for "`other` blocks `key`", outward for "`key` duplicates
         // `other`", either for Relates.
-        let (name, side) = match link {
+        let (name, side) = match &link {
             TicketLink::BlockedBy => ("Blocks", Some(true)),
             TicketLink::Relates => ("Relates", None),
             TicketLink::Duplicates => ("Duplicate", Some(false)),
+            TicketLink::Named(name) => (name.as_str(), Some(false)),
         };
         let ids: Vec<String> = links_of(fields, name)
             .into_iter()
@@ -376,6 +390,7 @@ impl Tracker for JiraTracker {
             TicketLink::BlockedBy => self.jira(&["issue", "link", &other.0, &key.0, "Blocks"]),
             TicketLink::Relates => self.jira(&["issue", "link", &key.0, &other.0, "Relates"]),
             TicketLink::Duplicates => self.jira(&["issue", "link", &key.0, &other.0, "Duplicate"]),
+            TicketLink::Named(name) => self.jira(&["issue", "link", &key.0, &other.0, &name]),
         }
         .map(drop)
     }
@@ -485,8 +500,12 @@ fn detail_from_issue(issue: &serde_json::Value, points_field: Option<&str>) -> O
         },
         related: links_of(f, "Relates").into_iter().map(|l| l.other).collect(),
         duplicates: links_of(f, "Duplicate").into_iter().filter(|l| !l.inward).map(|l| l.other).collect(),
+        links: named_links(f),
         components: names(f.get("components")),
         points: points_field.and_then(|id| f.get(id)).and_then(|p| p.as_f64()).map(|p| p.round() as u32),
+        priority: f.pointer("/priority/name").and_then(|p| p.as_str()).map(String::from),
+        fix_versions: names(f.get("fixVersions")),
+        sprints: open_sprints(f),
         held: None,
         location: browse_url(issue).unwrap_or_default(),
     })
@@ -631,6 +650,35 @@ fn links_of(fields: &serde_json::Value, name: &str) -> Vec<IssueLink> {
                 inward,
             })
         })
+        .collect()
+}
+
+/// The issue's links of types the fleet doesn't act on, each as the issue reads it: its outward
+/// verb ("split to") where it's the outward end, its inward one ("split from") where it's the other.
+fn named_links(fields: &serde_json::Value) -> Vec<domain::NamedLink> {
+    let links = fields.get("issueLinks").or_else(|| fields.get("issuelinks"));
+    links
+        .and_then(|l| l.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|l| !matches!(l.pointer("/type/name").and_then(|n| n.as_str()), Some("Blocks" | "Relates" | "Duplicate") | None))
+        .filter_map(|l| {
+            let (other, verb) = match l.get("outwardIssue") {
+                Some(o) => (o, l.pointer("/type/outward")),
+                None => (l.get("inwardIssue")?, l.pointer("/type/inward")),
+            };
+            Some(domain::NamedLink { verb: verb?.as_str()?.to_string(), other: TicketKey::parse(other.get("key")?.as_str()?).ok()? })
+        })
+        .collect()
+}
+
+/// The sprints the issue is in that haven't closed: whichever field holds sprint objects (its id
+/// differs per Jira instance).
+fn open_sprints(fields: &serde_json::Value) -> Vec<String> {
+    let sprints = fields.as_object().into_iter().flatten().filter_map(|(_, v)| v.as_array()).flatten();
+    sprints
+        .filter(|s| s.get("boardId").is_some() && s["state"].as_str().is_some_and(|st| st != "closed"))
+        .filter_map(|s| s["name"].as_str().map(String::from))
         .collect()
 }
 
@@ -802,9 +850,14 @@ mod tests {
                 "status": {"name": "Roll-out", "statusCategory": {"key": "indeterminate"}},
                 "components": [{"id": "1", "name": "docs"}, {"id": "2", "name": "services"}],
                 "customfield_10004": 3.0,
+                "priority": {"name": "Major"},
+                "fixVersions": [{"id": "5", "name": "MC-V1-GA"}],
+                "customfield_10007": [{"id": 1, "name": "Sprint 19", "state": "closed", "boardId": 7}, {"id": 2, "name": "Sprint 20", "state": "active", "boardId": 7}],
                 "issuelinks": [
                     {"id": "9", "type": {"name": "Duplicate"}, "outwardIssue": {"key": "PROJ-2"}},
-                    {"id": "8", "type": {"name": "Duplicate"}, "inwardIssue": {"key": "PROJ-3"}}
+                    {"id": "8", "type": {"name": "Duplicate"}, "inwardIssue": {"key": "PROJ-3"}},
+                    {"id": "7", "type": {"name": "Work item split", "inward": "split from", "outward": "split to"}, "outwardIssue": {"key": "PROJ-4"}},
+                    {"id": "6", "type": {"name": "Documentation", "inward": "is documented by", "outward": "documents"}, "inwardIssue": {"key": "PROJ-5"}}
                 ]
             }
         });
@@ -813,6 +866,10 @@ mod tests {
         assert_eq!((d.components, d.points), (vec!["docs".to_string(), "services".to_string()], Some(3)));
         assert_eq!(d.duplicates, vec![TicketKey("PROJ-2".into())], "only what it duplicates, not what duplicates it");
         assert_eq!(d.kind, "task", "a search's issueType, as a view's issuetype");
+        assert_eq!((d.priority.as_deref(), d.fix_versions.as_slice()), (Some("Major"), ["MC-V1-GA".to_string()].as_slice()));
+        assert_eq!(d.sprints, ["Sprint 20"], "only the sprints that haven't closed");
+        let link = |verb: &str, k: &str| domain::NamedLink { verb: verb.into(), other: TicketKey(k.into()) };
+        assert_eq!(d.links, [link("split to", "PROJ-4"), link("is documented by", "PROJ-5")], "each as the issue reads it");
         assert_eq!(d.ticket.assignee, None, "a search's empty name is unassigned");
         assert_eq!(detail_from_issue(&issue, None).unwrap().points, None, "no points field configured");
     }

@@ -641,12 +641,23 @@ impl TicketLabel {
 
 /// A link between two tickets, as `fleetc ticket block|relate` writes it. `BlockedBy` gates the line
 /// (dispatch, merge); `Relates` only points one at the other, both ways, and the fleet never acts on it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TicketLink {
     BlockedBy,
     Relates,
     /// "`key` duplicates `other`".
     Duplicates,
+    /// A link type of the tracker's own, by its name (Jira: "Work item split", "Documentation"):
+    /// "`key` <its outward verb> `other`". The fleet never acts on it.
+    Named(String),
+}
+
+/// One of a ticket's links of a type the fleet doesn't act on, as the ticket reads it: "split to",
+/// "is documented by", … and the ticket at its other end.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NamedLink {
+    pub verb: String,
+    pub other: TicketKey,
 }
 
 /// A ticket's full text, as `fleetc ticket <KEY>` shows it: the board facts plus its type
@@ -662,11 +673,21 @@ pub struct TicketDetail {
     /// The tickets it duplicates (`TicketLink::Duplicates`).
     #[serde(default)]
     pub duplicates: Vec<TicketKey>,
-    /// Its components and story points, where the tracker keeps them.
+    /// Its links of the tracker's own types (`TicketLink::Named`).
+    #[serde(default)]
+    pub links: Vec<NamedLink>,
+    /// Its components, story points, priority, fix versions and open sprints, where the tracker
+    /// keeps them.
     #[serde(default)]
     pub components: Vec<String>,
     #[serde(default)]
     pub points: Option<u32>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub fix_versions: Vec<String>,
+    #[serde(default)]
+    pub sprints: Vec<String>,
     /// The fleet's hold on it, from the ledger (not the tracker): the reason, `""` when none was
     /// given; `None` when it isn't held.
     #[serde(default)]
@@ -690,10 +711,14 @@ pub struct TicketDraft {
     pub components: Vec<String>,
     #[serde(default)]
     pub points: Option<u32>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub fix_versions: Vec<String>,
 }
 
 /// A ticket's fields as `fleetc ticket edit` sets them, apart from its description: each one left
-/// out stays as it is. `components` replaces the whole set; `labels` are added.
+/// out stays as it is. `components` and `fix_versions` replace the whole set; `labels` are added.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TicketFields {
     #[serde(default)]
@@ -704,11 +729,15 @@ pub struct TicketFields {
     pub labels: Vec<String>,
     #[serde(default)]
     pub points: Option<u32>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub fix_versions: Option<Vec<String>>,
 }
 
 impl TicketFields {
     pub fn is_empty(&self) -> bool {
-        self.title.is_none() && self.components.is_none() && self.labels.is_empty() && self.points.is_none()
+        self == &Self::default()
     }
 }
 

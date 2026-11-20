@@ -877,8 +877,9 @@ fn amend_ticket(ledger: &Ledger, tracker: &dyn Tracker, ticket: &TicketKey, desc
 /// Add or remove a link between two tickets in the tracker. A blocking edge goes into the ledger
 /// too, so the line holds (or frees) the ticket now, not at the next sync.
 fn link_ticket(ledger: &Ledger, tracker: &dyn Tracker, key: &TicketKey, other: &TicketKey, link: domain::TicketLink, on: bool) -> Result<()> {
+    let blocks = link == domain::TicketLink::BlockedBy;
     tracker.link(key, other, link, on)?;
-    if link == domain::TicketLink::BlockedBy {
+    if blocks {
         if let Some(t) = TicketRepo::get(ledger, key)? {
             let mut blockers = t.blocked_by;
             blockers.retain(|b| b != other);
@@ -1727,7 +1728,7 @@ mod tests {
         fn read(&self, key: &TicketKey) -> Result<domain::TicketDetail> {
             let mut ticket = self.get(key)?;
             ticket.labels = self.labels.borrow().iter().filter(|(k, _)| k == key).map(|(_, l)| l.clone()).collect();
-            Ok(domain::TicketDetail { ticket, kind: "task".into(), description: String::new(), related: vec![], duplicates: vec![], components: vec![], points: None, held: None, location: String::new() })
+            Ok(domain::TicketDetail { ticket, kind: "task".into(), description: String::new(), related: vec![], duplicates: vec![], links: vec![], components: vec![], points: None, priority: None, fix_versions: vec![], sprints: vec![], held: None, location: String::new() })
         }
         fn create(&self, d: &TicketDraft) -> Result<TicketKey> {
             let key = TicketKey(format!("PROJ-{}", 100 + self.tickets.borrow().len()));
@@ -1858,7 +1859,7 @@ mod tests {
         t.convoy = Some(ConvoyKey("PROJ-9".into()));
         let tracker = FakeTracker::new(vec![t]);
         sync::sync_board(&db, &tracker, "now").unwrap();
-        let draft = TicketDraft { title: "Fix X".into(), kind: "bug".into(), description: "…".into(), convoy: None, blocked_by: vec![], labels: vec![], components: vec![], points: None };
+        let draft = TicketDraft { title: "Fix X".into(), kind: "bug".into(), description: "…".into(), convoy: None, blocked_by: vec![], labels: vec![], components: vec![], points: None, priority: None, fix_versions: vec![] };
         let from = Some(TicketKey("PROJ-1".into()));
         let convoy_of = |k: &TicketKey| TicketRepo::get(&db, k).unwrap().unwrap().convoy;
 
@@ -1908,7 +1909,7 @@ mod tests {
         let tracker = FakeTracker::new(vec![t]);
         sync::sync_board(&db, &tracker, "now").unwrap();
         ConvoyRepo::open(&db, &c9, None, false, "t").unwrap();
-        let draft = TicketDraft { title: "Fix X".into(), kind: "bug".into(), description: "…".into(), convoy: None, blocked_by: vec![], labels: vec![], components: vec![], points: None };
+        let draft = TicketDraft { title: "Fix X".into(), kind: "bug".into(), description: "…".into(), convoy: None, blocked_by: vec![], labels: vec![], components: vec![], points: None, priority: None, fix_versions: vec![] };
         let (id, key) = propose(&db, &tracker, Some(TicketKey("PROJ-1".into())), Proposed::New(draft)).unwrap();
 
         let err = close_convoy(&db, &c9, false).unwrap_err().to_string();
@@ -2324,7 +2325,7 @@ mod tests {
         let tracker = FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress), tt("PROJ-7", TicketStatus::Todo)]);
         sync::sync_board(&db, &tracker, "now").unwrap();
         let from = Some(TicketKey("PROJ-1".into()));
-        let draft = TicketDraft { title: "Fix X".into(), kind: "bug".into(), description: "…".into(), convoy: None, blocked_by: vec![], labels: vec![], components: vec![], points: None };
+        let draft = TicketDraft { title: "Fix X".into(), kind: "bug".into(), description: "…".into(), convoy: None, blocked_by: vec![], labels: vec![], components: vec![], points: None, priority: None, fix_versions: vec![] };
         let status = |k: &str| tracker.get(&TicketKey(k.into())).unwrap().status;
 
         let filed = propose(&db, &tracker, from.clone(), Proposed::New(draft)).unwrap().0;
