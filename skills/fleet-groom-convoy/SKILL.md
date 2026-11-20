@@ -99,8 +99,14 @@ Then apply what the operator approves, all of it or the rows they pick, and say 
 - **Edges**: `fleetc ticket block <KEY> --by <KEY>`, `fleetc ticket unblock <KEY> --by <KEY>`.
 - **A ticket's gaps**: the project's grooming skill on it (`/<groom_skill> <KEY>`), else
   `fleetc ticket edit <KEY> --body -`, starting from `fleetc ticket <KEY>` (it replaces the
-  description whole). Then weigh it back if it was anchored as not Ready: `fleetc weigh <KEY>`.
+  description whole). Weigh it back if it was anchored as not Ready (`fleetc weigh <KEY>`), once
+  it passes the check below.
 - **A missing ticket**: `/fleet-commission`, into this convoy.
+- **The check again**: every ticket this step filed, split or whose ACs it changed, the proposals
+  it accepted included, is judged again by Step 1's bar (the project's readiness check, else
+  assess.md), in a fresh `lookout` subagent per ticket when there are many. Fix what it finds and
+  judge it again. The captain's check before dispatch is the backstop, never the first to see a
+  ticket this grooming wrote.
 - **The plan**: `fleetc convoy open <C> --plan -`, with the whole revised plan on stdin (its title
   stays). The plan's history keeps the old one (`fleetc convoy plan <C> --history`). It doesn't
   restate the critical path: the goal and the edges are its one source.

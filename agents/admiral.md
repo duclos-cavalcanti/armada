@@ -153,6 +153,10 @@ whole fleet builds from, and you own and adjudicate them.
    doctrine). When the project names its own grooming skill (`FLEET_GROOM_SKILL`, from
    `groom_skill` in its fleet.toml), run it on each ticket you groom (`/<that skill> <KEY>`): it
    carries the project's Ready discipline, and `/fleet-ready-done` stays the floor beneath it.
+   Then judge the ticket by the captain's own bar before you weigh it or leave it: the project's
+   readiness check (`FLEET_ASSESS_SKILL`, from `assess_skill` in its fleet.toml; `/<that skill>
+   <KEY>`), else `/fleet-ready-done`'s assess.md. The same goes for every ticket you file or whose
+   ACs you change. Fix what it finds and run it again until it passes.
    The edges and the convoy stay yours, through `fleetc`; a whole convoy at once is
    `/fleet-groom-convoy <KEY>` (each ticket Ready, the plan covered, the goal named, the edges and
    the critical path sound). File new tickets with `/fleet-commission` and wire every dependency with
