@@ -104,43 +104,51 @@ pub fn sync_armada(ledger: &Ledger, forge: &dyn Forge, now: &str) -> Result<usiz
         } else {
             fs
         };
-        let ticket = if linked { fs.ticket.clone() } else { None };
-        let id = ShipRepo::upsert(
-            ledger,
-            &Ship {
-                id: ShipId(0), // ignored; assigned/looked-up by iid
-                ticket,
-                iid: fs.iid,
-                url: fs.url,
-                target: fs.target,
-                source: fs.source,
-                pilot: fs.pilot,
-                created_at: now.to_string(),
-                ended_at: None,
-                swept: None,
-                reviewed: None,
-                rounds: 0, trials: 0,
-            },
-        )?;
-        ledger.sync_snapshot(&ShipSnapshot {
-            ship: id,
-            title: fs.title,
-            state: fs.state,
-            head_sha: fs.head_sha,
-            has_conflicts: fs.has_conflicts,
-            open_threads: fs.open_threads,
-            total_threads: fs.total_threads,
-            approvals: fs.approvals,
-            armed: fs.armed,
-            on_merge_train: fs.on_merge_train,
-            blocked_by: fs.blocked_by,
-            pipeline: fs.pipeline,
-            merge_status: fs.merge_status,
-            synced_at: now.to_string(),
-        })?;
+        record_ship(ledger, fs, now)?;
     }
     retire_departed(ledger, forge, &open, now)?;
     Ok(count)
+}
+
+/// Upsert one MR and its snapshot, its ticket linked only if the ledger tracks that ticket (else
+/// the FK would trip). The sync's step per ship, and `fleetc launch`'s for the MR it just opened.
+pub fn record_ship(ledger: &Ledger, fs: domain::ForgeShip, now: &str) -> Result<ShipId> {
+    let linked = matches!(&fs.ticket, Some(k) if TicketRepo::get(ledger, k)?.is_some());
+    let id = ShipRepo::upsert(
+        ledger,
+        &Ship {
+            id: ShipId(0), // ignored; assigned/looked-up by iid
+            ticket: if linked { fs.ticket } else { None },
+            iid: fs.iid,
+            url: fs.url,
+            target: fs.target,
+            source: fs.source,
+            pilot: fs.pilot,
+            created_at: now.to_string(),
+            ended_at: None,
+            swept: None,
+            reviewed: None,
+            rounds: 0,
+            trials: 0,
+        },
+    )?;
+    ledger.sync_snapshot(&ShipSnapshot {
+        ship: id.clone(),
+        title: fs.title,
+        state: fs.state,
+        head_sha: fs.head_sha,
+        has_conflicts: fs.has_conflicts,
+        open_threads: fs.open_threads,
+        total_threads: fs.total_threads,
+        approvals: fs.approvals,
+        armed: fs.armed,
+        on_merge_train: fs.on_merge_train,
+        blocked_by: fs.blocked_by,
+        pipeline: fs.pipeline,
+        merge_status: fs.merge_status,
+        synced_at: now.to_string(),
+    })?;
+    Ok(id)
 }
 
 /// Ships that left the forge's open list merged or closed — the list never says which. An ally's

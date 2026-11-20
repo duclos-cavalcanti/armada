@@ -253,7 +253,7 @@ pub trait Forge {
     /// MR already in that state is a success no-op. Errors where the forge has no drafts.
     fn set_draft(&self, iid: i64, draft: bool) -> Result<()>;
     /// Open a new MR from `draft` (the source branch is already pushed), assigned to the fleet's
-    /// user. Returns its URL; the next sync picks the MR up into the armada.
+    /// user. Returns its URL, which ends in its iid.
     fn open_mr(&self, draft: &MrDraft) -> Result<String>;
     /// Rewrite an open MR's title + description — a relaunch, after a rework changed its ticket. Its
     /// draft state stays as it is: drafting is `set_draft`'s.

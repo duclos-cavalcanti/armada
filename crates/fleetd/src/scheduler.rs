@@ -657,7 +657,18 @@ fn launch(ledger: &Ledger, forge: &dyn Forge, l: Launch) -> Result<String> {
         (None, None) => l.default_branch,
     };
     let target = base.strip_prefix("origin/").unwrap_or(&base).to_string();
-    forge.open_mr(&MrDraft { source, target, title: l.title, description: l.description, draft: l.draft })
+    let url = forge.open_mr(&MrDraft { source, target, title: l.title, description: l.description, draft: l.draft })?;
+    // Recorded at once, so a report right after the launch finds its MR; else the next sync does.
+    let recorded = iid_of(&url).and_then(|iid| forge.snapshot(iid)).and_then(|fs| sync::record_ship(ledger, fs, &now_rfc3339()));
+    if let Err(e) = recorded {
+        tracing::warn!("{url}: not recorded until the next sync: {e:#}");
+    }
+    Ok(url)
+}
+
+/// An MR's iid, the last segment of its URL (`…/merge_requests/7`, `…/pull/7`).
+fn iid_of(url: &str) -> Result<i64> {
+    url.trim_end_matches('/').rsplit('/').next().and_then(|n| n.parse().ok()).with_context(|| format!("no iid at the end of {url}"))
 }
 
 /// One ship by iid — ours or an ally's — with its snapshot and the ref to fetch its head by.
@@ -2684,6 +2695,9 @@ mod tests {
         };
 
         assert_eq!(launch(&db, &forge, req(Some(key.clone()), None)).unwrap(), "https://forge/mr/1");
+        assert!(ShipRepo::get_by_iid(&db, 1).unwrap().is_some(), "recorded at launch, before any sync");
+        assert_eq!((iid_of("https://gitlab.com/g/p/-/merge_requests/27/").unwrap(), iid_of("https://github.com/o/r/pull/8").unwrap()), (27, 8));
+        assert!(iid_of("https://forge/mr/").is_err());
         launch(&db, &forge, req(None, None)).unwrap();
         launch(&db, &forge, req(Some(key), Some("release"))).unwrap();
         let opened = forge.opened.borrow();
