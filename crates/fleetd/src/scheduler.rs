@@ -1130,16 +1130,16 @@ fn build_packet(ledger: &Ledger, ticket: &TicketKey) -> Result<Packet> {
     let ship = ShipRepo::armada(ledger)?
         .into_iter()
         .find(|s| s.ticket.as_ref() == Some(ticket) && s.ended_at.is_none());
-    let snapshot = match &ship {
-        Some(s) => ShipRepo::snapshot(ledger, &s.id)?,
-        None => None,
+    let (snapshot, approved_at) = match &ship {
+        Some(s) => (ShipRepo::snapshot(ledger, &s.id)?, ShipRepo::approved_at(ledger, &s.id)?),
+        None => (None, None),
     };
     let ticket_entity = TicketRepo::get(ledger, ticket)?;
     let open_blockers = match &ticket_entity {
         Some(t) => reconcile::open_blockers(ledger, &t.blocked_by)?,
         None => vec![],
     };
-    Ok(Packet { order, ship, snapshot, ticket: ticket_entity, open_blockers })
+    Ok(Packet { order, ship, snapshot, ticket: ticket_entity, open_blockers, approved_at })
 }
 
 /// The live cog(s) on a ticket (sessions not yet ended).

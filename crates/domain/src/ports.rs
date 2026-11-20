@@ -64,6 +64,9 @@ pub trait ShipRepo {
     /// When the ship's review threads last moved (opened or resolved), as the syncs saw it: a sailor
     /// waits for them to hold still. `None` = never moved since its first snapshot.
     fn threads_changed_at(&self, id: &ShipId) -> Result<Option<String>>;
+    /// When a sync first saw the ship fully approved; a push that resets its approvals keeps it.
+    /// `None` = never approved.
+    fn approved_at(&self, id: &ShipId) -> Result<Option<String>>;
     /// Record the snapshot fingerprint the last sailor was dispatched against (the sweep lock).
     /// `None` = never swept, so the next ungated pass re-sweeps (a hold's disarm needs a re-arm).
     fn set_swept(&self, id: &ShipId, fingerprint: Option<&str>) -> Result<()>;

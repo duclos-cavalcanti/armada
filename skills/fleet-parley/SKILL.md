@@ -20,8 +20,8 @@ stdout), or an escalation when a finding needs the operator (exit 1).
 set -euo pipefail
 PACKET=$(fleetc packet)
 [ -n "$(printf '%s' "$PACKET" | jq -r '.ship.iid // empty')" ] || { echo "no open MR" >&2; exit 1; }
-# An approved MR raises the bar: at least one approval, and all that are required.
-APPROVED=$(printf '%s' "$PACKET" | jq '(.snapshot.approvals // {current: 0}) | .current > 0 and .current >= .required')
+# An MR approved once raises the bar, even after a push reset its approvals.
+APPROVED=$(printf '%s' "$PACKET" | jq '.approved_at != null')
 echo "APPROVED=$APPROVED"
 REVIEW=$(fleetc review)   # your MR's: {open_threads, threads: [{id, path, line, author, body}], floating_notes}
 OPEN=$(printf '%s' "$REVIEW" | jq '.open_threads')
@@ -106,10 +106,11 @@ reversible: changing this MR alone would undo it, and it sets no user-visible be
 pattern other tickets will copy. Make it, say so in the reply, and add a `Decision:` line to the
 MR description. Otherwise escalate it (2).
 
-**An approved MR** (`APPROVED=true`) pushes back harder: a push resets its approvals and costs a
-review round. Apply only a proven defect — wrong behaviour, a correctness or security bug, an
-acceptance criterion not met. Anything short of that (readability, a refactor, a test beyond
-the ACs, doc polish) is deferred to the nits ticket like a nit.
+**An approved MR** (`APPROVED=true`: fully approved once, even if a push has since reset it)
+pushes back harder: a push resets its approvals and costs a review round. Apply only a proven
+defect — wrong behaviour, a correctness or security bug, an acceptance criterion not met.
+Anything short of that (readability, a refactor, a test beyond the ACs, doc polish) is deferred
+to the nits ticket like a nit.
 
 A proven finding is fixed now, except: one whose fix is in the tracker is sent to its ticket; a nit, or
 a non-defect on an approved MR, is deferred; one no AC needs is proposed; one that keeps coming

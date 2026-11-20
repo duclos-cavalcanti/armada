@@ -38,7 +38,8 @@ don't re-assemble state by hand:
 fleetc packet
 ```
 
-The packet is `{ order, ship, snapshot, ticket, open_blockers }`. 
+The packet is `{ order, ship, snapshot, ticket, open_blockers, approved_at }`; `approved_at` is
+when the MR was first fully approved, kept after a push resets its approvals.
 
 The **snapshot** is your decision input, it's fleetd's fresh poll of your MR: 
 - `state` (incl. draft),

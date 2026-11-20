@@ -304,6 +304,9 @@ const MIGRATIONS: &[&str] = &[
     // v14: delegated convoys, whose admirals rule; and who ruled each case.
     "ALTER TABLE convoys ADD COLUMN delegation INTEGER NOT NULL DEFAULT 0 CHECK (delegation IN (0, 1));
     ALTER TABLE cases ADD COLUMN ruled_by TEXT NOT NULL DEFAULT 'operator' CHECK (ruled_by IN ('operator', 'admiral'));",
+    // v15: when an MR was first fully approved, so a push that resets its approvals keeps the bar.
+    "ALTER TABLE ship_snapshots ADD COLUMN approved_at TEXT;
+    UPDATE ship_snapshots SET approved_at = synced_at WHERE approvals_current > 0 AND approvals_current >= approvals_required;",
 ];
 
 /// The ledger's schema version (SQLite `user_version`): one past its last migration.
@@ -805,7 +808,7 @@ mod tests {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "ALTER TABLE ship_snapshots DROP COLUMN total_threads; ALTER TABLE ship_snapshots DROP COLUMN blocked_by_json; \
-             ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; PRAGMA user_version = 1;",
+             ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; ALTER TABLE ship_snapshots DROP COLUMN approved_at; PRAGMA user_version = 1;",
         )
         .unwrap();
         drop(conn);
@@ -829,7 +832,7 @@ mod tests {
         drop(Ledger::open(&path).unwrap());
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by;
+            "DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; ALTER TABLE ship_snapshots DROP COLUMN approved_at;
              INSERT INTO convoys(key, created_at) VALUES ('PROJ-9', 't2'), ('PROJ-5', 't1'), ('PROJ-7', 't3');
              PRAGMA user_version = 10;",
         )
@@ -844,6 +847,39 @@ mod tests {
     }
 
     #[test]
+    fn a_v14_ledger_stamps_the_ships_approved_now() {
+        let dir = std::env::temp_dir().join(format!("ledger-migrate-v15-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ledger.db").to_string_lossy().into_owned();
+        let db = Ledger::open(&path).unwrap();
+        let ship = |iid, current| {
+            let s = Ship {
+                id: ShipId(0), ticket: None, iid, url: "u".into(), target: "master".into(), source: String::new(),
+                pilot: "ally".into(), created_at: "t".into(), ended_at: None, swept: None, reviewed: None, rounds: 0,
+            };
+            let id = ShipRepo::upsert(&db, &s).unwrap();
+            db.sync_snapshot(&ShipSnapshot {
+                ship: id.clone(), title: "x".into(), state: ShipState::Open, head_sha: "h".into(), has_conflicts: false,
+                open_threads: 0, total_threads: 0, approvals: Approvals { current, required: 1 }, armed: false,
+                on_merge_train: false, blocked_by: vec![], pipeline: None, merge_status: None, synced_at: "t1".into(),
+            })
+            .unwrap();
+            id
+        };
+        let (approved, unapproved) = (ship(1, 1), ship(2, 0));
+        drop(db);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("ALTER TABLE ship_snapshots DROP COLUMN approved_at; PRAGMA user_version = 14;").unwrap();
+        drop(conn);
+
+        let db = Ledger::open(&path).unwrap();
+        assert_eq!(db.approved_at(&approved).unwrap().as_deref(), Some("t1"), "approved at its last sync");
+        assert_eq!(db.approved_at(&unapproved).unwrap(), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_v7_ledger_seeds_each_standing_plan_as_its_history() {
         let dir = std::env::temp_dir().join(format!("ledger-migrate-v8-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -854,7 +890,7 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO convoys(key, created_at) VALUES ('PROJ-100', 't1');
              INSERT INTO convoy_plans(convoy, body, updated_at) VALUES ('PROJ-100', 'ship the seed', 't2');
-             ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; PRAGMA user_version = 7;",
+             ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; ALTER TABLE ship_snapshots DROP COLUMN approved_at; PRAGMA user_version = 7;",
         )
         .unwrap();
         drop(conn);
@@ -881,7 +917,7 @@ mod tests {
         // Back to v4: the same rebuild, without the admiral kind.
         let v4 = MIGRATIONS[3].replace(",'admiral'", ""); // v5's rebuild
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; PRAGMA user_version = 4;"))
+        conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {v4} ALTER TABLE ships DROP COLUMN rounds; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; ALTER TABLE ship_snapshots DROP COLUMN approved_at; PRAGMA user_version = 4;"))
             .unwrap();
         drop(conn);
 
@@ -1484,12 +1520,13 @@ impl ShipRepo for Ledger {
         self.conn.execute(
             "INSERT INTO ship_snapshots(ship_id, title, state, head_sha, has_conflicts, open_threads, total_threads,
                  approvals_current, approvals_required, armed, on_merge_train, pipeline, merge_status, synced_at,
-                 blocked_by_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                 blocked_by_json, approved_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, CASE WHEN ?16 THEN ?14 END)
              ON CONFLICT(ship_id) DO UPDATE SET
                threads_changed_at = CASE
                  WHEN open_threads <> excluded.open_threads OR total_threads <> excluded.total_threads THEN excluded.synced_at
                  ELSE threads_changed_at END,
+               approved_at = coalesce(approved_at, excluded.approved_at),
                title=excluded.title, state=excluded.state, head_sha=excluded.head_sha,
                has_conflicts=excluded.has_conflicts, open_threads=excluded.open_threads, total_threads=excluded.total_threads,
                approvals_current=excluded.approvals_current, approvals_required=excluded.approvals_required,
@@ -1499,7 +1536,7 @@ impl ShipRepo for Ledger {
                 s.ship.0, s.title, s.state.as_str(), s.head_sha, s.has_conflicts as i64,
                 s.open_threads, s.total_threads, s.approvals.current, s.approvals.required, s.armed as i64,
                 s.on_merge_train as i64, s.pipeline.map(|p| p.as_str()), s.merge_status, s.synced_at,
-                serde_json::to_string(&s.blocked_by)?,
+                serde_json::to_string(&s.blocked_by)?, s.approvals.met(),
             ],
         )?;
         Ok(())
@@ -1516,6 +1553,14 @@ impl ShipRepo for Ledger {
         Ok(self
             .conn
             .query_row("SELECT threads_changed_at FROM ship_snapshots WHERE ship_id = ?1", params![id.0], |r| r.get(0))
+            .optional()?
+            .flatten())
+    }
+
+    fn approved_at(&self, id: &ShipId) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT approved_at FROM ship_snapshots WHERE ship_id = ?1", params![id.0], |r| r.get(0))
             .optional()?
             .flatten())
     }
@@ -2354,6 +2399,17 @@ mod repo_tests {
         assert_eq!(got.approvals, Approvals { current: 0, required: 1 });
         assert_eq!(got.pipeline, Some(PipelineStatus::Failed));
 
+        // approved_at: stamped by the first sync that sees it fully approved, kept through a reset.
+        assert_eq!(db.approved_at(&id).unwrap(), None, "never approved");
+        let sync = |current, at: &str| {
+            db.sync_snapshot(&ShipSnapshot { approvals: Approvals { current, required: 1 }, synced_at: at.into(), ..snap.clone() })
+                .unwrap()
+        };
+        sync(1, "t2");
+        sync(0, "t3"); // a push resets its approvals
+        sync(1, "t4");
+        assert_eq!(db.approved_at(&id).unwrap().as_deref(), Some("t2"), "the first approval stands");
+
         // An allied ship (no ticket) also fits the one shape.
         let ally = Ship {
             id: ShipId(0), ticket: None, iid: 99, url: "u2".into(),
@@ -2601,7 +2657,7 @@ mod repo_tests {
             format!("INSERT INTO inspections(session_id, reported_at, verdict, body, inspected_at) VALUES ({}, '{at}', '{v}', 'b', '{at}9');", s.0)
         };
         conn.execute_batch(&format!(
-            "DELETE FROM cases; DROP INDEX one_open_case; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; DROP TABLE cases;
+            "DELETE FROM cases; DROP INDEX one_open_case; ALTER TABLE inspections DROP COLUMN case_id; ALTER TABLE ship_snapshots DROP COLUMN threads_changed_at; DROP INDEX convoy_no; ALTER TABLE convoys DROP COLUMN no; ALTER TABLE convoys DROP COLUMN goal; ALTER TABLE convoys DROP COLUMN standing; ALTER TABLE convoys DROP COLUMN delegation; ALTER TABLE cases DROP COLUMN ruled_by; ALTER TABLE ship_snapshots DROP COLUMN approved_at; DROP TABLE cases;
              {} {} {} {} {} {} {}
              INSERT INTO reports(session_id, state, last_action, reported_at) VALUES ({}, 'escalated', 'Y?', 't3'), ({}, 'escalated', 'Z?', 't4');
              PRAGMA user_version = 8;",

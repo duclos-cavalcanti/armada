@@ -325,10 +325,10 @@ pub fn upstream(goal: &TicketKey, board: &[Ticket]) -> std::collections::HashSet
 }
 
 /// A cog's work-packet — the composed read `fleetc packet` serves: the dispatch order, the
-/// ship + its latest snapshot, the cached ticket, and `open_blockers` — the ticket's blockers not
+/// ship + its latest snapshot, the cached ticket, `open_blockers` — the ticket's blockers not
 /// yet Done/Cancelled, which gate the merge (`ticket.blocked_by` lists every edge, landed ones
-/// too). A sailor reads this once at boot to decide its sweep without re-assembling state from
-/// glab/jira. Each piece is optional.
+/// too) — and `approved_at`. A sailor reads this once at boot to decide its sweep without
+/// re-assembling state from glab/jira. Each piece is optional.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Packet {
     pub order: Option<Order>,
@@ -337,6 +337,10 @@ pub struct Packet {
     pub ticket: Option<Ticket>,
     #[serde(default)]
     pub open_blockers: Vec<TicketKey>,
+    /// When a sync first saw the ship fully approved. A push that resets its approvals keeps it:
+    /// an MR approved once stays approved for how hard its review findings are pushed back.
+    #[serde(default)]
+    pub approved_at: Option<String>,
 }
 
 /// fleetd's dispatch verdict for a frontier (To Do) ticket — the absorbed `classify.py`. `None` on
@@ -396,6 +400,13 @@ pub struct ConvoyTicketView {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Approvals { pub current: i64, pub required: i64 }
+
+impl Approvals {
+    /// Fully approved: at least one approval, and all that are required.
+    pub fn met(&self) -> bool {
+        self.current > 0 && self.current >= self.required
+    }
+}
 
 /// An MR — one of our ships or an ally's (the armada). Stable facts only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

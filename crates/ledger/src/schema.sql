@@ -148,7 +148,8 @@ CREATE TABLE IF NOT EXISTS ship_snapshots (
     pipeline           TEXT    CHECK (pipeline IN ('running','success','failed','canceled','manual')),
     merge_status       TEXT,                           -- GitLab detailed_merge_status (open vocab; no CHECK)
     synced_at          TEXT    NOT NULL,
-    threads_changed_at TEXT                            -- the sync that last saw its thread counts move (review settling)
+    threads_changed_at TEXT,                           -- the sync that last saw its thread counts move (review settling)
+    approved_at        TEXT                            -- the sync that first saw it fully approved; a reset keeps it
 );
 
 -- The dispatch queue (operational intent). One active order per ticket.
