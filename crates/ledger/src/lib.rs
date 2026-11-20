@@ -142,6 +142,24 @@ impl Ledger {
         )?)
     }
 
+    /// The captain's not-Ready verdict still holding the ticket: when it was given, and how many the
+    /// ticket has had. `None`: the ticket isn't held, its hold isn't one, or it was weighed since.
+    pub fn not_ready(&self, key: &TicketKey) -> Result<Option<(String, u64)>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT e.created_at, (SELECT count(*) FROM events WHERE kind = ?2 AND entity_ref = ?1)
+                 FROM events e
+                 WHERE e.kind = ?2 AND e.entity_ref = ?1
+                   AND e.seq > COALESCE((SELECT max(seq) FROM events WHERE kind = ?3 AND entity_ref = ?1), 0)
+                   AND EXISTS (SELECT 1 FROM tickets WHERE key = ?1 AND held = 1)
+                 ORDER BY e.seq DESC LIMIT 1",
+                params![key.0, EventKind::TicketNotReady.as_str(), EventKind::TicketReleased.as_str()],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64)),
+            )
+            .optional()?)
+    }
+
     /// Why a ticket is held: the reason on its latest `TicketHeld` event (`""` when the hold gave
     /// none; `None` when it was never held). The hold itself is the ticket's `held` flag.
     pub fn held_reason(&self, key: &TicketKey) -> Result<Option<String>> {

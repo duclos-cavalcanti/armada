@@ -35,7 +35,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc convoy   open <KEY> [--title <text>] [--plan <file|->] [--goal <KEY-N>] [--standing] [--delegation on|off] | close [<KEY>]   (the plan ties its tickets together; the goal proves its outcome, and its critical path is all it waits on; standing: fleet-wide work, never delivered; delegation: the admiral convened on each confirmed escalation rules it, referring to you only what has no way out; re-opening keeps what you leave out; an epic holding a teammate's open ticket is refused NOT-OURS)\n  \
      fleetc convoy   add <KEY> <KEY-N> [--hand] | remove <KEY> <KEY-N>   (a ticket joins the convoy — its only one, for a hand with --hand — or an added one leaves; only one that's yours or nobody's, assigned to you: a teammate's is refused NOT-OURS)\n  \
      fleetc convoy   list | plan [<KEY>] [--history]   (the active convoys + their open tickets | a convoy's plan; --history: each change as a diff)\n  \
-     fleetc anchor   <KEY-N> [--reason <why>]   (hold everything on it: off the frontier, its cogs stopped, its MR disarmed + drafted)\n  \
+     fleetc anchor   <KEY-N> [--reason <why>] [--not-ready]   (hold everything on it: off the frontier, its cogs stopped, its MR disarmed + drafted; --not-ready: a captain's Ready check failed it, and an admiral is convened to groom it)\n  \
      fleetc anchor   --convoy <KEY> | --cog lookout   (a convoy: its captain, so nothing new is dispatched, and every open ticket in it, as above; lookout: every one)\n  \
      fleetc weigh    <KEY-N> | --convoy <KEY> | --cog lookout   (release what anchor held; a convoy: its captain and the tickets its anchor held)\n  \
      fleetc sink     --cog <kind> [--ticket <KEY-N>|--convoy <KEY>|--iid <N>]   (scuttle — hard teardown)\n  \
@@ -409,12 +409,19 @@ fn plan_text(path: &str) -> Result<String> {
 fn anchor(args: &[String]) -> Result<()> {
     match args.first() {
         Some(key) if !key.starts_with('-') => {
-            let reason = match &args[1..] {
-                [] => None,
-                [flag, why] if flag == "--reason" => Some(why.clone()),
-                _ => bail!("usage: fleetc anchor <KEY-N> [--reason <why>]"),
-            };
-            submit("/anchor-ticket", &wire::TicketAnchor { ticket: ticket_key(key, "anchor")?, reason })
+            let (mut reason, mut not_ready) = (None, false);
+            let mut it = args[1..].iter();
+            while let Some(flag) = it.next() {
+                match (flag.as_str(), it.clone().next()) {
+                    ("--reason", Some(why)) => {
+                        reason = Some(why.clone());
+                        it.next();
+                    }
+                    ("--not-ready", _) => not_ready = true,
+                    _ => bail!("usage: fleetc anchor <KEY-N> [--reason <why>] [--not-ready]"),
+                }
+            }
+            submit("/anchor-ticket", &wire::TicketAnchor { ticket: ticket_key(key, "anchor")?, reason, not_ready })
         }
         _ => submit("/anchor", &ticketless_target(args, "anchor")?),
     }
@@ -425,7 +432,7 @@ fn anchor(args: &[String]) -> Result<()> {
 fn weigh(args: &[String]) -> Result<()> {
     match args {
         [key] if !key.starts_with('-') => {
-            submit("/weigh-ticket", &wire::TicketAnchor { ticket: ticket_key(key, "weigh")?, reason: None })
+            submit("/weigh-ticket", &wire::TicketAnchor { ticket: ticket_key(key, "weigh")?, reason: None, not_ready: false })
         }
         _ => submit("/weigh", &ticketless_target(args, "weigh")?),
     }

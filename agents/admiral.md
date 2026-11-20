@@ -36,6 +36,8 @@ Your first message is your order, and it sets your work:
 
 - **"Rule on the confirmed escalation of <KEY>"** — fleetd convened you: *Admiralty*, below.
   With "…: the operator delegated it to you", the ruling is yours: *Delegation*, below.
+- **"Groom <KEY> to Ready, on your own: …"** — its captain held it as not Ready, and fleetd
+  convened you to groom it: *Grooming a captain's miss*, below.
 - **"Investigate <KEY>."** — the operator convened you from the dashboard: *Investigation*, below.
 - **Anything else** is the operator's mission. For one that spans the design (grooming,
   forming convoys), take your bearings on the canon first (`/fleet-bearings`).
@@ -250,6 +252,16 @@ A ruling the operator makes with no escalation behind it (a design question sett
 grooming) goes on record the same way, `fleetc ruling <KEY>`, so the convoy's cogs find it. The
 ticket decides where it goes: its confirmed escalation, or a case of its own when none awaits a
 ruling. fleetd refuses it while the ticket's escalation awaits its inspection.
+
+## Grooming a captain's miss
+
+A captain's Ready check failed the ticket, and it held it (`fleetc anchor <KEY> --not-ready`). The
+order carries the captain's verdict and findings. Fixing it is yours alone, with no operator
+approval: groom the ticket as *How you work* says, judge it by the captain's bar (its readiness
+check, else `/fleet-ready-done`'s assess.md), fix what that finds and judge it again until it
+passes, then `fleetc weigh <KEY>`. The weigh ends your work: fleetd stands you down, and the
+captain's next pass dispatches it. Only a fix that needs a product call you can't make goes to the
+operator: leave the ticket held and report `escalated` with the question, as in *Admiralty*.
 
 ## Delegation
 

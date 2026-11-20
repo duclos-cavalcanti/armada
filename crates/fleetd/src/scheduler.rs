@@ -58,7 +58,7 @@ pub enum Command {
     Weigh { target: ControlTarget, reply: Reply },
     Sink { target: ControlTarget, reply: Reply },
     Send { target: ControlTarget, message: String, reply: Reply }, // push an operator message to the cog's pane
-    AnchorTicket { ticket: TicketKey, anchor: bool, reason: Option<String>, reply: Reply }, // hold everything on it, or release it
+    AnchorTicket { ticket: TicketKey, anchor: bool, reason: Option<String>, not_ready: bool, reply: Reply }, // hold everything on it, or release it
     Rework { ticket: TicketKey, hand: bool, reply: Reply }, // send it back down the line to a builder
     Inspect { ticket: TicketKey, verdict: Verdict, body: String, reply: Reply }, // a verdict on its cog's escalation
     Rule { ticket: TicketKey, question: String, answer: String, by: Ruler, reply: UrlReply }, // a ruling → what it did
@@ -315,9 +315,14 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             let res = send(ledger, host, &target, &message).map_err(|e| e.to_string());
             let _ = reply.send(res);
         }
-        Command::AnchorTicket { ticket, anchor, reason, reply } => {
+        Command::AnchorTicket { ticket, anchor, reason, not_ready, reply } => {
             let res = ensure_ticket(ledger, tracker, &ticket)
                 .and_then(|()| anchor_ticket(ledger, forge, host, &ticket, anchor, reason.as_deref()))
+                .and_then(|()| match not_ready {
+                    // A captain's Ready check failed it: the event an admiral is convened on.
+                    true => ledger.append(&now_rfc3339(), EventKind::TicketNotReady, EntityKind::Ticket, &ticket.0, &serde_json::json!({ "reason": reason })).map(drop),
+                    false => Ok(()),
+                })
                 .map_err(|e| format!("{e:#}"));
             let _ = reply.send(res);
         }

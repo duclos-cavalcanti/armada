@@ -378,18 +378,22 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
     }
 
     // ADMIRALTY — an admiral convenes on a ticket's CONFIRMED escalation, for the operator to rule
-    // with. It reports nothing: the cog's own reports end it. STAND DOWN an admiral that died, or
-    // whose escalation no longer stands confirmed since it convened (the cog was unblocked or ended,
-    // or a newer verdict replaced it). Then CONVENE on each
-    // confirmed escalation with no admiral since its verdict (one the operator closed isn't
-    // reconvened), oldest verdict first, up to `admirals` seated (-1 = no cap, 0 = none).
+    // with, or on a captain's NOT-READY hold, to groom the ticket and weigh it back on its own. It
+    // reports nothing: the cog's own reports, or the weigh, end it. STAND DOWN an admiral that died,
+    // or whose escalation or hold no longer stands since it convened (the cog was unblocked or ended,
+    // a newer verdict replaced it, the ticket was weighed). Then CONVENE on each confirmed escalation
+    // with no admiral since its verdict (one the operator closed isn't reconvened), and on each
+    // not-Ready hold with none since it, for `GROOM_ROUNDS` holds a ticket at most; oldest first,
+    // up to `admirals` seated (-1 = no cap, 0 = none).
     let mut seated = 0;
     for cog in cogs {
         if cog.session.kind != CrewKind::Admiral || cog.session.ended_at.is_some() {
             continue;
         }
         let Some(tkey) = &cog.session.ticket else { continue };
-        let standing = confirmed(ledger, tkey)?.is_some_and(|v| after(&cog.session.created_at, &v.inspected_at));
+        let ruling = confirmed(ledger, tkey)?.is_some_and(|v| after(&cog.session.created_at, &v.inspected_at));
+        let grooming = ledger.not_ready(tkey)?.is_some_and(|(at, _)| after(&cog.session.created_at, &at));
+        let standing = ruling || grooming;
         if cog.liveness == Liveness::Dead || !standing {
             actions.push(Action::StandDown { ticket: tkey.0.clone(), kind: CrewKind::Admiral.as_str().into() });
         } else {
@@ -408,6 +412,13 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
             .any(|s| s.kind == CrewKind::Admiral && after(&s.created_at, &verdict.inspected_at));
         if !convened {
             due.push((instant(&verdict.inspected_at), tkey.0.clone()));
+        }
+    }
+    for t in TicketRepo::board(ledger)?.into_iter().filter(|t| t.held) {
+        let Some((at, holds)) = ledger.not_ready(&t.key)? else { continue };
+        let convened = SessionRepo::for_ticket(ledger, &t.key)?.iter().any(|s| s.kind == CrewKind::Admiral && after(&s.created_at, &at));
+        if !convened && holds <= GROOM_ROUNDS {
+            due.push((instant(&at), t.key.0.clone()));
         }
     }
     due.sort();
@@ -597,6 +608,10 @@ pub(crate) fn escalation(ledger: &Ledger, ticket: &TicketKey) -> Result<Option<(
 
 /// The CONFIRM standing on the ticket's escalation: the latest verdict on its escalated cog's open
 /// case, if it confirms it. `None` = no escalation, or not confirmed.
+/// How many of a captain's not-Ready holds on one ticket get an admiral: past that, the captain and
+/// its admirals disagree on Ready, and the hold waits for the operator.
+const GROOM_ROUNDS: u64 = 2;
+
 fn confirmed(ledger: &Ledger, ticket: &TicketKey) -> Result<Option<Inspection>> {
     let Some((session, _)) = escalation(ledger, ticket)? else { return Ok(None) };
     let Some(case) = ledger.open_case(&session.id)? else { return Ok(None) };
@@ -1634,10 +1649,16 @@ fn launch_admiral<H: SessionHost>(ledger: &Ledger, host: &H, project: &str, tick
     let delegated = ConvoyRepo::active(ledger)?.iter().any(|c| Some(&c.key) == convoy.as_ref() && c.delegation);
     // The key is `<PREFIX>-<n>`-validated, so the quoted order is shell-safe. `--` ends the options:
     // `--add-dir` takes a list, and would swallow the order as a second directory.
-    let (env, order) = match delegated {
-        true => (format!("FLEET_DELEGATION=1 {}", skill_env(skills)), format!("Rule on the confirmed escalation of {ticket}: the operator delegated it to you.")),
-        false => (skill_env(skills), format!("Rule on the confirmed escalation of {ticket}.")),
+    let grooming = confirmed(ledger, &key)?.is_none() && ledger.not_ready(&key)?.is_some();
+    let (env, order) = match (grooming, delegated) {
+        (true, _) => {
+            let why = ledger.held_reason(&key)?.unwrap_or_default();
+            (skill_env(skills), format!("Groom {ticket} to Ready, on your own: its captain held it as not Ready ({why}). Fix it, judge it by the captain's bar, then weigh it back."))
+        }
+        (false, true) => (format!("FLEET_DELEGATION=1 {}", skill_env(skills)), format!("Rule on the confirmed escalation of {ticket}: the operator delegated it to you.")),
+        (false, false) => (skill_env(skills), format!("Rule on the confirmed escalation of {ticket}.")),
     };
+    let order = order.replace('\'', r"'\''"); // a hold's reason is free text, inside the quoted order
     let cmd = format!("{provider_env}{env}{}{add_dir} -- '{order}'", launch_cmd("admiral", Launch::Fresh(&hid)));
     host.spawn(&tmux_session, Path::new(project), &cmd)?;
     ledger.append(
@@ -4059,6 +4080,51 @@ mod tests {
 
     fn convened(actions: Vec<Action>) -> Vec<String> {
         actions.into_iter().filter_map(|a| if let Action::LaunchAdmiral { ticket } = a { Some(ticket) } else { None }).collect()
+    }
+
+    /// A captain's not-Ready hold on `key`, given at `at`.
+    fn not_ready(db: &Ledger, key: &str, at: &str) {
+        let k = TicketKey(key.into());
+        TicketRepo::set_held(db, &k, true, Some("AC-GAP: AC2 doesn't say what 'done' is"), at).unwrap();
+        db.append(at, EventKind::TicketNotReady, EntityKind::Ticket, key, &serde_json::json!({})).unwrap();
+    }
+
+    #[test]
+    fn a_captains_not_ready_hold_convenes_an_admiral_to_groom_it_until_it_is_weighed() {
+        let db = db();
+        ticket(&db, "PROJ-1", TicketStatus::Todo, false, vec![]);
+        let levers = Levers { admirals: 3, ..LIVE };
+        assert!(convened(plan(&db, &[], true, &levers).unwrap()).is_empty(), "not held");
+        TicketRepo::set_held(&db, &TicketKey("PROJ-1".into()), true, Some("the operator's"), "2026-01-01T00:00:00Z").unwrap();
+        assert!(convened(plan(&db, &[], true, &levers).unwrap()).is_empty(), "a hold that isn't a not-Ready verdict");
+        TicketRepo::set_held(&db, &TicketKey("PROJ-1".into()), false, None, "2026-01-01T00:00:30Z").unwrap();
+
+        not_ready(&db, "PROJ-1", "2026-01-01T00:01:00Z");
+        assert_eq!(convened(plan(&db, &[], true, &levers).unwrap()), ["PROJ-1"]);
+        let host = FakeHost::new();
+        launch_admiral(&db, &host, "/project", "PROJ-1", &[], "").unwrap();
+        let cmd = host.spawned.borrow()[0].2.clone();
+        assert!(cmd.contains("-- 'Groom PROJ-1 to Ready, on your own: its captain held it as not Ready (AC-GAP: AC2 doesn'\\''t say"), "{cmd}");
+        let launched = SessionRepo::live(&db).unwrap().into_iter().find(|s| s.kind == CrewKind::Admiral).unwrap();
+        SessionRepo::end(&db, &launched.id, &now_rfc3339()).unwrap();
+
+        let a = admiral(&db, "PROJ-1", "2026-01-01T00:02:00Z", Liveness::Active);
+        let cogs = [a.clone()];
+        let actions = plan(&db, &cogs, true, &levers).unwrap();
+        assert!(convened(actions.clone()).is_empty() && !actions.iter().any(|x| matches!(x, Action::StandDown { .. })), "it sits until the weigh");
+        TicketRepo::set_held(&db, &TicketKey("PROJ-1".into()), false, None, "2026-01-01T00:03:00Z").unwrap();
+        assert_eq!(
+            plan(&db, &cogs, true, &levers).unwrap(),
+            [Action::StandDown { ticket: "PROJ-1".into(), kind: "admiral".into() }],
+            "weighed: its work is done"
+        );
+
+        SessionRepo::end(&db, &a.session.id, "2026-01-01T00:04:00Z").unwrap();
+        not_ready(&db, "PROJ-1", "2999-01-01T00:05:00Z");
+        assert_eq!(convened(plan(&db, &[], true, &levers).unwrap()), ["PROJ-1"], "the second hold: a second round");
+        TicketRepo::set_held(&db, &TicketKey("PROJ-1".into()), false, None, "2999-01-01T00:06:00Z").unwrap();
+        not_ready(&db, "PROJ-1", "2999-01-01T00:07:00Z");
+        assert!(convened(plan(&db, &[], true, &levers).unwrap()).is_empty(), "past GROOM_ROUNDS: the operator's");
     }
 
     #[test]

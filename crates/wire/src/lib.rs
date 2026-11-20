@@ -94,6 +94,9 @@ pub struct TicketAnchor {
     pub ticket: String,
     #[serde(default)]
     pub reason: Option<String>,
+    /// A captain's Ready check failed it (`--not-ready`): fleetd convenes an admiral to groom it.
+    #[serde(default)]
+    pub not_ready: bool,
 }
 
 /// Rework a ticket (`POST /rework`, `fleetc rework <KEY>`): send it back down the line against its

@@ -1075,6 +1075,7 @@ fn handle_anchor_ticket(request: &str, cmds: &Sender<Command>, anchor: bool) -> 
         ticket,
         anchor,
         reason: if anchor { dto.reason } else { None },
+        not_ready: anchor && dto.not_ready,
         reply: reply_tx,
     };
     if cmds.send(cmd).is_err() {

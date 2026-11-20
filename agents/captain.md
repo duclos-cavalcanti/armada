@@ -87,11 +87,10 @@ hand's).
      keeps it rebased on the parent, and it unwinds onto the default branch when the parent merges —
      all automatic.
 3. **BLOCKED, UNCLEAR, INVARIANT-GAP or AC-GAP** → **anchor it**, don't dispatch guesswork:
-   `fleetc anchor <TICKET> --reason "<VERDICT>: <the findings, tersely>"`. The reason
-   shows wherever the ticket does (`fleetc ticket`, `fleetc context`, the dashboard),
-   so the operator sees what to groom. The anchor drops the ticket off the frontier; the
-   operator grooms it and `fleetc weigh`s it back. If `fleetc anchor` fails, it says which
-   step didn't happen.
+   `fleetc anchor <TICKET> --not-ready --reason "<VERDICT>: <the findings, tersely>"`. The anchor
+   drops the ticket off the frontier, and `--not-ready` sends it to an admiral: fleetd convenes one
+   with your verdict, which grooms the ticket and weighs it back for your next pass. If `fleetc
+   anchor` fails, it says which step didn't happen.
 4. **Refused `NOT-OURS`** → a teammate holds it (assigned to them, or their MR open on it), and the
    fleet takes on only a ticket that's ours or nobody's. Leave it, never anchor it (that would
    draft their MR), and name it in your report for the operator.

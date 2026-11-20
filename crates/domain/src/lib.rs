@@ -198,6 +198,7 @@ pub enum EventKind {
     Dispatched,
     TicketCreated, TicketSynced, TicketBlocked, TicketUnblocked,
     TicketHeld, TicketReleased, TicketDecommissioned, TicketRecalled, TicketAmended,
+    TicketNotReady, // a captain's Ready check failed the ticket it holds: an admiral grooms it
     ShipOpened, ShipSynced, ShipMerged, ShipClosed,
     ShipRoundsReset, // retired with the sailor's round cap: kept to read the ledger's past events
     EscalationInspected, EscalationRuled,
@@ -1409,6 +1410,7 @@ impl EventKind {
             EventKind::TicketDecommissioned => "ticket_decommissioned",
             EventKind::TicketRecalled => "ticket_recalled",
             EventKind::TicketAmended => "ticket_amended",
+            EventKind::TicketNotReady => "ticket_not_ready",
             EventKind::ShipOpened => "ship_opened",
             EventKind::ShipSynced => "ship_synced",
             EventKind::ShipMerged => "ship_merged",
@@ -1446,6 +1448,7 @@ impl EventKind {
             "ticket_decommissioned" => Some(Self::TicketDecommissioned),
             "ticket_recalled" => Some(Self::TicketRecalled),
             "ticket_amended" => Some(Self::TicketAmended),
+            "ticket_not_ready" => Some(Self::TicketNotReady),
             "ship_opened" => Some(Self::ShipOpened),
             "ship_synced" => Some(Self::ShipSynced),
             "ship_merged" => Some(Self::ShipMerged),
