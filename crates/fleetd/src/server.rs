@@ -122,6 +122,8 @@ fn handle(
         (Some("POST"), Some("/ticket-link")) => handle_ticket_link(&request, cmds),
         (Some("POST"), Some("/ticket-epic")) => handle_ticket_epic(&request, cmds),
         (Some("POST"), Some("/ticket-edit")) => handle_ticket_text(&request, cmds, false),
+        (Some("POST"), Some("/ticket-fields")) => handle_ticket_fields(&request, cmds),
+        (Some("POST"), Some("/ticket-search")) => handle_ticket_search(&request, cmds),
         (Some("POST"), Some("/ticket-comment")) => handle_ticket_text(&request, cmds, true),
         (Some("POST"), Some("/propose")) => handle_propose(&request, cmds),
         (Some("POST"), Some("/decommission")) => handle_decommission(&request, cmds, false),
@@ -697,7 +699,8 @@ fn parse_draft(dto: wire::TicketNewCmd) -> Result<domain::TicketDraft, String> {
     if dto.title.trim().is_empty() {
         return Err(bad("a ticket needs a title".into()));
     }
-    Ok(domain::TicketDraft { title: dto.title, kind: dto.kind, description: dto.description, convoy, blocked_by, labels: vec![] })
+    let wire::TicketNewCmd { title, kind, description, labels, components, points, .. } = dto;
+    Ok(domain::TicketDraft { title, kind, description, convoy, blocked_by, labels, components, points })
 }
 
 /// Relay a command to the writer and await its reply: 200 with the reply's text, 409 with the
@@ -728,7 +731,8 @@ fn handle_ticket_link(request: &str, cmds: &Sender<Command>) -> String {
     let link = match dto.link.as_str() {
         "blocked-by" => domain::TicketLink::BlockedBy,
         "relates" => domain::TicketLink::Relates,
-        other => return http_response("400 Bad Request", "text/plain", &format!("unknown link {other:?}: blocked-by or relates")),
+        "duplicates" => domain::TicketLink::Duplicates,
+        other => return http_response("400 Bad Request", "text/plain", &format!("unknown link {other:?}: blocked-by, relates or duplicates")),
     };
     if ticket == other {
         return http_response("400 Bad Request", "text/plain", "a ticket can't link to itself");
@@ -743,6 +747,55 @@ fn handle_ticket_link(request: &str, cmds: &Sender<Command>) -> String {
     }
     match reply_rx.recv() {
         Ok(Ok(())) => http_response("200 OK", "text/plain", "ok"),
+        Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+        Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+    }
+}
+
+/// `POST /ticket-fields` — set a ticket's title, components, labels or story points.
+fn handle_ticket_fields(request: &str, cmds: &Sender<Command>) -> String {
+    let parsed = parse_body::<wire::TicketFieldsCmd>(request).and_then(|dto| {
+        let bad = |e: String| http_response("400 Bad Request", "text/plain", &e);
+        let ticket = parse_ticket(&dto.ticket)?;
+        let captain = dto.captain.as_deref().map(ConvoyKey::parse).transpose().map_err(|e| bad(e.to_string()))?;
+        if dto.title.as_deref().is_some_and(|t| t.trim().is_empty()) {
+            return Err(bad("an empty title".into()));
+        }
+        let fields = domain::TicketFields { title: dto.title, components: dto.components, labels: dto.labels, points: dto.points };
+        if fields.is_empty() {
+            return Err(bad("no field to set: --title, --component, --label or --points".into()));
+        }
+        Ok((ticket, fields, captain))
+    });
+    match parsed {
+        Ok((ticket, fields, captain)) => {
+            let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+            if cmds.send(Command::SetTicketFields { ticket, fields, captain, reply: reply_tx }).is_err() {
+                return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+            }
+            match reply_rx.recv() {
+                Ok(Ok(())) => http_response("200 OK", "text/plain", "ok"),
+                Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
+                Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
+            }
+        }
+        Err(r) => r,
+    }
+}
+
+/// `POST /ticket-search` — the tickets a query matches, in full (JSON).
+fn handle_ticket_search(request: &str, cmds: &Sender<Command>) -> String {
+    let query = match parse_body::<wire::TicketSearchCmd>(request) {
+        Ok(dto) if !dto.query.trim().is_empty() => dto.query,
+        Ok(_) => return http_response("400 Bad Request", "text/plain", "an empty query"),
+        Err(r) => return r,
+    };
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if cmds.send(Command::SearchTickets { query, reply: reply_tx }).is_err() {
+        return http_response("503 Service Unavailable", "text/plain", "writer unavailable");
+    }
+    match reply_rx.recv() {
+        Ok(Ok(found)) => http_response("200 OK", "application/json", &serde_json::to_string(&found).unwrap_or_default()),
         Ok(Err(e)) => http_response("409 Conflict", "text/plain", &e),
         Err(_) => http_response("503 Service Unavailable", "text/plain", "no reply from writer"),
     }
@@ -1238,6 +1291,7 @@ mod tests {
                     Command::GetSettings { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Launch { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::SearchTickets { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::NewTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Propose { reply, .. }
                     | Command::AcceptProposal { reply, .. }
@@ -1251,6 +1305,7 @@ mod tests {
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::LinkTicket { reply, .. }
                     | Command::EditTicket { reply, .. }
+                    | Command::SetTicketFields { reply, .. }
                     | Command::CommentTicket { reply, .. }
                     | Command::SetEpic { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }
@@ -1311,6 +1366,7 @@ mod tests {
                     Command::GetSettings { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Launch { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::GetTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
+                    Command::SearchTickets { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::NewTicket { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::Propose { reply, .. }
                     | Command::AcceptProposal { reply, .. }
@@ -1324,6 +1380,7 @@ mod tests {
                     | Command::DropProposal { reply, .. } => { let _ = reply.send(Err("n/a".into())); }
                     Command::LinkTicket { reply, .. }
                     | Command::EditTicket { reply, .. }
+                    | Command::SetTicketFields { reply, .. }
                     | Command::CommentTicket { reply, .. }
                     | Command::SetEpic { reply, .. } => { let _ = reply.send(Ok(())); }
                     Command::Arm { reply, .. } => { let _ = reply.send(Ok(())); }

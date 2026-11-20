@@ -339,10 +339,16 @@ pub trait Tracker {
     fn create(&self, draft: &TicketDraft) -> Result<TicketKey>;
     /// Replace the ticket's description with `description` (markdown, as `read` returns it).
     fn edit(&self, key: &TicketKey, description: &str) -> Result<()>;
+    /// Set the ticket's other fields: its title, components, labels and story points.
+    fn set_fields(&self, key: &TicketKey, fields: &TicketFields) -> Result<()>;
+    /// The tickets a query matches, in full (Jira: the query is JQL; filesystem: words every
+    /// matching ticket's title or body holds).
+    fn search(&self, query: &str) -> Result<Vec<TicketDetail>>;
     /// Add (`on`) or remove a label on the ticket (idempotent).
     fn label(&self, key: &TicketKey, label: &str, on: bool) -> Result<()>;
     /// Add (`on`) or remove a `link` between `key` and `other` (idempotent): `BlockedBy` is "`key`
-    /// is blocked by `other`"; `Relates` relates the two, both ways.
+    /// is blocked by `other`"; `Relates` relates the two, both ways; `Duplicates` is "`key`
+    /// duplicates `other`".
     fn link(&self, key: &TicketKey, other: &TicketKey, link: TicketLink, on: bool) -> Result<()>;
     /// Add a comment to the ticket — a decision's why, kept where the team reads the ticket.
     fn comment(&self, key: &TicketKey, body: &str) -> Result<()>;

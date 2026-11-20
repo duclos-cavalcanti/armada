@@ -20,7 +20,7 @@
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use domain::ports::Tracker;
-use domain::{ConvoyKey, TicketDetail, TicketDraft, TicketKey, TicketLink, TicketStatus, TrackerTicket};
+use domain::{ConvoyKey, TicketDetail, TicketDraft, TicketFields, TicketKey, TicketLink, TicketStatus, TrackerTicket};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -49,12 +49,19 @@ struct Header {
     /// The tickets it relates to, kept on both sides.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     related: Vec<String>,
+    /// The tickets it duplicates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    duplicates: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     assignee: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     parent: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    components: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    points: Option<u32>,
 }
 
 /// A folder scan: `(key, ticket)` per good file, `(file, why)` per bad one.
@@ -130,6 +137,21 @@ impl FsTracker {
             self.prefix
         );
         Ok(key)
+    }
+
+    fn detail(&self, key: &TicketKey, t: &TicketFile) -> TicketDetail {
+        let keys = |v: &[String]| v.iter().filter_map(|k| TicketKey::parse(k).ok()).collect();
+        TicketDetail {
+            kind: t.header.kind.clone(),
+            description: t.body.clone(),
+            related: keys(&t.header.related),
+            duplicates: keys(&t.header.duplicates),
+            components: t.header.components.clone(),
+            points: t.header.points,
+            ticket: self.to_ticket(key.clone(), t),
+            held: None,
+            location: self.path(key).to_string_lossy().into_owned(),
+        }
     }
 
     fn to_ticket(&self, key: TicketKey, t: &TicketFile) -> TrackerTicket {
@@ -238,15 +260,21 @@ impl Tracker for FsTracker {
     }
 
     fn read(&self, key: &TicketKey) -> Result<TicketDetail> {
-        let t = self.load(key)?;
-        Ok(TicketDetail {
-            kind: t.header.kind.clone(),
-            description: t.body.clone(),
-            related: t.header.related.iter().filter_map(|k| TicketKey::parse(k).ok()).collect(),
-            ticket: self.to_ticket(key.clone(), &t),
-            held: None,
-            location: self.path(key).to_string_lossy().into_owned(),
-        })
+        Ok(self.detail(key, &self.load(key)?))
+    }
+
+    /// Every ticket whose title or body holds each of the query's words, case aside.
+    fn search(&self, query: &str) -> Result<Vec<TicketDetail>> {
+        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        let (good, _) = self.scan()?;
+        Ok(good
+            .into_iter()
+            .filter(|(_, t)| {
+                let text = format!("{}\n{}", t.header.title, t.body).to_lowercase();
+                words.iter().all(|w| text.contains(w.as_str()))
+            })
+            .map(|(key, t)| self.detail(&key, &t))
+            .collect())
     }
 
     fn create(&self, d: &TicketDraft) -> Result<TicketKey> {
@@ -268,9 +296,12 @@ impl Tracker for FsTracker {
                 convoy: d.convoy.as_ref().map(|c| c.0.clone()),
                 blocked_by: d.blocked_by.iter().map(|b| b.0.clone()).collect(),
                 related: vec![],
+                duplicates: vec![],
                 assignee: None,
                 parent: None,
                 labels: d.labels.clone(),
+                components: d.components.clone(),
+                points: d.points,
             },
             body: d.description.clone(),
         };
@@ -289,6 +320,25 @@ impl Tracker for FsTracker {
         let mut t = self.load(key)?;
         t.body = format!("{}\n", description.trim_end());
         self.write(key, &t)
+    }
+
+    fn set_fields(&self, key: &TicketKey, f: &TicketFields) -> Result<()> {
+        self.update(key, |h| {
+            if let Some(title) = &f.title {
+                h.title = title.clone();
+            }
+            if let Some(components) = &f.components {
+                h.components = components.clone();
+            }
+            for label in &f.labels {
+                if !h.labels.contains(label) {
+                    h.labels.push(label.clone());
+                }
+            }
+            if f.points.is_some() {
+                h.points = f.points;
+            }
+        })
     }
 
     fn label(&self, key: &TicketKey, label: &str, on: bool) -> Result<()> {
@@ -317,6 +367,7 @@ impl Tracker for FsTracker {
                 self.update(key, |h| set(&mut h.related, other))?;
                 self.update(other, |h| set(&mut h.related, key))
             }
+            TicketLink::Duplicates => self.update(key, |h| set(&mut h.duplicates, other)),
         }
     }
 
@@ -380,6 +431,24 @@ mod tests {
     }
 
     #[test]
+    fn fields_search_and_duplicates_round_trip() {
+        let (t, dir) = tracker("fields", &[("ARMT-4.md", ARMT_4), ("ARMT-5.md", &ARMT_4.replace("neg", "mul"))]);
+        let key = TicketKey("ARMT-4".into());
+        let fields = TicketFields { title: Some("Add neg and abs".into()), components: Some(vec!["core".into()]), labels: vec!["math".into()], points: Some(3) };
+        t.set_fields(&key, &fields).unwrap();
+        t.set_fields(&key, &fields).unwrap(); // idempotent: the label isn't added twice
+        t.link(&key, &TicketKey("ARMT-5".into()), TicketLink::Duplicates, true).unwrap();
+        let d = t.read(&key).unwrap();
+        assert_eq!((d.ticket.title.as_str(), d.components.as_slice(), d.points), ("Add neg and abs", ["core".to_string()].as_slice(), Some(3)));
+        assert_eq!((d.ticket.labels, d.duplicates), (vec!["math".to_string()], vec![TicketKey("ARMT-5".into())]));
+        let found = |q: &str| t.search(q).unwrap().into_iter().map(|d| d.ticket.key.0).collect::<Vec<_>>();
+        assert_eq!(found("NEG works"), ["ARMT-4"], "every word, in the title or body, case aside");
+        assert_eq!(found("works"), ["ARMT-4", "ARMT-5"]);
+        assert!(found("nothing-like-it").is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn a_bad_file_is_skipped_by_the_board_and_named_by_preflight() {
         let (t, dir) = tracker("bad", &[
             ("ARMT-4.md", ARMT_4),
@@ -402,6 +471,8 @@ mod tests {
             convoy: Some(ConvoyKey("ARMT-1".into())),
             blocked_by: vec![],
             labels: vec!["fleet-proposed".into()],
+            components: vec![],
+            points: None,
         };
         let key = t.create(&draft).unwrap();
         assert_eq!(key, TicketKey("ARMT-10".into()), "after the highest number, bad files included");

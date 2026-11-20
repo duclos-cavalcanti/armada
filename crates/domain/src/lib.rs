@@ -645,6 +645,8 @@ impl TicketLabel {
 pub enum TicketLink {
     BlockedBy,
     Relates,
+    /// "`key` duplicates `other`".
+    Duplicates,
 }
 
 /// A ticket's full text, as `fleetc ticket <KEY>` shows it: the board facts plus its type
@@ -657,6 +659,14 @@ pub struct TicketDetail {
     /// The tickets it relates to (`TicketLink::Relates`): shown, never acted on.
     #[serde(default)]
     pub related: Vec<TicketKey>,
+    /// The tickets it duplicates (`TicketLink::Duplicates`).
+    #[serde(default)]
+    pub duplicates: Vec<TicketKey>,
+    /// Its components and story points, where the tracker keeps them.
+    #[serde(default)]
+    pub components: Vec<String>,
+    #[serde(default)]
+    pub points: Option<u32>,
     /// The fleet's hold on it, from the ledger (not the tracker): the reason, `""` when none was
     /// given; `None` when it isn't held.
     #[serde(default)]
@@ -676,6 +686,30 @@ pub struct TicketDraft {
     pub blocked_by: Vec<TicketKey>,
     #[serde(default)]
     pub labels: Vec<String>,
+    #[serde(default)]
+    pub components: Vec<String>,
+    #[serde(default)]
+    pub points: Option<u32>,
+}
+
+/// A ticket's fields as `fleetc ticket edit` sets them, apart from its description: each one left
+/// out stays as it is. `components` replaces the whole set; `labels` are added.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TicketFields {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub components: Option<Vec<String>>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub points: Option<u32>,
+}
+
+impl TicketFields {
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none() && self.components.is_none() && self.labels.is_empty() && self.points.is_none()
+    }
 }
 
 /// Work a cog found mid-ticket that isn't its own, held for the operator (or the admiral) to accept

@@ -52,6 +52,8 @@ type ShipReply = std::sync::mpsc::Sender<std::result::Result<domain::ShipView, S
 type CiReply = std::sync::mpsc::Sender<std::result::Result<domain::CiReport, String>>;
 /// A ticket read's reply — its full text.
 type TicketReply = std::sync::mpsc::Sender<std::result::Result<domain::TicketDetail, String>>;
+/// A search's matches, in full.
+type TicketsReply = std::sync::mpsc::Sender<std::result::Result<Vec<domain::TicketDetail>, String>>;
 /// A crossings read's reply — the MR under review beside our open tickets.
 type CrossingsReply = std::sync::mpsc::Sender<std::result::Result<domain::Crossings, String>>;
 /// A launch's reply — the new MR's URL.
@@ -96,6 +98,8 @@ pub enum Command {
     NewTicket { draft: domain::TicketDraft, reply: UrlReply }, // an action: create a ticket → its key (tracker)
     LinkTicket { ticket: TicketKey, other: TicketKey, link: domain::TicketLink, on: bool, captain: Option<ConvoyKey>, reply: Reply }, // an action: add or remove a link (tracker, + ledger)
     EditTicket { ticket: TicketKey, description: String, amend: Option<Amend>, reply: Reply }, // an action: replace its description (tracker)
+    SetTicketFields { ticket: TicketKey, fields: domain::TicketFields, captain: Option<ConvoyKey>, reply: Reply }, // an action: its title, components, labels, points (tracker)
+    SearchTickets { query: String, reply: TicketsReply }, // a read: the tickets a query matches (tracker)
     CommentTicket { ticket: TicketKey, body: String, reply: Reply }, // an action: comment on it (tracker)
     SetEpic { ticket: TicketKey, epic: ConvoyKey, reply: Reply }, // an action: move it under an epic (tracker, + ledger)
     Propose { from: Option<TicketKey>, proposed: Proposed, reply: UrlReply }, // hold a cog's proposal → its id
@@ -441,6 +445,16 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
             };
             let _ = reply.send(res.map_err(|e| format!("{e:#}")));
         }
+        Command::SetTicketFields { ticket, fields, captain, reply } => {
+            let res = match &captain {
+                Some(c) => in_convoy(ledger, c, &ticket),
+                None => Ok(()),
+            };
+            let _ = reply.send(res.and_then(|()| tracker.set_fields(&ticket, &fields)).map_err(|e| format!("{e:#}")));
+        }
+        Command::SearchTickets { query, reply } => {
+            let _ = reply.send(tracker.search(&query).map_err(|e| format!("{e:#}")));
+        }
         Command::CommentTicket { ticket, body, reply } => {
             let _ = reply.send(tracker.comment(&ticket, &body).map_err(|e| format!("{e:#}")));
         }
@@ -500,7 +514,8 @@ fn propose(ledger: &Ledger, tracker: &dyn Tracker, from: Option<TicketKey>, prop
     };
     let (ticket, why, convoy) = match proposed {
         Proposed::New(d) => {
-            let filed = TicketDraft { convoy: None, labels: vec![TicketLabel::Proposed.as_str().into()], ..d.clone() };
+            let labels = d.labels.iter().cloned().chain([TicketLabel::Proposed.as_str().into()]).collect();
+            let filed = TicketDraft { convoy: None, labels, ..d.clone() };
             (tracker.create(&filed)?, d.title, d.convoy)
         }
         Proposed::Existing { ticket, why, convoy } => {
@@ -1708,7 +1723,7 @@ mod tests {
         fn read(&self, key: &TicketKey) -> Result<domain::TicketDetail> {
             let mut ticket = self.get(key)?;
             ticket.labels = self.labels.borrow().iter().filter(|(k, _)| k == key).map(|(_, l)| l.clone()).collect();
-            Ok(domain::TicketDetail { ticket, kind: "task".into(), description: String::new(), related: vec![], held: None, location: String::new() })
+            Ok(domain::TicketDetail { ticket, kind: "task".into(), description: String::new(), related: vec![], duplicates: vec![], components: vec![], points: None, held: None, location: String::new() })
         }
         fn create(&self, d: &TicketDraft) -> Result<TicketKey> {
             let key = TicketKey(format!("PROJ-{}", 100 + self.tickets.borrow().len()));
@@ -1728,6 +1743,12 @@ mod tests {
         }
         fn edit(&self, _: &TicketKey, _: &str) -> Result<()> {
             Ok(())
+        }
+        fn set_fields(&self, _: &TicketKey, _: &domain::TicketFields) -> Result<()> {
+            Ok(())
+        }
+        fn search(&self, _: &str) -> Result<Vec<domain::TicketDetail>> {
+            Ok(vec![])
         }
         fn label(&self, key: &TicketKey, label: &str, on: bool) -> Result<()> {
             let mut labels = self.labels.borrow_mut();
@@ -1830,7 +1851,7 @@ mod tests {
         t.convoy = Some(ConvoyKey("PROJ-9".into()));
         let tracker = FakeTracker::new(vec![t]);
         sync::sync_board(&db, &tracker, "now").unwrap();
-        let draft = TicketDraft { title: "Fix X".into(), kind: "bug".into(), description: "…".into(), convoy: None, blocked_by: vec![], labels: vec![] };
+        let draft = TicketDraft { title: "Fix X".into(), kind: "bug".into(), description: "…".into(), convoy: None, blocked_by: vec![], labels: vec![], components: vec![], points: None };
         let from = Some(TicketKey("PROJ-1".into()));
         let convoy_of = |k: &TicketKey| TicketRepo::get(&db, k).unwrap().unwrap().convoy;
 
@@ -1880,7 +1901,7 @@ mod tests {
         let tracker = FakeTracker::new(vec![t]);
         sync::sync_board(&db, &tracker, "now").unwrap();
         ConvoyRepo::open(&db, &c9, None, false, "t").unwrap();
-        let draft = TicketDraft { title: "Fix X".into(), kind: "bug".into(), description: "…".into(), convoy: None, blocked_by: vec![], labels: vec![] };
+        let draft = TicketDraft { title: "Fix X".into(), kind: "bug".into(), description: "…".into(), convoy: None, blocked_by: vec![], labels: vec![], components: vec![], points: None };
         let (id, key) = propose(&db, &tracker, Some(TicketKey("PROJ-1".into())), Proposed::New(draft)).unwrap();
 
         let err = close_convoy(&db, &c9, false).unwrap_err().to_string();
@@ -2296,7 +2317,7 @@ mod tests {
         let tracker = FakeTracker::new(vec![tt("PROJ-1", TicketStatus::InProgress), tt("PROJ-7", TicketStatus::Todo)]);
         sync::sync_board(&db, &tracker, "now").unwrap();
         let from = Some(TicketKey("PROJ-1".into()));
-        let draft = TicketDraft { title: "Fix X".into(), kind: "bug".into(), description: "…".into(), convoy: None, blocked_by: vec![], labels: vec![] };
+        let draft = TicketDraft { title: "Fix X".into(), kind: "bug".into(), description: "…".into(), convoy: None, blocked_by: vec![], labels: vec![], components: vec![], points: None };
         let status = |k: &str| tracker.get(&TicketKey(k.into())).unwrap().status;
 
         let filed = propose(&db, &tracker, from.clone(), Proposed::New(draft)).unwrap().0;

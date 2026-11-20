@@ -135,6 +135,8 @@ pub struct TrackerConfig {
     pub project: String,
     /// Jira: a label a worker's claim adds to the ticket (a team convention); `None` = no label.
     pub claim_label: Option<String>,
+    /// Jira: the story-points field's id (e.g. `customfield_10004`), for `fleetc ticket --points`.
+    pub points_field: Option<String>,
     /// Filesystem: the folder of ticket files, relative to the project folder (default `tickets`).
     pub path: Option<String>,
     /// Filesystem: who "me" is — a claim assigns this user (default: `git config user.name`).

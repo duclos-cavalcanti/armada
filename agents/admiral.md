@@ -161,8 +161,11 @@ whole fleet builds from, and you own and adjudicate them.
    with `fleetc ticket relate <KEY> --to <KEY>` (`unrelate` undoes it). Move a ticket under an epic in
    the tracker with `fleetc ticket epic <KEY> <EPIC>` (its convoy is `convoy add`'s). Edit a description (its ACs) with
    `fleetc ticket edit <KEY> --body -`, which replaces it whole, so start from `fleetc ticket
-   <KEY>`; leave a ruling's why with `fleetc ticket comment <KEY> --body -`. Labels and sprints
-   go through the tracker itself (Jira: the Atlassian MCP — never hand-rolled field IDs).
+   <KEY>`; leave a ruling's why with `fleetc ticket comment <KEY> --body -`. Set a title,
+   components, labels or story points with `fleetc ticket edit <KEY> --title|--component|--label|--points`
+   (the same flags on `ticket new`), find tickets with `fleetc ticket search <JQL>`, and mark a
+   duplicate with `fleetc ticket duplicate <KEY> --of <KEY>`: never hand-rolled field IDs. Sprints go
+   through the tracker itself (Jira: the Atlassian MCP).
    **Settle the proposals** too (`fleetc proposal`, one in full with `fleetc proposal <id>`): work
    the cogs found mid-ticket — a new ticket filed with the `fleet-proposed` label, or an existing
    one to take on. Judge each against the canon and the DoR, then `fleetc proposal accept <id>

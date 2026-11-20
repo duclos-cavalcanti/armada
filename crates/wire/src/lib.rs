@@ -203,6 +203,36 @@ pub struct TicketNewCmd {
     pub convoy: Option<String>,
     #[serde(default)]
     pub blocked_by: Vec<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub components: Vec<String>,
+    #[serde(default)]
+    pub points: Option<u32>,
+}
+
+/// Set a ticket's fields (`POST /ticket-fields`, `fleetc ticket edit --title|--component|--label|--points`):
+/// each one left out stays; `components` replaces the set, `labels` are added.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TicketFieldsCmd {
+    pub ticket: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub components: Option<Vec<String>>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub points: Option<u32>,
+    /// Sent by a captain: its convoy, which the ticket must be in.
+    #[serde(default)]
+    pub captain: Option<String>,
+}
+
+/// Search the tracker (`POST /ticket-search`, `fleetc ticket search`): Jira takes JQL.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TicketSearchCmd {
+    pub query: String,
 }
 
 /// Propose work (`POST /propose`, `fleetc propose`): held in the ledger for the operator to accept

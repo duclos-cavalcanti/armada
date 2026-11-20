@@ -2322,6 +2322,12 @@ mod tests {
         fn edit(&self, _: &TicketKey, _: &str) -> Result<()> {
             Ok(())
         }
+        fn set_fields(&self, _: &TicketKey, _: &domain::TicketFields) -> Result<()> {
+            Ok(())
+        }
+        fn search(&self, _: &str) -> Result<Vec<domain::TicketDetail>> {
+            Ok(vec![])
+        }
         fn label(&self, _: &TicketKey, _: &str, _: bool) -> Result<()> {
             unimplemented!()
         }

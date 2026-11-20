@@ -2171,6 +2171,8 @@ fn row_to_proposal(r: &rusqlite::Row) -> rusqlite::Result<Proposal> {
                 convoy: r.get::<_, Option<String>>("convoy")?.map(convoy_key).transpose()?,
                 blocked_by: blocked_by.into_iter().map(ticket_key).collect::<rusqlite::Result<_>>()?,
                 labels: vec![],
+                components: vec![],
+                points: None,
             })
         }
     };
@@ -2707,6 +2709,8 @@ mod repo_tests {
             convoy: Some(ConvoyKey("PROJ-9".into())),
             blocked_by: vec![TicketKey("PROJ-1".into())],
             labels: vec![],
+            components: vec![],
+            points: None,
         };
         let proposal = |proposed| Proposal {
             id: ProposalId(0),

@@ -9,20 +9,43 @@
 use crate::proc::OutputWithin;
 use anyhow::{ensure, Context, Result};
 use domain::ports::Tracker;
-use domain::{ConvoyKey, TicketDetail, TicketDraft, TicketKey, TicketLink, TicketStatus, TrackerTicket};
+use domain::{ConvoyKey, TicketDetail, TicketDraft, TicketFields, TicketKey, TicketLink, TicketStatus, TrackerTicket};
 use std::process::Command;
 
-/// `[tracker]` in fleet.toml: the Jira `project` (its key is the ticket prefix) and the optional
-/// label a worker's claim adds. Project-scoped commands pass `-p <project>`, so fleet.toml — not
-/// jira-cli's own default — picks the project. The sprint board still comes from `jira init`.
+/// `[tracker]` in fleet.toml: the Jira `project` (its key is the ticket prefix), the optional
+/// label a worker's claim adds, and the story-points field's id (it differs per Jira instance).
+/// Project-scoped commands pass `-p <project>`, so fleet.toml — not jira-cli's own default — picks
+/// the project. The sprint board still comes from `jira init`.
 pub struct JiraTracker {
     project: String,
     claim_label: Option<String>,
+    points_field: Option<String>,
 }
 
 impl JiraTracker {
-    pub fn new(project: impl Into<String>, claim_label: Option<String>) -> Self {
-        Self { project: project.into(), claim_label }
+    pub fn new(project: impl Into<String>, claim_label: Option<String>, points_field: Option<String>) -> Self {
+        Self { project: project.into(), claim_label, points_field }
+    }
+
+    fn detail(&self, issue: &serde_json::Value) -> Option<TicketDetail> {
+        detail_from_issue(issue, self.points_field.as_deref())
+    }
+
+    /// The project's components by name → their ids: Jira refuses a component set by name ("not
+    /// valid") that it accepts by id.
+    fn component_ids(&self, names: &[String]) -> Result<Vec<serde_json::Value>> {
+        let all = self.rest_json("GET", &format!("/rest/api/2/project/{}/components", self.project), None)?;
+        let all = all.as_array().context("jira components: not a list")?;
+        names
+            .iter()
+            .map(|name| {
+                let id = all.iter().find(|c| c["name"].as_str() == Some(name.as_str()) && c["archived"].as_bool() != Some(true));
+                id.and_then(|c| c["id"].as_str()).map(|id| serde_json::json!({ "id": id })).with_context(|| {
+                    let known: Vec<&str> = all.iter().filter(|c| c["archived"].as_bool() != Some(true)).filter_map(|c| c["name"].as_str()).collect();
+                    format!("no component {name:?} in {} (it has: {})", self.project, known.join(", "))
+                })
+            })
+            .collect()
     }
 
     fn raw_page(&self, jql: &str, from: usize) -> Result<String> {
@@ -80,6 +103,11 @@ impl JiraTracker {
     /// with jira-cli's credentials: the server + login from its config, the token from
     /// `JIRA_API_TOKEN` (passed on stdin, never in argv), else `~/.netrc`.
     fn rest(&self, method: &str, path: &str, body: Option<&serde_json::Value>) -> Result<()> {
+        self.rest_json(method, path, body).map(drop)
+    }
+
+    /// `rest`, returning the response's JSON (`null` for an empty body).
+    fn rest_json(&self, method: &str, path: &str, body: Option<&serde_json::Value>) -> Result<serde_json::Value> {
         let cfg = jira_cli_config()?;
         let url = format!("{}{path}", cfg.server.trim_end_matches('/'));
         let token = std::env::var("JIRA_API_TOKEN").ok().filter(|t| !t.is_empty());
@@ -100,7 +128,10 @@ impl JiraTracker {
             crate::preflight::one_line(resp.as_bytes()),
             crate::preflight::one_line(&out.stderr)
         );
-        Ok(())
+        if resp.trim().is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        serde_json::from_str(resp).with_context(|| format!("jira {method} {path}: not JSON"))
     }
 
     /// add to the active sprint. jira-cli 1.7.0: `sprint list --plain --columns ID` + the
@@ -217,7 +248,7 @@ impl Tracker for JiraTracker {
     }
 
     fn read(&self, key: &TicketKey) -> Result<TicketDetail> {
-        detail_from_issue(&self.view(key)?).with_context(|| format!("jira issue view {}: unexpected shape", key.0))
+        self.detail(&self.view(key)?).with_context(|| format!("jira issue view {}: unexpected shape", key.0))
     }
 
     /// One JQL search (`key in (…)`) per hundred keys. The search index lags a create by seconds,
@@ -228,7 +259,7 @@ impl Tracker for JiraTracker {
             let jql = format!("key in ({})", chunk.iter().map(|k| k.0.as_str()).collect::<Vec<_>>().join(", "));
             let page: serde_json::Value = serde_json::from_str(&self.raw_page(&jql, 0)?)?;
             let issues = page.get("issues").and_then(|i| i.as_array()).or_else(|| page.as_array());
-            found.extend(issues.into_iter().flatten().filter_map(detail_from_issue));
+            found.extend(issues.into_iter().flatten().filter_map(|i| self.detail(i)));
         }
         for key in keys {
             if !found.iter().any(|d: &TicketDetail| &d.ticket.key == key) {
@@ -257,11 +288,47 @@ impl Tracker for JiraTracker {
         for blocker in &d.blocked_by {
             self.link(&key, blocker, TicketLink::BlockedBy, true)?;
         }
+        // jira-cli sets components by name, which Jira refuses: they (and the points) go over REST.
+        let fields = TicketFields { components: Some(d.components.clone()).filter(|c| !c.is_empty()), points: d.points, ..Default::default() };
+        if !fields.is_empty() {
+            self.set_fields(&key, &fields).with_context(|| format!("{} filed, but its fields weren't set", key.0))?;
+        }
         Ok(key)
     }
 
     fn edit(&self, key: &TicketKey, description: &str) -> Result<()> {
         self.put_issue(key, &serde_json::json!({ "fields": { "description": wiki(description) } }))
+    }
+
+    /// One `PUT` with only the fields given, so the ticket's others aren't re-sent.
+    fn set_fields(&self, key: &TicketKey, f: &TicketFields) -> Result<()> {
+        let mut fields = serde_json::Map::new();
+        if let Some(title) = &f.title {
+            fields.insert("summary".into(), title.as_str().into());
+        }
+        if let Some(names) = &f.components {
+            fields.insert("components".into(), self.component_ids(names)?.into());
+        }
+        if let Some(points) = f.points {
+            let id = self.points_field.as_deref().context("story points need [tracker] points_field in fleet.toml (Jira's field id, e.g. customfield_10004)")?;
+            fields.insert(id.into(), points.into());
+        }
+        let labels: Vec<serde_json::Value> = f.labels.iter().map(|l| serde_json::json!({ "add": l })).collect();
+        self.put_issue(key, &serde_json::json!({ "fields": fields, "update": { "labels": labels } }))
+    }
+
+    /// Every page of the JQL's matches, in full.
+    fn search(&self, jql: &str) -> Result<Vec<TicketDetail>> {
+        let (mut found, mut from) = (Vec::new(), 0);
+        loop {
+            let page: serde_json::Value = serde_json::from_str(&self.raw_page(jql, from)?)?;
+            let issues = page.get("issues").and_then(|i| i.as_array()).or_else(|| page.as_array()).cloned().unwrap_or_default();
+            from += issues.len();
+            found.extend(issues.iter().filter_map(|i| self.detail(i)));
+            if issues.len() < 100 {
+                return Ok(found);
+            }
+        }
     }
 
     /// Only `parent` goes: a whole-issue edit would re-send components Jira may have archived.
@@ -277,13 +344,16 @@ impl Tracker for JiraTracker {
     fn link(&self, key: &TicketKey, other: &TicketKey, link: TicketLink, on: bool) -> Result<()> {
         let issue = self.view(key)?;
         let fields = issue.get("fields").context("jira issue view: no fields")?;
-        let (name, inward_only) = match link {
-            TicketLink::BlockedBy => ("Blocks", true), // only the inward side: `other` blocks `key`
-            TicketLink::Relates => ("Relates", false),
+        // Which side `other` is on: inward for "`other` blocks `key`", outward for "`key` duplicates
+        // `other`", either for Relates.
+        let (name, side) = match link {
+            TicketLink::BlockedBy => ("Blocks", Some(true)),
+            TicketLink::Relates => ("Relates", None),
+            TicketLink::Duplicates => ("Duplicate", Some(false)),
         };
         let ids: Vec<String> = links_of(fields, name)
             .into_iter()
-            .filter(|l| &l.other == other && (l.inward || !inward_only))
+            .filter(|l| &l.other == other && side.is_none_or(|inward| l.inward == inward))
             .map(|l| l.id)
             .collect();
         if !on {
@@ -299,6 +369,7 @@ impl Tracker for JiraTracker {
         match link {
             TicketLink::BlockedBy => self.jira(&["issue", "link", &other.0, &key.0, "Blocks"]),
             TicketLink::Relates => self.jira(&["issue", "link", &key.0, &other.0, "Relates"]),
+            TicketLink::Duplicates => self.jira(&["issue", "link", &key.0, &other.0, "Duplicate"]),
         }
         .map(drop)
     }
@@ -394,17 +465,22 @@ fn capitalized(s: &str) -> String {
 
 /// One `jira issue view --raw` issue → its full text: the board facts, the issue type, and the
 /// description (Jira Cloud's ADF document flattened to text; a plain string as is).
-fn detail_from_issue(issue: &serde_json::Value) -> Option<TicketDetail> {
+fn detail_from_issue(issue: &serde_json::Value, points_field: Option<&str>) -> Option<TicketDetail> {
     let f = issue.get("fields")?;
+    let names = |v: Option<&serde_json::Value>| v.and_then(|c| c.as_array()).into_iter().flatten().filter_map(|c| c["name"].as_str().map(String::from)).collect();
     Some(TicketDetail {
         ticket: issue_to_ticket(issue)?,
-        kind: f.pointer("/issuetype/name").and_then(|n| n.as_str()).unwrap_or("").to_lowercase(),
+        // `issue view` says `issuetype`, `issue list` (a search) `issueType`.
+        kind: f.pointer("/issuetype/name").or_else(|| f.pointer("/issueType/name")).and_then(|n| n.as_str()).unwrap_or("").to_lowercase(),
         description: match f.get("description") {
             Some(serde_json::Value::String(s)) => s.clone(),
             Some(doc) if doc.is_object() => adf_text(doc).trim_end().to_string(),
             _ => String::new(),
         },
         related: links_of(f, "Relates").into_iter().map(|l| l.other).collect(),
+        duplicates: links_of(f, "Duplicate").into_iter().filter(|l| !l.inward).map(|l| l.other).collect(),
+        components: names(f.get("components")),
+        points: points_field.and_then(|id| f.get(id)).and_then(|p| p.as_f64()).map(|p| p.round() as u32),
         held: None,
         location: browse_url(issue).unwrap_or_default(),
     })
@@ -483,19 +559,17 @@ fn parse_page(json: &str) -> Result<(usize, Vec<TrackerTicket>)> {
 fn issue_to_ticket(i: &serde_json::Value) -> Option<TrackerTicket> {
     let key = TicketKey::parse(i.get("key")?.as_str()?).ok()?;
     let f = i.get("fields")?;
-    let status_name = f
-        .get("status")
-        .and_then(|s| s.get("name"))
-        .and_then(|n| n.as_str())
-        .unwrap_or("");
+    let status_at = |ptr: &str| f.get("status").and_then(|s| s.pointer(ptr)).and_then(|n| n.as_str()).unwrap_or("");
     Some(TrackerTicket {
         key,
         title: f.get("summary").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-        status: jira_status(status_name)?, // unknown status ⇒ skip (filter_map)
+        // A status of the project's own (Roll-out) reads as its category: To Do, In Progress or Done.
+        status: jira_status(status_at("/name")).or_else(|| status_category(status_at("/statusCategory/key")))?,
         assignee: f
             .get("assignee")
             .and_then(|a| a.get("displayName"))
             .and_then(|n| n.as_str())
+            .filter(|n| !n.is_empty()) // a search says an unassigned ticket's name is ""
             .map(String::from),
         // The convoy is the ticket's epic. Team-managed Jira projects link Story→Epic via
         // `parent` (the legacy Epic Link custom field, where present, is a read-only mirror),
@@ -568,6 +642,16 @@ fn jira_status(name: &str) -> Option<TicketStatus> {
     }
 }
 
+/// A Jira status category → the `TicketStatus` it stands for.
+fn status_category(key: &str) -> Option<TicketStatus> {
+    match key {
+        "new" => Some(TicketStatus::Todo),
+        "indeterminate" => Some(TicketStatus::InProgress),
+        "done" => Some(TicketStatus::Done),
+        _ => None,
+    }
+}
+
 fn jira_status_name(s: TicketStatus) -> &'static str {
     match s {
         TicketStatus::Todo => "To Do",
@@ -614,7 +698,7 @@ mod tests {
                 ]}
             }
         });
-        let d = detail_from_issue(&issue).unwrap();
+        let d = detail_from_issue(&issue, None).unwrap();
         assert_eq!((d.ticket.key.0.as_str(), d.kind.as_str()), ("PROJ-7", "story"));
         assert_eq!(
             d.description,
@@ -686,7 +770,7 @@ mod tests {
             {"id":"11","type":{"name":"Relates"},"outwardIssue":{"key":"PROJ-3"}},
             {"id":"12","type":{"name":"Blocks"},"inwardIssue":{"key":"PROJ-4"}},
             {"id":"13","type":{"name":"Blocks"},"outwardIssue":{"key":"PROJ-5"}}]}}"#).unwrap();
-        let d = detail_from_issue(&issue).unwrap();
+        let d = detail_from_issue(&issue, None).unwrap();
         assert_eq!(d.related, vec![TicketKey("PROJ-2".into()), TicketKey("PROJ-3".into())], "either side");
         assert_eq!(d.ticket.blocked_by, vec![TicketKey("PROJ-4".into())], "only the inward Blocks side");
         let blocks = links_of(&issue["fields"], "Blocks");
@@ -699,5 +783,31 @@ mod tests {
         assert_eq!(jira_status(jira_status_name(TicketStatus::InQa)), Some(TicketStatus::InQa));
         assert_eq!(jira_status("In Review"), Some(TicketStatus::InQa)); // board label
         assert_eq!(jira_status("Nope"), None);
+        assert_eq!(status_category("indeterminate"), Some(TicketStatus::InProgress)); // Roll-out
+        assert_eq!(status_category("nope"), None);
+    }
+
+    #[test]
+    fn a_detail_carries_components_points_duplicates_and_a_status_by_its_category() {
+        let issue = serde_json::json!({
+            "key": "PROJ-6", "self": "https://x.atlassian.net/rest/api/2/issue/1",
+            "fields": {
+                "summary": "Roll it out", "issueType": {"name": "Task"}, "assignee": {"displayName": ""},
+                "status": {"name": "Roll-out", "statusCategory": {"key": "indeterminate"}},
+                "components": [{"id": "1", "name": "docs"}, {"id": "2", "name": "services"}],
+                "customfield_10004": 3.0,
+                "issuelinks": [
+                    {"id": "9", "type": {"name": "Duplicate"}, "outwardIssue": {"key": "PROJ-2"}},
+                    {"id": "8", "type": {"name": "Duplicate"}, "inwardIssue": {"key": "PROJ-3"}}
+                ]
+            }
+        });
+        let d = detail_from_issue(&issue, Some("customfield_10004")).unwrap();
+        assert_eq!(d.ticket.status, TicketStatus::InProgress, "a status of the project's own reads as its category");
+        assert_eq!((d.components, d.points), (vec!["docs".to_string(), "services".to_string()], Some(3)));
+        assert_eq!(d.duplicates, vec![TicketKey("PROJ-2".into())], "only what it duplicates, not what duplicates it");
+        assert_eq!(d.kind, "task", "a search's issueType, as a view's issuetype");
+        assert_eq!(d.ticket.assignee, None, "a search's empty name is unassigned");
+        assert_eq!(detail_from_issue(&issue, None).unwrap().points, None, "no points field configured");
     }
 }

@@ -115,7 +115,7 @@ fn tracker(cfg: &config::Config) -> Box<dyn Tracker + Send> {
             let user = t.user.clone().or_else(git_user).unwrap_or_else(|| "me".into());
             Box::new(filesystem::FsTracker::new(dir, &t.project, user))
         }
-        Some(config::TrackerKind::Jira) | None => Box::new(jira::JiraTracker::new(&t.project, t.claim_label.clone())),
+        Some(config::TrackerKind::Jira) | None => Box::new(jira::JiraTracker::new(&t.project, t.claim_label.clone(), t.points_field.clone())),
     }
 }
 

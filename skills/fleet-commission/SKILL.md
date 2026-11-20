@@ -26,13 +26,16 @@ Follow `/fleet-ready-done`'s *Drafting a ticket*: draft, check it's new, wire it
 
 ```bash
 fleetc ticket new --type <type> --title "<title>" \
-    ${CONVOY:+--convoy "$CONVOY"} --blocked-by <KEY> … --body - <<'EOF'
+    ${CONVOY:+--convoy "$CONVOY"} --blocked-by <KEY> … \
+    [--component <c>]… [--label <l>]… [--points <N>] --body - <<'EOF'
 ## Outcome
 …
 EOF
 ```
 
-It prints the new key. Show the result with `fleetc ticket <KEY>`.
+It prints the new key. Show the result with `fleetc ticket <KEY>`. The fields the project's Ready asks
+for (components, story points) go in the same call; a ticket already filed takes them with
+`fleetc ticket edit <KEY> --component <c>… --points <N>`.
 
 ## Boundaries
 

@@ -64,11 +64,13 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc retry-ci [--iid <N>]       (re-run the MR's failed CI jobs)\n  \
      fleetc arm      [<KEY-N>]        (arm the ticket's MR to merge once green; refused while held or blocked)\n  \
      fleetc ticket   [<KEY-N>] [--where]    (a ticket's full text; --where: its URL or file path)\n  \
-     fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (prints the new key)\n  \
+     fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--component <c>]… [--label <l>]… [--points <N>] [--body <text>|-]   (prints the new key)\n  \
+     fleetc ticket   search <query> [--full]   (the tickets it matches, one line each, or in full; Jira: the query is JQL)\n  \
      fleetc ticket   block|unblock <KEY-N> --by <KEY-N>   (add or remove an 'is blocked by' edge; unblock: never a cog)\n  \
      fleetc ticket   relate|unrelate <KEY-N> --to <KEY-N>   (add or remove a 'relates to' link, both ways; the fleet never acts on it)\n  \
+     fleetc ticket   duplicate|unduplicate <KEY-N> --of <KEY-N>   (mark the first a duplicate of the second, or stop)\n  \
      fleetc ticket   epic <KEY-N> <EPIC>   (move the ticket under an epic in the tracker; its convoy is `convoy add`'s; never a cog)\n  \
-     fleetc ticket   edit [<KEY-N>] --body <text|-> [--why <text>] [--case <N>]   (replace the description, whole: read it first; a captain: its convoy's tickets, with why)\n  \
+     fleetc ticket   edit [<KEY-N>] [--body <text|->] [--title <t>] [--component <c>]… [--label <l>]… [--points <N>] [--why <text>] [--case <N>]   (--body replaces the description, whole: read it first; --component replaces the set, --label adds; a captain: its convoy's tickets, with why)\n  \
      fleetc ticket   comment [<KEY-N>] --body <text|->   (comment on the ticket)\n  \
      fleetc propose  --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (a cog: file a new ticket labelled fleet-proposed; prints its id + key)\n  \
      fleetc propose  --existing <KEY-N> --why <text> [--convoy <KEY>]   (a cog: propose taking on an existing ticket)\n  \
@@ -1485,7 +1487,8 @@ fn arm(args: &[String]) -> Result<()> {
 fn ticket(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("new") => ticket_new(&args[1..]),
-        Some(sub @ ("block" | "unblock" | "relate" | "unrelate")) => ticket_link(sub, &args[1..]),
+        Some(sub @ ("block" | "unblock" | "relate" | "unrelate" | "duplicate" | "unduplicate")) => ticket_link(sub, &args[1..]),
+        Some("search") => ticket_search(&args[1..]),
         Some("epic") => ticket_epic(&args[1..]),
         Some(sub @ ("edit" | "comment")) => ticket_text(sub, &args[1..]),
         Some(key) if !key.starts_with('-') => match args.get(1).map(String::as_str) {
@@ -1496,7 +1499,7 @@ fn ticket(args: &[String]) -> Result<()> {
             let key = ticket_or_own(&[], "ticket")?;
             if args.is_empty() { ticket_show(&key) } else { ticket_where(&key) }
         }
-        _ => bail!("usage: fleetc ticket [<KEY-N>] | new --title <t> --type <type> … | block|unblock <KEY-N> --by <KEY-N> | relate|unrelate <KEY-N> --to <KEY-N> | epic <KEY-N> <EPIC> | edit|comment [<KEY-N>] --body <text|->"),
+        _ => bail!("usage: fleetc ticket [<KEY-N>] | new --title <t> --type <type> … | search <query> [--full] | block|unblock <KEY-N> --by <KEY-N> | relate|unrelate <KEY-N> --to <KEY-N> | duplicate|unduplicate <KEY-N> --of <KEY-N> | epic <KEY-N> <EPIC> | edit [<KEY-N>] [--body <text|->] [--title|--component|--label|--points …] | comment [<KEY-N>] --body <text|->"),
     }
 }
 
@@ -1513,6 +1516,32 @@ fn ticket_where(key: &str) -> Result<()> {
         bail!("{key}: the tracker reports no location for it");
     }
     println!("{location}");
+    Ok(())
+}
+
+/// `fleetc ticket search <query> [--full]` — the tickets the query matches (Jira: JQL, paged to the
+/// end), one line each: key, status, type, title. `--full` prints each one as `fleetc ticket` does.
+fn ticket_search(args: &[String]) -> Result<()> {
+    let full = args.iter().any(|a| a == "--full");
+    let query = args.iter().filter(|a| *a != "--full").cloned().collect::<Vec<_>>().join(" ");
+    if query.trim().is_empty() {
+        bail!("usage: fleetc ticket search <query> [--full]   (Jira: the query is JQL)");
+    }
+    let (code, body) = wire::post_json(&socket(), "/ticket-search", &wire::TicketSearchCmd { query })?;
+    if code != 200 {
+        bail!("fleetd ({code}): {body}");
+    }
+    let found: Vec<serde_json::Value> = serde_json::from_str(&body)?;
+    for d in &found {
+        if full {
+            println!("{}", render_ticket(d));
+        } else {
+            let s = |v: &serde_json::Value| v.as_str().unwrap_or("").to_string();
+            let t = &d["ticket"];
+            println!("{}\t{}\t{}\t{}", s(&t["key"]), s(&t["status"]), s(&d["kind"]), s(&t["title"]));
+        }
+    }
+    eprintln!("{} found", found.len());
     Ok(())
 }
 
@@ -1534,12 +1563,21 @@ fn render_ticket(d: &serde_json::Value) -> String {
     if let Some(a) = t["assignee"].as_str() {
         facts.push(format!("assignee {a}"));
     }
+    if let Some(p) = d["points"].as_u64() {
+        facts.push(format!("{p} point{}", if p == 1 { "" } else { "s" }));
+    }
     let mut links = Vec::new();
     if let Some(c) = t["convoy"].as_str() {
         links.push(format!("convoy {c}"));
     }
     let keys = |v: &serde_json::Value| v.as_array().into_iter().flatten().map(s).collect::<Vec<_>>().join(", ");
-    for (what, keys) in [("blocked by", keys(&t["blocked_by"])), ("relates to", keys(&d["related"]))] {
+    for (what, keys) in [
+        ("blocked by", keys(&t["blocked_by"])),
+        ("relates to", keys(&d["related"])),
+        ("duplicates", keys(&d["duplicates"])),
+        ("components", keys(&d["components"])),
+        ("labels", keys(&t["labels"])),
+    ] {
         if !keys.is_empty() {
             links.push(format!("{what} {keys}"));
         }
@@ -1569,10 +1607,10 @@ fn ticket_new(args: &[String]) -> Result<()> {
 }
 
 /// The ticket-draft flags `ticket new` and `propose` share: `--title`, `--type`, `--convoy`,
-/// `--blocked-by`…, `--body <text>|-` (`-` reads stdin).
+/// `--blocked-by`…, `--label`…, `--component`…, `--points <N>`, `--body <text>|-` (`-` reads stdin).
 fn draft_flags(args: &[String], verb: &str) -> Result<wire::TicketNewCmd> {
-    let (mut title, mut kind, mut convoy, mut body) = (None, None, None, String::new());
-    let mut blocked_by = Vec::new();
+    let (mut title, mut kind, mut convoy, mut body, mut points) = (None, None, None, String::new(), None);
+    let (mut blocked_by, mut labels, mut components) = (Vec::new(), Vec::new(), Vec::new());
     let mut it = args.iter();
     while let Some(flag) = it.next() {
         let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
@@ -1581,11 +1619,17 @@ fn draft_flags(args: &[String], verb: &str) -> Result<wire::TicketNewCmd> {
             "--type" => kind = Some(take()?),
             "--convoy" => convoy = Some(convoy_key(&take()?, verb)?),
             "--blocked-by" => blocked_by.push(ticket_key(&take()?, verb)?),
+            "--label" => labels.push(take()?),
+            "--component" => components.push(take()?),
+            "--points" => points = Some(points_value(&take()?)?),
             "--body" => body = take()?,
             other => bail!("unknown flag: {other}"),
         }
     }
     Ok(wire::TicketNewCmd {
+        labels,
+        components,
+        points,
         title: title.ok_or_else(|| anyhow!("--title required"))?,
         kind: kind.ok_or_else(|| anyhow!("--type required (story, bug, task, epic, …)"))?,
         description: body_text(body)?,
@@ -1709,28 +1753,45 @@ fn render_proposal(p: &domain::Proposal) -> String {
 /// fleetd comments the diff on the ticket.
 fn ticket_text(sub: &str, args: &[String]) -> Result<()> {
     let verb = format!("ticket {sub}");
-    let usage = format!("usage: fleetc ticket {sub} [<KEY-N>] --body <text|-> [--why <text>] [--case <N>]");
+    let usage = match sub {
+        "edit" => "usage: fleetc ticket edit [<KEY-N>] [--body <text|->] [--title <t>] [--component <c>]… [--label <l>]… [--points <N>] [--why <text>] [--case <N>]".to_string(),
+        _ => format!("usage: fleetc ticket {sub} [<KEY-N>] --body <text|->"),
+    };
     let (key, flags) = match args.split_first() {
         Some((k, rest)) if !k.starts_with('-') => (ticket_key(k, &verb)?, rest),
         _ => (ticket_or_own(&[], &verb)?, args),
     };
     let (mut body, mut why, mut case) = (None, None, None);
+    let mut fields = wire::TicketFieldsCmd { ticket: key.clone(), title: None, components: None, labels: vec![], points: None, captain: captain_convoy() };
     let mut it = flags.iter();
     while let Some(flag) = it.next() {
         let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
-        match flag.as_str() {
-            "--body" => body = Some(body_text(take()?)?),
-            "--why" => why = Some(take()?),
-            "--case" => case = Some(take()?.trim_start_matches('#').parse::<i64>().map_err(|_| anyhow!("--case takes a case number"))?),
+        match (sub, flag.as_str()) {
+            (_, "--body") => body = Some(body_text(take()?)?),
+            ("edit", "--why") => why = Some(take()?),
+            ("edit", "--case") => case = Some(take()?.trim_start_matches('#').parse::<i64>().map_err(|_| anyhow!("--case takes a case number"))?),
+            ("edit", "--title") => fields.title = Some(take()?),
+            ("edit", "--component") => fields.components.get_or_insert_with(Vec::new).push(take()?),
+            ("edit", "--label") => fields.labels.push(take()?),
+            ("edit", "--points") => fields.points = Some(points_value(&take()?)?),
             _ => bail!("{usage}"),
         }
     }
-    let body = body.ok_or_else(|| anyhow!("{usage}"))?;
-    let captain = captain_convoy();
-    if sub == "edit" && captain.is_some() && why.is_none() {
-        bail!("a captain's edit says why it keeps the ticket's behaviour and spirit (--why), and names its case (--case)");
+    let has_fields = fields.title.is_some() || fields.components.is_some() || !fields.labels.is_empty() || fields.points.is_some();
+    if body.is_none() && !has_fields {
+        bail!("{usage}");
     }
-    submit(&format!("/ticket-{sub}"), &wire::TicketTextCmd { ticket: key, body, captain, why, case })
+    let captain = captain_convoy();
+    if let Some(body) = body {
+        if sub == "edit" && captain.is_some() && why.is_none() {
+            bail!("a captain's edit says why it keeps the ticket's behaviour and spirit (--why), and names its case (--case)");
+        }
+        submit(&format!("/ticket-{sub}"), &wire::TicketTextCmd { ticket: key, body, captain, why, case })?;
+    }
+    if has_fields {
+        submit("/ticket-fields", &fields)?;
+    }
+    Ok(())
 }
 
 /// The convoy of the captain running fleetc (`FLEET_CONVOY`, no ticket of its own); `None` otherwise.
@@ -1749,6 +1810,7 @@ fn ticket_link(sub: &str, args: &[String]) -> Result<()> {
     let verb = format!("ticket {sub}");
     let (link, flag) = match sub {
         "block" | "unblock" => ("blocked-by", "--by"),
+        "duplicate" | "unduplicate" => ("duplicates", "--of"),
         _ => ("relates", "--to"),
     };
     let (ticket, other) = match args {
@@ -1768,6 +1830,11 @@ fn ticket_epic(args: &[String]) -> Result<()> {
     }
     let [key, epic] = args else { bail!("usage: fleetc ticket epic <KEY-N> <EPIC>") };
     submit("/ticket-epic", &wire::TicketEpicCmd { ticket: ticket_key(key, "ticket epic")?, epic: epic.clone() })
+}
+
+/// A `--points` value: a whole number of story points.
+fn points_value(v: &str) -> Result<u32> {
+    v.parse().map_err(|_| anyhow!("--points takes a whole number, got {v:?}"))
 }
 
 /// A `--body` value: as given, or stdin's whole text for `-`.
@@ -1961,6 +2028,8 @@ mod tests {
             convoy: Some(domain::ConvoyKey("PROJ-9".into())),
             blocked_by: vec![],
             labels: vec![],
+            components: vec![],
+            points: None,
         }));
         let existing = proposal(4, domain::Proposed::Existing {
             ticket: domain::TicketKey("PROJ-7".into()),
@@ -2104,6 +2173,14 @@ mod tests {
         let mut related = d.clone();
         related["related"] = serde_json::json!(["ARMT-7", "ARMT-8"]);
         assert!(render_ticket(&related).contains("convoy ARMT-1 · blocked by ARMT-3 · relates to ARMT-7, ARMT-8\n"));
+        let mut fields = d.clone();
+        fields["points"] = serde_json::json!(3);
+        fields["components"] = serde_json::json!(["docs"]);
+        fields["ticket"]["labels"] = serde_json::json!(["math"]);
+        fields["duplicates"] = serde_json::json!(["ARMT-2"]);
+        let text = render_ticket(&fields);
+        assert!(text.starts_with("ARMT-4 · story · todo · 3 points\n"), "{text}");
+        assert!(text.contains("blocked by ARMT-3 · duplicates ARMT-2 · components docs · labels math\n"), "{text}");
     }
     use domain::{EntityKind, Event, EventKind, Seq};
 
