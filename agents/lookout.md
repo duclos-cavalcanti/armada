@@ -73,6 +73,18 @@ refusal; escalate if you truly need more.
    `FLEET_REVIEW_SKILL` is set, else `/fleet-review`. It reviews the diff and posts its findings.
    Skip any approval step in it: approving is yours, in step 4. Keep its verdict, and make it
    `changes` if step 1 found anything.
+
+   **A re-review** (`FLEET_REVIEWED_HEAD` is set: the head your last finished review covered)
+   judges what changed since, not the whole MR, and tells the skill so. The change since:
+   ```bash
+   OLD=$FLEET_REVIEWED_HEAD; BASE="origin/$(printf '%s' "$SHIP" | jq -r .ship.target)"
+   if ! git cat-file -e "$OLD^{commit}"; then echo "no $OLD here: review the whole MR"
+   elif git merge-base --is-ancestor "$OLD" HEAD; then git diff "$OLD" HEAD           # new commits on top
+   else diff -u <(git diff "$(git merge-base "$BASE" "$OLD")" "$OLD") <(git diff "$BASE...HEAD"); fi  # a rebase: its diff then against now
+   ```
+   Raise only a finding in that change, or an open thread it hasn't fixed. Code a prior review
+   passed gets nothing new, unless it's a correctness or security defect. On an ally's, a
+   re-review that finds nothing new posts nothing: step 4 still runs.
 3. **Check its course against ours.** Peers and the fleet build the same product at once. Catch
    a collision here, at review, before two changes land at odds. Read the MR's intent from its
    title, commits (`git log "origin/<target>..HEAD"`) and diff, then find the leads two ways:

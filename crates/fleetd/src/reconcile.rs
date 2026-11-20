@@ -1408,8 +1408,9 @@ fn launch_sailor<H: SessionHost, F: Forge + ?Sized>(
 /// LaunchLookout — review ONE ship, picked by reconcile. Fresh-poll it, berth a review worktree at its
 /// head (`review/<iid>`, detached, beside the checkout, its target fetched), mark it
 /// `reviewed = head_sha` (the head this review covers), then launch a lookout there with the MR's iid
-/// in `FLEET_SHIP`, the project's review skill, if it names one, in `FLEET_REVIEW_SKILL`, and its
-/// command guard as `--settings`. Ours or an ally's alike: the lookout reads exactly the commit under
+/// in `FLEET_SHIP`, the project's review skill, if it names one, in `FLEET_REVIEW_SKILL`, the head
+/// the last finished review covered, on a re-review, in `FLEET_REVIEWED_HEAD`, and its command guard
+/// as `--settings`. Ours or an ally's alike: the lookout reads exactly the commit under
 /// review, in a tree no cog owns, with the review skill and doctrine of that head. Named for the MR's
 /// ticket when it carries one, else its iid. A tmux
 /// session of that name already up (another MR on the same ticket) waits its turn; a lookout already
@@ -1438,6 +1439,8 @@ fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
 
     let snap = fresh_snapshot(ledger, forge, &ship)?;
     let berth = crate::git::GitWorktrees::new(project).cut_review(iid, &forge.fetch_ref(iid), &ship.target, &snap.head_sha)?;
+    // The head the last finished review covered: this one is a re-review of what changed since.
+    let since = ship.reviewed.filter(|h| *h != snap.head_sha && h.chars().all(|c| c.is_ascii_hexdigit()));
     ShipRepo::set_reviewed(ledger, &ship.id, Some(&snap.head_sha))?;
     let cwd = berth.as_str();
 
@@ -1464,7 +1467,10 @@ fn launch_lookout<H: SessionHost, F: Forge + ?Sized>(
 
     // fleet.toml's skill name is the operator's, but it rides a shell line: keep it to a plain name.
     let skill = review_skill.filter(|s| s.chars().all(|c| c.is_ascii_alphanumeric() || "-_:".contains(c)));
-    let env = skill.map(|s| format!("FLEET_REVIEW_SKILL={s} ")).unwrap_or_default();
+    let mut env = skill.map(|s| format!("FLEET_REVIEW_SKILL={s} ")).unwrap_or_default();
+    if let Some(h) = &since {
+        env.push_str(&format!("FLEET_REVIEWED_HEAD={h} "));
+    }
     // Its command guard rides in as `--settings`, on this launch only: no global config changes.
     let guard = crate::health::lookout_settings().replace('\'', r"'\''");
     let cmd = format!("{provider_env}{env}FLEET_SHIP={iid} {} --settings '{guard}'", launch_cmd("lookout", Launch::Fresh(&hid)));
@@ -3224,10 +3230,12 @@ mod tests {
         assert!(cmd.starts_with("FLEET_REVIEW_SKILL=mr-review FLEET_SHIP=7 claude "), "{cmd}");
 
         *forge.snapshot.borrow_mut() = Some(forge_ship(77, &sha));
+        let ally = db.armada().unwrap().into_iter().find(|s| s.iid == 77).unwrap();
+        db.set_reviewed(&ally.id, Some("abc123")).unwrap(); // a review finished at an older head
         launch_lookout(&db, &forge, &host, &project, 77, Some("x; rm -rf /"), "").unwrap();
         let (_, cwd, cmd) = host.spawned.borrow()[1].clone();
         assert_eq!(Path::new(&cwd), dir.join("review/77"), "an ally's: berthed, not in the checkout");
-        assert!(cmd.starts_with("FLEET_SHIP=77 "), "no plain name: it never reaches the shell: {cmd}");
+        assert!(cmd.starts_with("FLEET_REVIEWED_HEAD=abc123 FLEET_SHIP=77 "), "no plain skill name: it never reaches the shell; a re-review knows what it last covered: {cmd}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
