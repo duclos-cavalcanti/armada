@@ -392,6 +392,9 @@ mod tests {
         fn search(&self, _: &str) -> Result<Vec<domain::TicketDetail>> {
             Ok(vec![])
         }
+        fn sprint(&self, _: &TicketKey, _: bool) -> Result<()> {
+            Ok(())
+        }
         fn label(&self, _: &TicketKey, _: &str, _: bool) -> Result<()> {
             unimplemented!()
         }

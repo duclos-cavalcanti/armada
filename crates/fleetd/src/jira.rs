@@ -223,12 +223,11 @@ impl Tracker for JiraTracker {
     /// UNVERIFIED against a live Jira: the To Do move (the workflow must allow it from where the
     /// ticket stands) and the Agile backlog call.
     fn unclaim(&self, key: &TicketKey) -> Result<()> {
-        let to_backlog = serde_json::json!({ "issues": [key.0] });
         let failed: Vec<String> = [
             ("todo", self.transition(key, TicketStatus::Todo)),
             ("unassign", self.put_issue(key, &serde_json::json!({ "fields": { "assignee": null } }))),
             ("label", self.claim_label.as_ref().map_or(Ok(()), |l| self.label(key, l, false))),
-            ("backlog", self.rest("POST", "/rest/agile/1.0/backlog/issue", Some(&to_backlog))),
+            ("backlog", self.sprint(key, false)),
         ]
         .into_iter()
         .filter_map(|(step, res)| res.err().map(|e| format!("{step}: {e:#}")))
@@ -328,6 +327,13 @@ impl Tracker for JiraTracker {
             if issues.len() < 100 {
                 return Ok(found);
             }
+        }
+    }
+
+    fn sprint(&self, key: &TicketKey, active: bool) -> Result<()> {
+        match active {
+            true => self.add_to_active_sprint(key),
+            false => self.rest("POST", "/rest/agile/1.0/backlog/issue", Some(&serde_json::json!({ "issues": [key.0] }))),
         }
     }
 

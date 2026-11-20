@@ -371,6 +371,11 @@ impl Tracker for FsTracker {
         }
     }
 
+    /// The folder has no sprints: every ticket is on the board.
+    fn sprint(&self, _: &TicketKey, _: bool) -> Result<()> {
+        Ok(())
+    }
+
     fn set_epic(&self, key: &TicketKey, epic: &ConvoyKey) -> Result<()> {
         self.load(&TicketKey(epic.0.clone()))?; // an epic that isn't there is refused, as Jira refuses it
         self.update(key, |h| h.convoy = Some(epic.0.clone()))

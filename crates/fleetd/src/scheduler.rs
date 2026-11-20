@@ -102,6 +102,7 @@ pub enum Command {
     SearchTickets { query: String, reply: TicketsReply }, // a read: the tickets a query matches (tracker)
     CommentTicket { ticket: TicketKey, body: String, reply: Reply }, // an action: comment on it (tracker)
     SetEpic { ticket: TicketKey, epic: ConvoyKey, reply: Reply }, // an action: move it under an epic (tracker, + ledger)
+    SprintTicket { ticket: TicketKey, active: bool, reply: Reply }, // an action: into the active sprint, or to the backlog (tracker)
     Propose { from: Option<TicketKey>, proposed: Proposed, reply: UrlReply }, // hold a cog's proposal → its id
     AcceptProposal { id: ProposalId, convoy: Option<ConvoyKey>, reply: UrlReply }, // an action: accept it → its key (a new one is filed)
     DropProposal { id: ProposalId, reply: UrlReply },
@@ -457,6 +458,9 @@ fn apply(ledger: &Ledger, tracker: &dyn Tracker, host: &TmuxHost, forge: &dyn Fo
         }
         Command::CommentTicket { ticket, body, reply } => {
             let _ = reply.send(tracker.comment(&ticket, &body).map_err(|e| format!("{e:#}")));
+        }
+        Command::SprintTicket { ticket, active, reply } => {
+            let _ = reply.send(tracker.sprint(&ticket, active).map_err(|e| format!("{e:#}")));
         }
         Command::SetEpic { ticket, epic, reply } => {
             let _ = reply.send(set_epic(ledger, tracker, &ticket, &epic).map_err(|e| format!("{e:#}")));
@@ -1749,6 +1753,9 @@ mod tests {
         }
         fn search(&self, _: &str) -> Result<Vec<domain::TicketDetail>> {
             Ok(vec![])
+        }
+        fn sprint(&self, _: &TicketKey, _: bool) -> Result<()> {
+            Ok(())
         }
         fn label(&self, key: &TicketKey, label: &str, on: bool) -> Result<()> {
             let mut labels = self.labels.borrow_mut();

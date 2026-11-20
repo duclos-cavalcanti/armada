@@ -70,6 +70,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc ticket   relate|unrelate <KEY-N> --to <KEY-N>   (add or remove a 'relates to' link, both ways; the fleet never acts on it)\n  \
      fleetc ticket   duplicate|unduplicate <KEY-N> --of <KEY-N>   (mark the first a duplicate of the second, or stop)\n  \
      fleetc ticket   epic <KEY-N> <EPIC>   (move the ticket under an epic in the tracker; its convoy is `convoy add`'s; never a cog)\n  \
+     fleetc ticket   sprint|backlog <KEY-N>   (move the ticket into the active sprint, or back to the backlog; never a cog)\n  \
      fleetc ticket   edit [<KEY-N>] [--body <text|->] [--title <t>] [--component <c>]… [--label <l>]… [--points <N>] [--why <text>] [--case <N>]   (--body replaces the description, whole: read it first; --component replaces the set, --label adds; a captain: its convoy's tickets, with why)\n  \
      fleetc ticket   comment [<KEY-N>] --body <text|->   (comment on the ticket)\n  \
      fleetc propose  --title <t> --type <type> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--body <text>|-]   (a cog: file a new ticket labelled fleet-proposed; prints its id + key)\n  \
@@ -1490,6 +1491,7 @@ fn ticket(args: &[String]) -> Result<()> {
         Some(sub @ ("block" | "unblock" | "relate" | "unrelate" | "duplicate" | "unduplicate")) => ticket_link(sub, &args[1..]),
         Some("search") => ticket_search(&args[1..]),
         Some("epic") => ticket_epic(&args[1..]),
+        Some(sub @ ("sprint" | "backlog")) => ticket_sprint(sub, &args[1..]),
         Some(sub @ ("edit" | "comment")) => ticket_text(sub, &args[1..]),
         Some(key) if !key.starts_with('-') => match args.get(1).map(String::as_str) {
             Some("--where") => ticket_where(&ticket_key(key, "ticket")?),
@@ -1499,7 +1501,7 @@ fn ticket(args: &[String]) -> Result<()> {
             let key = ticket_or_own(&[], "ticket")?;
             if args.is_empty() { ticket_show(&key) } else { ticket_where(&key) }
         }
-        _ => bail!("usage: fleetc ticket [<KEY-N>] | new --title <t> --type <type> … | search <query> [--full] | block|unblock <KEY-N> --by <KEY-N> | relate|unrelate <KEY-N> --to <KEY-N> | duplicate|unduplicate <KEY-N> --of <KEY-N> | epic <KEY-N> <EPIC> | edit [<KEY-N>] [--body <text|->] [--title|--component|--label|--points …] | comment [<KEY-N>] --body <text|->"),
+        _ => bail!("usage: fleetc ticket [<KEY-N>] | new --title <t> --type <type> … | search <query> [--full] | block|unblock <KEY-N> --by <KEY-N> | relate|unrelate <KEY-N> --to <KEY-N> | duplicate|unduplicate <KEY-N> --of <KEY-N> | epic <KEY-N> <EPIC> | sprint|backlog <KEY-N> | edit [<KEY-N>] [--body <text|->] [--title|--component|--label|--points …] | comment [<KEY-N>] --body <text|->"),
     }
 }
 
@@ -1819,6 +1821,16 @@ fn ticket_link(sub: &str, args: &[String]) -> Result<()> {
     };
     let on = !sub.starts_with("un");
     submit("/ticket-link", &wire::TicketLinkCmd { ticket, other, link: link.into(), on, captain: captain_convoy() })
+}
+
+/// `fleetc ticket sprint <KEY-N>` — move the ticket into the active sprint; `backlog <KEY-N>` — back
+/// to the backlog. The operator's, the shipwright's or the admiral's: never a cog's.
+fn ticket_sprint(sub: &str, args: &[String]) -> Result<()> {
+    if in_cog() {
+        bail!("a cog doesn't move tickets between sprints — propose it for the operator");
+    }
+    let [key] = args else { bail!("usage: fleetc ticket {sub} <KEY-N>") };
+    submit("/ticket-sprint", &wire::TicketSprintCmd { ticket: ticket_key(key, &format!("ticket {sub}"))?, active: sub == "sprint" })
 }
 
 /// `fleetc ticket epic <KEY-N> <EPIC>` — move the ticket under the epic in the tracker. Its convoy

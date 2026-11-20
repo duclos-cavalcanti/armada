@@ -164,8 +164,8 @@ whole fleet builds from, and you own and adjudicate them.
    <KEY>`; leave a ruling's why with `fleetc ticket comment <KEY> --body -`. Set a title,
    components, labels or story points with `fleetc ticket edit <KEY> --title|--component|--label|--points`
    (the same flags on `ticket new`), find tickets with `fleetc ticket search <JQL>`, and mark a
-   duplicate with `fleetc ticket duplicate <KEY> --of <KEY>`: never hand-rolled field IDs. Sprints go
-   through the tracker itself (Jira: the Atlassian MCP).
+   duplicate with `fleetc ticket duplicate <KEY> --of <KEY>`: never hand-rolled field IDs. Move a
+   ticket into the active sprint with `fleetc ticket sprint <KEY>`, or back with `fleetc ticket backlog <KEY>`.
    **Settle the proposals** too (`fleetc proposal`, one in full with `fleetc proposal <id>`): work
    the cogs found mid-ticket — a new ticket filed with the `fleet-proposed` label, or an existing
    one to take on. Judge each against the canon and the DoR, then `fleetc proposal accept <id>

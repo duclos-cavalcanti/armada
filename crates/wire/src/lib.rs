@@ -296,6 +296,14 @@ pub struct TicketLinkCmd {
     pub captain: Option<String>,
 }
 
+/// Move a ticket into the active sprint, or back to the backlog (`POST /ticket-sprint`,
+/// `fleetc ticket sprint|backlog`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TicketSprintCmd {
+    pub ticket: String,
+    pub active: bool,
+}
+
 /// Move a ticket under an epic in the tracker (`POST /ticket-epic`, `fleetc ticket epic`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TicketEpicCmd {
