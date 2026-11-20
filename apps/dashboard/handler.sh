@@ -53,13 +53,14 @@ launch_admiral() {
 # `admiral-<KEY>` sessions, so this window never blocks an escalation's admiral. One already open on
 # <key> is switched to instead.
 convene() {
-    local key="$1" prompt="$2" dir="${3:-}" checkout cmd
+    local key="$1" prompt="$2" dir="${3:-}" checkout env cmd
     if tmux select-window -t ":=$key" 2>/dev/null; then
         echo "an admiral is already on $key: switched to its window"
         return
     fi
     checkout="$(fleet project)" || fail "fleetd unreachable: no checkout to open the admiral in"
-    cmd="claude --agent admiral"
+    env="$(fleet settings env admiral)" || fail "fleetd unreachable: no launch env for the admiral"
+    cmd="${env}claude --agent admiral"
     [ -z "$dir" ] || [ ! -d "$dir" ] || cmd+=" --add-dir $(printf %q "$dir")"
     tmux new-window -n "$key" -c "$checkout" "$cmd -- $(printf %q "$prompt")" # `--`: --add-dir takes a list
     echo "convened an admiral on $key (window $key)"

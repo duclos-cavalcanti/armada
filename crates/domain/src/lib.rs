@@ -959,6 +959,8 @@ impl Verdict {
 }
 
 impl CrewKind {
+    pub const ALL: [CrewKind; 6] =
+        [CrewKind::Worker, CrewKind::Sailor, CrewKind::Hand, CrewKind::Captain, CrewKind::Lookout, CrewKind::Admiral];
     pub fn as_str(&self) -> &'static str {
         match self {
             CrewKind::Worker => "worker",

@@ -171,8 +171,7 @@ pub struct LeverView {
 /// (fleet.toml/default). Then each cog kind's provider, as fleetd loaded it (`provider.<kind>`):
 /// read-only, a restart's to change, its env never shown.
 pub fn report(cfg: &Config, l: &Ledger) -> Vec<LeverView> {
-    use domain::CrewKind::*;
-    let providers = [Worker, Sailor, Hand, Captain, Lookout, Admiral].map(|k| LeverView {
+    let providers = domain::CrewKind::ALL.map(|k| LeverView {
         key: format!("provider.{}", k.as_str()),
         value: cfg.provider_of(k.as_str()).to_string(),
         source: "config",

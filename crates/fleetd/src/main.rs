@@ -207,6 +207,7 @@ fn boot(project: &wire::Project, cfg: config::Config) -> Result<()> {
         project: cfg.project.path.clone(),
         default_branch: git::GitWorktrees::new(&cfg.project.path).default_branch()?, // preflight checked it
         stacks: forge.stacks(),
+        provider_env: domain::CrewKind::ALL.iter().map(|k| (k.as_str().to_string(), cfg.provider_env(k.as_str()))).collect(),
     };
     let sched_snapshot = snapshot.clone();
     let pulse = scheduler::Pulse::default();

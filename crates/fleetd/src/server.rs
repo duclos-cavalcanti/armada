@@ -16,7 +16,8 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
 
 /// The deployment facts fixed at startup, answered without touching the writer: the project
-/// checkout (`GET /project`) and the defaults a dispatch that omits them inherits.
+/// checkout (`GET /project`), each cog kind's launch env (`GET /settings-env?kind=`), and the
+/// defaults a dispatch that omits them inherits.
 pub struct Deployment {
     /// The resolved `[project] path`.
     pub project: String,
@@ -24,6 +25,8 @@ pub struct Deployment {
     pub default_branch: String,
     /// The forge can stack MRs (`Forge::stacks`). Without it a dispatch must fork the default branch.
     pub stacks: bool,
+    /// Each cog kind's provider env prefix (`Config::provider_env`), by kind: what fleetd launches it with.
+    pub provider_env: std::collections::BTreeMap<String, String>,
 }
 
 /// Refuse to start when another fleetd already answers on `path` — one writer per ledger. A socket
@@ -80,6 +83,10 @@ fn handle(
         }
         (Some("GET"), Some("/health")) => http_response("200 OK", "text/plain", "ok"),
         (Some("GET"), Some("/project")) => http_response("200 OK", "text/plain", &deployment.project),
+        (Some("GET"), Some(p)) if p.starts_with("/settings-env?kind=") => match deployment.provider_env.get(&p["/settings-env?kind=".len()..]) {
+            Some(env) => http_response("200 OK", "text/plain", env),
+            None => http_response("400 Bad Request", "text/plain", "unknown cog kind"),
+        },
         (Some("POST"), Some("/status")) => handle_status(&request, cmds),
         (Some("POST"), Some("/dispatch")) => handle_dispatch(&request, cmds, deployment),
         (Some("POST"), Some("/hand")) => handle_hand(&request, cmds),
@@ -130,9 +137,9 @@ fn handle(
 
 /// The `503` for a request that needs the scheduler while one step has held its loop `after` or
 /// more (`STALLED`): refused, never queued, so it can't run late behind the stall (or twice, on a retry).
-/// The two answers that never touch the scheduler (`/context`, `/project`) still serve.
+/// The answers that never touch the scheduler (`/context`, `/project`, `/settings-env`) still serve.
 fn busy(path: Option<&str>, pulse: &Pulse, after: std::time::Duration) -> Option<String> {
-    if matches!(path, Some("/context" | "/project")) {
+    if matches!(path, Some("/context" | "/project")) || path.is_some_and(|p| p.starts_with("/settings-env?")) {
         return None;
     }
     let (step, held) = pulse.stalled(after)?;
@@ -1113,6 +1120,7 @@ mod tests {
         let refused = busy(Some("/dispatch"), &pulse, now).unwrap();
         assert!(refused.starts_with("HTTP/1.1 503") && refused.contains("its health check has held the loop"), "{refused}");
         assert!(busy(Some("/project"), &pulse, now).is_none() && busy(Some("/context"), &pulse, now).is_none());
+        assert!(busy(Some("/settings-env?kind=admiral"), &pulse, now).is_none());
         assert!(busy(Some("/dispatch"), &pulse, STALLED).is_none(), "not held long enough yet");
         pulse.off();
         assert!(busy(Some("/dispatch"), &pulse, now).is_none());
@@ -1140,8 +1148,9 @@ mod tests {
         let sock = format!("/tmp/fleetd-test-{}-{tag}.sock", std::process::id());
         let (sock2, stacks) = (sock.clone(), tag != "nostack");
         std::thread::spawn(move || {
+            let provider_env = [("admiral".to_string(), "AWS_REGION=us-west-2 CLAUDE_CODE_USE_BEDROCK=1 ".to_string())].into();
             let deployment =
-                Deployment { project: "/wt/project".into(), default_branch: "origin/main".into(), stacks };
+                Deployment { project: "/wt/project".into(), default_branch: "origin/main".into(), stacks, provider_env };
             let _ = serve(&sock2, snapshot, cmds, deployment, Pulse::default());
         });
         for _ in 0..100 {
@@ -1187,6 +1196,12 @@ mod tests {
         // the project checkout path, served from startup config (no writer round-trip)
         let proj = roundtrip(&sock, b"GET /project HTTP/1.1\r\n\r\n");
         assert!(proj.contains("200 OK") && proj.ends_with("\r\n\r\n/wt/project"), "resp: {proj}");
+
+        // a cog kind's launch env, served from startup config too
+        let env = roundtrip(&sock, b"GET /settings-env?kind=admiral HTTP/1.1\r\n\r\n");
+        assert!(env.ends_with("\r\n\r\nAWS_REGION=us-west-2 CLAUDE_CODE_USE_BEDROCK=1 "), "resp: {env}");
+        let bad = roundtrip(&sock, b"GET /settings-env?kind=pirate HTTP/1.1\r\n\r\n");
+        assert!(bad.contains("400 Bad Request"), "resp: {bad}");
         assert!(resp.trim_end().ends_with("[]"));
 
         let resp = roundtrip(&sock, b"GET /nope HTTP/1.1\r\n\r\n");

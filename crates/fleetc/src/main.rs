@@ -74,7 +74,7 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc propose  --existing <KEY-N> --why <text> [--convoy <KEY>]   (a cog: propose taking on an existing ticket)\n  \
      fleetc proposal [<id> | accept <id> [--convoy <KEY>] | drop <id>]   (the open proposals; one in full; accept — official, into --convoy; drop — a proposed ticket is cancelled)\n  \
      fleetc launch   --title <t> --body <text> [--ticket <KEY-N>] [--target <branch>] [--draft] [--worktree <path>]   (open the MR for the worktree's branch; prints its URL)\n  \
-     fleetc settings [list | set <key> <value>]   (live config levers, no restart; and each cog's provider, read-only)\n  \
+     fleetc settings [list | set <key> <value> | env <kind>]   (live config levers, no restart; each cog's provider, read-only; env: the env a cog kind launches with)\n  \
      fleetc project                   (the project checkout's path, from fleet.toml)\n  \
      fleetc cost     [--since <RFC3339>]\n  \
      fleetc ledger   [<sql> | --full]  (read the project's ledger: one query as a table, every table, or a sqlite3 shell; read-only)\n  \
@@ -1805,10 +1805,11 @@ fn require_iid(args: &[String], verb: &str) -> Result<i64> {
     iid_or_own(iid, verb)
 }
 
-/// `fleetc settings [list | set <key> <value>]` — read or overwrite the live config levers (the
-/// fleet.toml overridable subset). `list` (the default) shows each lever's effective value + source;
-/// `set` overwrites one lever and fleetd picks it up next tick (no restart). The key + type are
-/// validated server-side before the value is absorbed.
+/// `fleetc settings [list | set <key> <value> | env <kind>]` — read or overwrite the live config
+/// levers (the fleet.toml overridable subset). `list` (the default) shows each lever's effective
+/// value + source; `set` overwrites one lever and fleetd picks it up next tick (no restart). Its key
+/// and type are validated server-side before the value is absorbed. `env` prints the `KEY=VAL ` prefix
+/// fleetd launches a cog kind with (its provider's env, values included), to launch one by hand.
 fn settings(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
         Some("list") | None => settings_list(),
@@ -1817,7 +1818,15 @@ fn settings(args: &[String]) -> Result<()> {
             let value = args.get(2).cloned().ok_or_else(|| anyhow!("settings set {key} needs a <value>"))?;
             submit("/settings", &wire::SettingCmd { key, value })
         }
-        Some(other) => bail!("usage: fleetc settings [list | set <key> <value>]  (got {other:?})"),
+        Some("env") => {
+            let kind = args.get(1).ok_or_else(|| anyhow!("settings env needs a cog kind"))?;
+            let kind = CrewKind::parse(kind).ok_or_else(|| anyhow!("settings env: invalid cog kind {kind:?}"))?;
+            let (code, body) = wire::get_json(&socket(), &format!("/settings-env?kind={}", kind.as_str()))?;
+            anyhow::ensure!(code == 200, "fleetd ({code}): {body}");
+            println!("{body}");
+            Ok(())
+        }
+        Some(other) => bail!("usage: fleetc settings [list | set <key> <value> | env <kind>]  (got {other:?})"),
     }
 }
 

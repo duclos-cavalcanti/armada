@@ -20,7 +20,7 @@ Cycle with `Tab` / `S-Tab`:
   - **Convoys** — the open convoys: the captain's state and liveness (or off), how many tickets are still
     open, and of its critical path (`Path`: its goal and all it waits on; `—` with no goal);
     `enter` switches to the captain, `a` convenes an admiral to take a look at the convoy (in a
-    window of your session). On every other pane, a ticket on its convoy's critical path
+    window of your session, on the provider fleetd launches admirals with: `fleetc settings env admiral`). On every other pane, a ticket on its convoy's critical path
     is starred beside the convoy (`#2*`);
   - **Proposals** — what waits on you before it can enter the line: the open proposals (`enter`
     reads one, `a` accepts, `d` drops). `h`/`l` swaps in **Anchored**: tickets held before they were
