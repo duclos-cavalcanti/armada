@@ -303,11 +303,13 @@ impl Fleet {
                 captain_launched.insert(c.key.0.clone(), at);
             }
         }
-        // Held with no order and still open: a captain's not-Ready convoy ticket, or a recalled one,
-        // in a convoy or not. Each waits on the operator to weigh it.
+        // Held with no order, still open, in an open convoy: a captain's not-Ready ticket, or a
+        // recalled one. Each stalls its convoy until the operator weighs it; a hold outside a
+        // convoy stalls nothing (no captain dispatches it) and shows on the Board alone.
         let held = board
             .iter()
             .filter(|t| t.held && !ordered.contains(&t.key))
+            .filter(|t| convoys.iter().any(|c| t.convoy.as_ref() == Some(&c.key)))
             .filter(|t| !matches!(t.status, Some(TicketStatus::Done) | Some(TicketStatus::Cancelled)))
             .cloned()
             .collect();

@@ -23,8 +23,8 @@ Cycle with `Tab` / `S-Tab`:
     window of your session, on the provider fleetd launches admirals with: `fleetc settings env admiral`). On every other pane, a ticket on its convoy's critical path
     is starred beside the convoy (`#2*`);
   - **Proposals** — what waits on you before it can enter the line: the open proposals (`enter`
-    reads one, `a` accepts, `d` drops). `h`/`l` swaps in **Anchored**: tickets held before they were
-    dispatched, a captain's not-Ready ones among them (`⚓ <reason>`; `t` opens one; fix it, then `w`
+    reads one, `a` accepts, `d` drops). `h`/`l` swaps in **Anchored**: open convoys' tickets held
+    before they were dispatched, a captain's not-Ready ones among them (`⚓ <reason>`; `t` opens one; fix it, then `w`
     weigh). An anchored ticket that has an order shows in Dispatch instead, `⚓` in its "Waiting on";
   - **Dispatch** — the workers' orders (auto-implemented), with their phase (waiting /
     implementation / merge) and what they wait on (anchored ⚓ / blocked ⛔); `h`/`l` swaps in the
