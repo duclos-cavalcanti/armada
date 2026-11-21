@@ -33,7 +33,8 @@ Cycle with `Tab` / `S-Tab`:
     MR + pipeline. A worker in **review** has put its MR up for a lookout and waits for its review;
   - **Merge** — our ships being landed: the sailor's state (dimmed once it's stood down), the
     admiral's on its escalation (`analyzing`, `escalated`: the ruling is yours, `ruled`; `e` switches
-    to it), pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status;
+    to it), pipeline, approvals, armed / on a merge train, open threads, what it's blocked on, merge status.
+    Here and in Implementation, `📝` beside a ticket: a reviewer requested changes on its MR;
   - an escalation reads by who holds it: **flagged** (no captain has looked), **triage** (a
     captain is inspecting it, or sent its way out), **escalated** (confirmed: yours), **ruled**
     (your ruling went to the cog, `fleetc ruling`; it clears when the cog moves on). `v` reads

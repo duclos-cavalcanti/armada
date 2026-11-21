@@ -333,7 +333,7 @@ fn builder_row(c: &CogRow, up: bool, ship: Option<&ShipRow>, convoy: (String, us
         None => ("—".into(), ("—".into(), dim())),
     };
     cells(vec![
-        (s.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_else(|| "—".into()), 12, Style::default()),
+        ticket_cell(s.ticket.as_ref(), ship.and_then(|r| r.snapshot.as_ref())),
         convoy,
         (s.kind.as_str().into(), 7, Style::default()),
         (state, 13, state_style),
@@ -378,7 +378,7 @@ fn landing_row(r: &LandingRow, up: bool, convoy: (String, usize, Style), admiral
         None => "—".into(),
     };
     cells(vec![
-        (r.ship.ticket.as_ref().map(|t| t.0.clone()).unwrap_or_default(), 12, Style::default()),
+        ticket_cell(r.ship.ticket.as_ref(), snap),
         convoy,
         (sailor, 15, sailor_style),
         // An admiral convened on its confirmed escalation: `e` switches to it.
@@ -541,6 +541,13 @@ fn convoy_style(no: Option<i64>) -> Style {
         Some(n) if n > 0 => Style::default().fg(Color::Indexed(HUES[(n as usize - 1) % HUES.len()])),
         _ => dim(),
     }
+}
+
+/// A ticket's key, `📝` beside it when a reviewer requested changes on its MR.
+fn ticket_cell(ticket: Option<&domain::TicketKey>, snap: Option<&ShipSnapshot>) -> (String, usize, Style) {
+    let key = ticket.map_or_else(|| "—".into(), |t| t.0.clone());
+    let changes = snap.is_some_and(|s| s.merge_status.as_deref() == Some("requested_changes"));
+    (if changes { format!("{key} 📝") } else { key }, 12, Style::default())
 }
 
 /// A ticket's convoy cell (`#N`), starred when the ticket is on its convoy's critical path.
@@ -762,7 +769,12 @@ fn cells(cols: Vec<(String, usize, Style)>) -> Line<'static> {
         .into_iter()
         .map(|(text, width, style)| match width {
             0 => Span::styled(text, style),
-            w => Span::styled(format!("{:<w$} ", short(&text, w)), style),
+            // Padded by display width, so a wide glyph (⚓, 📝) keeps the columns aligned.
+            w => {
+                let text = short(&text, w);
+                let pad = w.saturating_sub(Span::raw(text.as_str()).width());
+                Span::styled(format!("{text}{:pad$} ", ""), style)
+            }
         })
         .collect();
     Line::from(spans)
@@ -862,5 +874,17 @@ fn short(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         format!("{}…", s.chars().take(max.saturating_sub(1)).collect::<String>())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_wide_glyph_keeps_its_column() {
+        let width = |t: &str| cells(vec![(t.into(), 12, Style::default())]).width();
+        assert_eq!(width("ARMT-1 📝"), width("ARMT-1"));
+        assert_eq!(width("⚓ sleeping"), width("sleeping"));
     }
 }

@@ -417,7 +417,7 @@ fn actions_ids(link: &str) -> Option<(String, String)> {
 }
 
 /// `mergeStateStatus` → GitLab's `merge_status` vocabulary (what the sailor reads). BLOCKED is
-/// split by its cause: an owed review, else unfinished or failing checks.
+/// split by its cause: changes requested, an owed review, else unfinished or failing checks.
 fn merge_status(state: &str, decision: &str, pipeline: Option<PipelineStatus>) -> Option<String> {
     let word = match state {
         "CLEAN" | "HAS_HOOKS" => "mergeable",
@@ -425,7 +425,8 @@ fn merge_status(state: &str, decision: &str, pipeline: Option<PipelineStatus>) -
         "BEHIND" => "need_rebase",
         "DRAFT" => "draft_status",
         "UNSTABLE" => "ci_must_pass",
-        "BLOCKED" if matches!(decision, "REVIEW_REQUIRED" | "CHANGES_REQUESTED") => "not_approved",
+        "BLOCKED" if decision == "CHANGES_REQUESTED" => "requested_changes",
+        "BLOCKED" if decision == "REVIEW_REQUIRED" => "not_approved",
         "BLOCKED" if pipeline != Some(PipelineStatus::Success) => "ci_must_pass",
         "BLOCKED" => "blocked_status",
         "UNKNOWN" | "" => "checking",
@@ -525,6 +526,7 @@ mod tests {
         assert_eq!(merge_status("DIRTY", "", ok).as_deref(), Some("conflict"));
         assert_eq!(merge_status("BEHIND", "", ok).as_deref(), Some("need_rebase"));
         assert_eq!(merge_status("BLOCKED", "REVIEW_REQUIRED", ok).as_deref(), Some("not_approved"));
+        assert_eq!(merge_status("BLOCKED", "CHANGES_REQUESTED", ok).as_deref(), Some("requested_changes"));
         assert_eq!(merge_status("BLOCKED", "", Some(PipelineStatus::Running)).as_deref(), Some("ci_must_pass"));
         assert_eq!(merge_status("UNKNOWN", "", None).as_deref(), Some("checking"));
     }
