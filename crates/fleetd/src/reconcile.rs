@@ -440,12 +440,16 @@ pub fn plan(ledger: &Ledger, cogs: &[Cog], stacks: bool, levers: &Levers) -> Res
 }
 
 /// METER — at most `workers` workers and `sailors` sailors run at once (-1 = no cap). A launch of
-/// one (a spawn, a heal, a sailor's sweep) past its cap waits for a seat, by rank: first the
-/// `priority` convoys, in order — each its goal's path (in any convoy), then its other tickets —
+/// one (a spawn, a heal, a sailor's sweep) past its cap waits for a seat, by rank: first the tender's
+/// tickets, which also have `TENDER_SEATS` seats past the cap (a fleet-wide fix runs through); then
+/// the `priority` convoys, in order — each its goal's path (in any convoy), then its other tickets —
 /// then the rest, critical paths first, by convoy number. A seat is a live session whose tmux is
 /// up: a parked cog (its tmux gone) takes none, but one paused on a pipeline, a review or a blocker
 /// keeps its seat against any lower-ranked launch, for its wake. A hand is the operator's own and
 /// never waits.
+/// The seats past the worker and sailor caps that only the tender's tickets may take.
+const TENDER_SEATS: i64 = 2;
+
 fn meter(ledger: &Ledger, cogs: &[Cog], levers: &Levers, actions: Vec<Action>) -> Result<Vec<Action>> {
     let board = TicketRepo::board(ledger)?;
     let convoys = ConvoyRepo::active(ledger)?;
@@ -459,13 +463,16 @@ fn meter(ledger: &Ledger, cogs: &[Cog], levers: &Levers, actions: Vec<Action>) -
     let rank = |ticket: &TicketKey| {
         let t = board.iter().find(|t| &t.key == ticket);
         let own = t.and_then(|t| convoys.iter().find(|c| t.convoy.as_ref() == Some(&c.key)));
+        if own.is_some_and(|o| Some(&o.key) == levers.tender.as_ref()) {
+            return (0, false, 0);
+        }
         for (i, (c, path)) in listed.iter().enumerate() {
             let on_path = path.contains(ticket);
             if on_path || own.is_some_and(|o| o.key == c.key) {
-                return (i, !on_path, c.no);
+                return (i + 1, !on_path, c.no);
             }
         }
-        (listed.len(), !critical.contains(ticket), own.map_or(i64::MAX, |c| c.no))
+        (listed.len() + 1, !critical.contains(ticket), own.map_or(i64::MAX, |c| c.no))
     };
     let launches = |a: &Action, kind: CrewKind| match a {
         Action::Spawn { ticket, kind: k } | Action::Heal { ticket, kind: k } if k == kind.as_str() => Some(ticket.clone()),
@@ -490,6 +497,7 @@ fn meter(ledger: &Ledger, cogs: &[Cog], levers: &Levers, actions: Vec<Action>) -
         due.sort();
         for (r, i) in due {
             let held = paused.iter().filter(|p| **p < r).count();
+            let cap = if r.0 == 0 && cap >= 0 { cap + TENDER_SEATS } else { cap };
             if room(cap, seated + held) > 0 {
                 seated += 1;
             } else {
@@ -776,6 +784,8 @@ pub struct Levers {
     pub sailors: i64,
     /// The convoys, by number, whose work `meter` seats first.
     pub priority: Vec<i64>,
+    /// The tender (fleet.toml), whose tickets `meter` seats ahead of everything.
+    pub tender: Option<ConvoyKey>,
     pub review_rounds: u64,
     pub trial_rounds: u64,
     /// How long an MR's review threads must hold still before a sailor answers them.
@@ -1809,6 +1819,7 @@ mod tests {
         workers: -1,
         sailors: -1,
         priority: Vec::new(),
+        tender: None,
         review_rounds: 5,
         trial_rounds: 5,
         review_settle_secs: 0,
@@ -1832,6 +1843,7 @@ mod tests {
         workers: -1,
         sailors: -1,
         priority: Vec::new(),
+        tender: None,
         review_rounds: 5,
         trial_rounds: 5,
         review_settle_secs: 0,
@@ -2214,6 +2226,39 @@ mod tests {
         let paused = live_cog(&db, CrewKind::Worker, "PROJ-23", Liveness::Dead);
         report(&db, &paused, CogState::Worker(WorkerState::Trials));
         assert_eq!(spawned(&[paused], 2), ["PROJ-11"], "the paused path worker keeps a seat for its wake");
+    }
+
+    #[test]
+    fn the_tenders_tickets_go_first_and_take_two_seats_past_the_cap() {
+        let db = db();
+        db.open(&ConvoyKey("PROJ-100".into()), None, true, "t1").unwrap(); // the tender
+        db.open(&ConvoyKey("PROJ-200".into()), None, false, "t1").unwrap();
+        for key in ["PROJ-1", "PROJ-2", "PROJ-3"] {
+            convoy_ticket(&db, key, "PROJ-100", TicketStatus::Todo);
+            order(&db, key, true);
+        }
+        convoy_ticket(&db, "PROJ-4", "PROJ-200", TicketStatus::Todo);
+        order(&db, "PROJ-4", true);
+        ticket(&db, "PROJ-9", TicketStatus::InProgress, false, vec![]);
+        let full = live_cog(&db, CrewKind::Worker, "PROJ-9", Liveness::Active);
+        let tender = Some(ConvoyKey("PROJ-100".into()));
+        let spawned = |workers, priority: Vec<i64>| -> Vec<String> {
+            let levers = Levers { workers, priority, tender: tender.clone(), ..LIVE };
+            let mut s: Vec<String> = plan(&db, std::slice::from_ref(&full), true, &levers)
+                .unwrap()
+                .into_iter()
+                .filter_map(|a| match a {
+                    Action::Spawn { ticket, .. } => Some(ticket),
+                    _ => None,
+                })
+                .collect();
+            s.sort();
+            s
+        };
+        assert_eq!(spawned(1, vec![2]).len(), 2, "the cap is full: two tender tickets run past it, the rest wait");
+        assert!(!spawned(1, vec![2]).contains(&"PROJ-4".to_string()), "a priority convoy still waits for a seat");
+        assert_eq!(spawned(3, vec![2]), ["PROJ-1", "PROJ-2", "PROJ-3"], "its seats past the cap are its own: the rest still wait");
+        assert_eq!(spawned(5, vec![2]), ["PROJ-1", "PROJ-2", "PROJ-3", "PROJ-4"], "tender first, then the rest fill the cap");
     }
 
     #[test]

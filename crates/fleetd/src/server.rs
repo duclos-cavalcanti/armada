@@ -12,7 +12,7 @@
 use crate::scheduler::{Command, ControlTarget, Pulse, STALLED};
 use crate::Snapshot;
 use anyhow::Result;
-use domain::ports::{Forge, Tracker};
+use domain::ports::{Forge, ShipRepo, TicketRepo, Tracker};
 use domain::{CogState, ConvoyKey, Order, Ruler, TicketKey};
 use ledger::Ledger;
 use std::io::{Read, Write};
@@ -124,6 +124,7 @@ fn off_loop_route(
         (Some("GET"), Some(p)) if p.starts_with("/packet") => handle_packet(reader, p),
         (Some("GET"), Some(p)) if p.starts_with("/review") => handle_review(reader, p),
         (Some("GET"), Some(p)) if p.starts_with("/ci?") => handle_ci(reader, p),
+        (Some("GET"), Some(p)) if p.starts_with("/ci-job?") => handle_ci_job(reader, p),
         (Some("GET"), Some(p)) if p.starts_with("/ship?") => handle_ship(reader, p),
         (Some("GET"), Some(p)) if p.starts_with("/crossings?") => handle_crossings(reader, p),
         (Some("GET"), Some(p)) if p.starts_with("/diff?") => handle_diff(reader, p),
@@ -500,6 +501,60 @@ fn handle_ci(reader: &Reader, path: &str) -> String {
     answer(reader.forge.ci(iid))
 }
 
+/// The open MRs `/ci-job` checks at most, and the failures of the job that make it fleet-wide.
+const CI_JOB_CHECKS: usize = 15;
+const CI_JOB_MATCHES: usize = 2;
+
+/// `GET /ci-job?iid=N&job=<percent-encoded>` — is the job's failure on `iid` fleet-wide? The same job
+/// on other open MRs, ours and allies', newest first: those whose pipeline the ledger has failed,
+/// none of `iid`'s own stack (its ticket, what it waits on, what waits on it). At most
+/// `CI_JOB_CHECKS` checked, stopping at `CI_JOB_MATCHES` that fail it too; each with the job's first
+/// failure line, to compare with `iid`'s.
+fn handle_ci_job(reader: &Reader, path: &str) -> String {
+    let (Some(iid), Some(job)) = (parse_iid(path), query(path, "job").and_then(wire::pct_decode)) else {
+        return http_response("400 Bad Request", "text/plain", "missing/invalid ?iid= or &job=");
+    };
+    let checked = reader.ledger().and_then(|l| ci_job_candidates(&l, iid)).and_then(|ships| {
+        let (mut mrs, mut matches) = (Vec::new(), 0);
+        for ship in ships.into_iter().take(CI_JOB_CHECKS) {
+            let failed = reader.forge.ci(ship.iid)?.failed.into_iter().find(|j| j.name == job);
+            let error = failed.as_ref().and_then(|j| j.log_excerpt.lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string));
+            matches += usize::from(failed.is_some());
+            mrs.push(serde_json::json!({ "iid": ship.iid, "ticket": ship.ticket.map(|t| t.0), "failed": failed.is_some(), "error": error }));
+            if matches == CI_JOB_MATCHES {
+                break;
+            }
+        }
+        Ok(serde_json::json!({ "job": job, "fleet_wide": matches == CI_JOB_MATCHES, "mrs": mrs }))
+    });
+    answer(checked)
+}
+
+/// The MRs `/ci-job` may check for `iid`: open, a failed pipeline in the ledger, outside `iid`'s own
+/// stack, newest first.
+fn ci_job_candidates(ledger: &Ledger, iid: i64) -> Result<Vec<domain::Ship>> {
+    let armada = ShipRepo::armada(ledger)?;
+    let own = armada.iter().find(|s| s.iid == iid).and_then(|s| s.ticket.clone());
+    let mut stack: Vec<TicketKey> = own.iter().cloned().collect();
+    if let Some(own) = &own {
+        let board = TicketRepo::board(ledger)?;
+        stack.extend(board.iter().filter(|t| &t.key == own).flat_map(|t| t.blocked_by.clone()));
+        stack.extend(board.iter().filter(|t| t.blocked_by.contains(own)).map(|t| t.key.clone()));
+    }
+    let mut out = Vec::new();
+    for ship in armada {
+        let outside = ship.iid != iid && ship.ticket.as_ref().is_none_or(|t| !stack.contains(t));
+        let red = ShipRepo::snapshot(ledger, &ship.id)?.is_some_and(|s| {
+            matches!(s.state, domain::ShipState::Open | domain::ShipState::Draft) && s.pipeline == Some(domain::PipelineStatus::Failed)
+        });
+        if ship.ended_at.is_none() && outside && red {
+            out.push(ship);
+        }
+    }
+    out.sort_by(|a, b| b.iid.cmp(&a.iid));
+    Ok(out)
+}
+
 /// `POST /retry-ci?iid=N` — re-run the MR's failed CI jobs.
 fn handle_retry_ci(reader: &Reader, path: &str) -> String {
     let Some(iid) = parse_iid(path) else {
@@ -717,14 +772,30 @@ fn handle_ticket_fields(request: &str, reader: &Reader) -> String {
     said(reader.ledger().and_then(|l| own(&l)).and_then(|()| reader.tracker.set_fields(&ticket, &fields)).map(|()| "ok".into()))
 }
 
-/// `POST /ticket-search` — the tickets a query matches, in full (JSON).
+/// `POST /ticket-search` — the tickets a query, or every one of the terms, matches, in full (JSON);
+/// with a convoy, only the ones the ledger holds in it.
 fn handle_ticket_search(request: &str, reader: &Reader) -> String {
-    let query = match parse_body::<wire::TicketSearchCmd>(request) {
-        Ok(dto) if !dto.query.trim().is_empty() => dto.query,
-        Ok(_) => return http_response("400 Bad Request", "text/plain", "an empty query"),
+    let dto = match parse_body::<wire::TicketSearchCmd>(request) {
+        Ok(dto) => dto,
         Err(r) => return r,
     };
-    answer(reader.tracker.search(&query))
+    let terms: Vec<String> = dto.terms.iter().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
+    let found = match (terms.is_empty(), dto.query.trim().is_empty()) {
+        (false, _) => reader.tracker.search_terms(&terms),
+        (true, false) => reader.tracker.search(&dto.query),
+        (true, true) => return http_response("400 Bad Request", "text/plain", "an empty query"),
+    };
+    let Some(convoy) = dto.convoy.map(domain::ConvoyKey) else { return answer(found) };
+    answer(found.and_then(|found| {
+        let ledger = reader.ledger()?;
+        let mut kept = Vec::new();
+        for d in found {
+            if TicketRepo::get(&ledger, &d.ticket.key)?.is_some_and(|t| t.convoy.as_ref() == Some(&convoy)) {
+                kept.push(d);
+            }
+        }
+        Ok(kept)
+    }))
 }
 
 /// A forge or tracker write's answer: what it did, or the `409` its error is.
@@ -1169,6 +1240,106 @@ mod tests {
             assert!(route("POST", ledger_write).is_none(), "{ledger_write} goes to the loop");
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_job_check_looks_at_other_red_open_mrs_newest_first_outside_its_own_stack() {
+        use domain::{Approvals, Ship, ShipId, ShipSnapshot, ShipState};
+        let db = Ledger::in_memory().unwrap();
+        let ticket = |key: &str| domain::Ticket {
+            key: TicketKey(key.into()),
+            convoy: None,
+            held: false,
+            created_at: "t".into(),
+            blocked_by: vec![],
+            title: None,
+            assignee: None,
+            status: Some(domain::TicketStatus::InQa),
+            synced_at: None,
+        };
+        for key in ["PROJ-1", "PROJ-2", "PROJ-3", "PROJ-4", "PROJ-5"] {
+            TicketRepo::upsert(&db, &ticket(key)).unwrap();
+        }
+        TicketRepo::set_blocked_by(&db, &TicketKey("PROJ-1".into()), &[TicketKey("PROJ-2".into())]).unwrap();
+        let ship = |iid: i64, key: Option<&str>, state: ShipState, pipeline: domain::PipelineStatus| {
+            let ship = Ship {
+                id: ShipId(0),
+                ticket: key.map(|k| TicketKey(k.into())),
+                iid,
+                url: "u".into(),
+                target: "master".into(),
+                source: format!("b{iid}"),
+                pilot: "p".into(),
+                created_at: "t".into(),
+                ended_at: None,
+                swept: None,
+                reviewed: None,
+                rounds: 0,
+                trials: 0,
+            };
+            let id = ShipRepo::upsert(&db, &ship).unwrap();
+            let snap = ShipSnapshot {
+                ship: id,
+                title: "T".into(),
+                state,
+                head_sha: "s".into(),
+                has_conflicts: false,
+                open_threads: 0,
+                total_threads: 0,
+                approvals: Approvals { current: 0, required: 0 },
+                armed: false,
+                on_merge_train: false,
+                blocked_by: vec![],
+                pipeline: Some(pipeline),
+                merge_status: None,
+                synced_at: "t".into(),
+            };
+            db.sync_snapshot(&snap).unwrap();
+        };
+        use domain::PipelineStatus::{Failed, Success};
+        ship(10, Some("PROJ-1"), ShipState::Open, Failed); // the asker
+        ship(11, Some("PROJ-2"), ShipState::Open, Failed); // what it waits on: its own stack
+        ship(12, Some("PROJ-3"), ShipState::Draft, Failed);
+        ship(13, None, ShipState::Open, Failed); // an ally's
+        ship(14, Some("PROJ-4"), ShipState::Open, Success);
+        ship(15, Some("PROJ-5"), ShipState::Merged, Failed);
+        let iids: Vec<i64> = ci_job_candidates(&db, 10).unwrap().into_iter().map(|s| s.iid).collect();
+        assert_eq!(iids, [13, 12]);
+    }
+
+    #[test]
+    fn a_terms_search_keeps_only_the_named_convoys_tickets() {
+        let tag = format!("fleetd-test-terms-{}", std::process::id());
+        let (path, tickets) = (std::env::temp_dir().join(format!("{tag}.db")), std::env::temp_dir().join(&tag));
+        let _ = std::fs::remove_file(&path);
+        std::fs::create_dir_all(&tickets).unwrap();
+        for key in ["PROJ-1", "PROJ-2"] {
+            std::fs::write(tickets.join(format!("{key}.md")), "---\ntitle: audit RUSTSEC bump\ntype: task\nstatus: todo\n---\n").unwrap();
+        }
+        let ledger = path.to_string_lossy().to_string();
+        let db = Ledger::open(&ledger).unwrap();
+        let in_tender = domain::Ticket {
+            key: TicketKey("PROJ-1".into()),
+            convoy: Some(ConvoyKey("PROJ-100".into())),
+            held: false,
+            created_at: "t".into(),
+            blocked_by: vec![],
+            title: None,
+            assignee: None,
+            status: Some(domain::TicketStatus::Todo),
+            synced_at: None,
+        };
+        TicketRepo::upsert(&db, &in_tender).unwrap();
+        drop(db);
+        let reader = Reader { tracker: Box::new(crate::filesystem::FsTracker::new(&tickets, "PROJ", "me")), ..reader(&ledger) };
+        let (snapshot, deployment) = (Arc::new(Mutex::new(vec![])), Deployment { project: "/p".into(), default_branch: "origin/main".into(), stacks: true, provider_env: Default::default() });
+        let search = |body: &str| off_loop_route(Some("POST"), Some("/ticket-search"), &format!("POST /ticket-search HTTP/1.1\r\n\r\n{body}"), &snapshot, &deployment, &reader).unwrap();
+        let both = search(r#"{"terms":["audit","rustsec"]}"#);
+        assert!(both.contains("PROJ-1") && both.contains("PROJ-2"), "{both}");
+        let tender = search(r#"{"terms":["audit","rustsec"],"convoy":"PROJ-100"}"#);
+        assert!(tender.contains("PROJ-1") && !tender.contains("PROJ-2"), "{tender}");
+        assert!(search(r#"{"terms":["  "]}"#).starts_with("HTTP/1.1 400"), "a blank term is no query");
+        let _ = (std::fs::remove_file(&path), std::fs::remove_dir_all(&tickets));
     }
 
     #[test]

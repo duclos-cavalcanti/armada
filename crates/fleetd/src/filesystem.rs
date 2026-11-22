@@ -288,6 +288,22 @@ impl Tracker for FsTracker {
             .collect())
     }
 
+    /// Every open ticket whose title or body holds each term, case and hyphens aside.
+    fn search_terms(&self, terms: &[String]) -> Result<Vec<TicketDetail>> {
+        let norm = |s: &str| s.to_lowercase().replace('-', " ");
+        let terms: Vec<String> = terms.iter().map(|t| norm(t)).collect();
+        let (good, _) = self.scan()?;
+        Ok(good
+            .into_iter()
+            .filter(|(_, t)| !matches!(t.header.status, TicketStatus::Done | TicketStatus::Cancelled))
+            .filter(|(_, t)| {
+                let text = norm(&format!("{}\n{}", t.header.title, t.body));
+                terms.iter().all(|w| text.contains(w.as_str()))
+            })
+            .map(|(key, t)| self.detail(&key, &t))
+            .collect())
+    }
+
     fn create(&self, d: &TicketDraft) -> Result<TicketKey> {
         // The next number after every <PREFIX>-N file name in the folder, bad files included, so a
         // new ticket never takes the name of one that failed to parse.
@@ -430,6 +446,21 @@ mod tests {
             std::fs::write(dir.join(name), text).unwrap();
         }
         (FsTracker::new(&dir, "ARMT", "daniel"), dir)
+    }
+
+    #[test]
+    fn search_terms_finds_open_tickets_holding_every_term_hyphens_aside() {
+        let bump = "---\ntitle: Bump url to 2.5.9\ntype: task\nstatus: todo\n---\nClears the audit-gate advisory.\n";
+        let done = "---\ntitle: Bump url to 2.5.8\ntype: task\nstatus: done\n---\nAudit gate.\n";
+        let (t, dir) = tracker("terms", &[("ARMT-7.md", bump), ("ARMT-8.md", done), ("ARMT-4.md", ARMT_4)]);
+        let keys = |terms: &[&str]| -> Vec<String> {
+            let terms: Vec<String> = terms.iter().map(|t| t.to_string()).collect();
+            t.search_terms(&terms).unwrap().into_iter().map(|d| d.ticket.key.0).collect()
+        };
+        assert_eq!(keys(&["url", "audit gate"]), ["ARMT-7"], "every term, open only; 'audit-gate' reads as 'audit gate'");
+        assert_eq!(keys(&["bump", "Audit-Gate"]), ["ARMT-7"], "case and hyphens aside in the term too");
+        assert!(keys(&["url", "neg"]).is_empty(), "one term missing: no match");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

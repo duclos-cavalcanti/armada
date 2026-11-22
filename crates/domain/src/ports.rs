@@ -351,6 +351,11 @@ pub trait Tracker {
     /// The tickets a query matches, in full (Jira: the query is JQL; filesystem: words every
     /// matching ticket's title or body holds).
     fn search(&self, query: &str) -> Result<Vec<TicketDetail>>;
+    /// The open tickets whose title or description holds every one of `terms` (each a word or a
+    /// phrase; a hyphen reads as a space, case aside): the duplicate check's candidates.
+    fn search_terms(&self, terms: &[String]) -> Result<Vec<TicketDetail>> {
+        self.search(&terms.join(" "))
+    }
     /// Add (`on`) or remove a label on the ticket (idempotent).
     fn label(&self, key: &TicketKey, label: &str, on: bool) -> Result<()>;
     /// Add (`on`) or remove a `link` between `key` and `other` (idempotent): `BlockedBy` is "`key`

@@ -57,7 +57,23 @@ it produces.
 | **Build** | A compile or syntax error, a missing dependency, a broken import | Read the error, fix the broken file within the ticket's scope, commit, push. |
 | **Test** | A unit / integration test failed | Decide which side is wrong: the *test* (a missing case, a stale expectation) or the *code* (an implementation gap). Fix that side, commit, push. **If the log and the ticket don't make it obvious which side is wrong, escalate rather than guess.** |
 | **Config** | The CI configuration itself: syntax, a missing stage or job, a wrong dependency between jobs | Fix the config per the project's conventions, commit, push. |
+| **Fleet-wide** | Not transient, and nothing in your diff explains it: an advisory on a crate you don't touch, a check on files you didn't change | **Fleet-wide** (below). Never fix it in your MR. |
 | **Unknown / out of scope** | The log fits none of the above; the fix needs a design decision, touches files outside the ticket, or spans MRs | **Escalate** (below). |
+
+## Fleet-wide
+
+A red the whole fleet shares is fixed once, at its source, in the tender (the standing convoy for
+fleet-wide fixes):
+
+1. **Is it being fixed?** `fleetc ticket search --terms "<job>" "<the error's identifier>" --convoy tender`
+   (e.g. `--terms audit RUSTSEC-2026-0592`). Found: `fleetc ticket block <your ticket> --by <KEY>`,
+   and you're done — the blocker landing brings the next sweep.
+2. **Is it fleet-wide?** `fleetc ci --job "<job>"`. `fleet_wide: false`: it's yours after all;
+   classify it again from the table.
+3. **Fleet-wide, no fix yet:** propose the fix (`/fleet-propose`), titled `<job>: <identifier> —
+   <the fix>`; block your ticket on it (`fleetc ticket block <your ticket> --by <KEY>`); then
+   exit non-zero, naming the job and the proposed key: the caller escalates, and an admiral
+   accepts it into the tender, marks it a duplicate, or sends it back.
 
 ## Failure handling
 

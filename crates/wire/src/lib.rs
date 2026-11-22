@@ -240,10 +240,16 @@ pub struct TicketFieldsCmd {
     pub captain: Option<String>,
 }
 
-/// Search the tracker (`POST /ticket-search`, `fleetc ticket search`): Jira takes JQL.
+/// Search the tracker (`POST /ticket-search`, `fleetc ticket search`): a `query` (Jira: JQL), or
+/// `terms`, every one held by an open ticket's title or description — then only `convoy`'s, if named.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TicketSearchCmd {
+    #[serde(default)]
     pub query: String,
+    #[serde(default)]
+    pub terms: Vec<String>,
+    #[serde(default)]
+    pub convoy: Option<String>,
 }
 
 /// Propose work (`POST /propose`, `fleetc propose`): held in the ledger for the operator to accept

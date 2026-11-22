@@ -19,6 +19,11 @@ reconcile_secs = 60
 # --- reconcile mode: true = plan only, execute nothing ---
 dry_run = false
 
+# --- tender ---
+# The standing convoy (its epic) for the fixes the whole fleet waits on: required, opened by fleetd
+# at boot, seated first. Cogs name it `tender` wherever a convoy goes.
+tender = "ARMT-6"
+
 # --- the product's checkout, relative to this folder ---
 [project]
 path = "main"

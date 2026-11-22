@@ -27,7 +27,7 @@ mod tmux;
 
 use crate::proc::OutputWithin;
 use anyhow::Result;
-use domain::ports::{Forge, SessionHost, SessionRepo, Tracker};
+use domain::ports::{ConvoyRepo, Forge, SessionHost, SessionRepo, Tracker};
 use domain::{Liveness, LivenessThresholds, Session};
 use ledger::Ledger;
 use serde::Serialize;
@@ -134,15 +134,29 @@ fn checks(
     forge: &dyn Forge,
     tracker: &dyn Tracker,
     host: &dyn SessionHost,
-) -> [(&'static str, Result<String>); 6] {
+) -> [(&'static str, Result<String>); 7] {
     [
         ("runtime", preflight::runtime(project)),
         ("project", git::GitWorktrees::new(&cfg.project.path).preflight()),
         ("health", health::preflight(cfg)),
         ("forge", forge.preflight()),
         ("tracker", tracker.preflight()),
+        ("tender", preflight::tender(cfg.tender.as_deref(), tracker)),
         ("host", host.preflight()),
     ]
+}
+
+/// Open the tender, standing, if it isn't open: the fleet always has one (preflight checked it's an
+/// epic). Re-opening keeps what's there.
+fn open_tender(ledger: &Ledger, tracker: &dyn Tracker, cfg: &config::Config) -> Result<()> {
+    let Some(key) = cfg.tender.as_deref().map(|k| domain::ConvoyKey(k.into())) else { return Ok(()) };
+    if ConvoyRepo::active(ledger)?.iter().any(|c| c.key == key) {
+        return Ok(());
+    }
+    let title = tracker.get(&domain::TicketKey(key.0.clone()))?.title;
+    ConvoyRepo::open(ledger, &key, Some(&title), true, &now_rfc3339())?;
+    tracing::info!("tender {} opened, standing", key.0);
+    Ok(())
 }
 
 /// One-shot: pull the armada from the forge into the ledger. The scheduler will run
@@ -175,6 +189,7 @@ fn boot(project: &wire::Project, cfg: config::Config) -> Result<()> {
     tracing::info!("preflight · {}", project.root.display());
     preflight::log(&checks(project, &cfg, forge.as_ref(), tracker.as_ref(), &host))?;
     let ledger = Ledger::open(&project.ledger())?;
+    open_tender(&ledger, tracker.as_ref(), &cfg)?;
 
     // Strike the review worktrees left behind while fleetd was down; a live lookout keeps its own.
     let berthed: Vec<String> = SessionRepo::live(&ledger)?

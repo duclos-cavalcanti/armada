@@ -22,8 +22,7 @@ omitted, pick the one that fits per `/fleet-ready-done`, and say which.
 
 ## Step 1 — Is there a ticket already?
 
-Search the board for the work's key terms (filesystem tracker: `grep -ril "<term>" <tickets
-folder>`; Jira: its search).
+Check it's new, as `/fleet-ready-done` says (`fleetc ticket search --terms <term>…`).
 
 - **One exists** → Step 2a: propose taking it on.
 - **None does** → Step 2b: draft a new one.

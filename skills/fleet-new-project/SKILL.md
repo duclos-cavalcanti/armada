@@ -58,7 +58,9 @@ as you go.
    read-only readiness check (e.g. `assess-ticket`)? If so, `assess_skill = "<name>"`: captains run
    it on every ticket before dispatch, and grooming holds tickets to it. Leave out what it lacks:
    `/fleet-ready-done` stands in.
-8. **Anything else** — keep the default cadences and `dry_run = false` unless they say
+8. **The tender** — every fleet has one: the standing convoy for the fixes the whole fleet waits on
+   (a red that fails the same job on every MR). Its epic is filed in Step 2.
+9. **Anything else** — keep the default cadences and `dry_run = false` unless they say
    otherwise.
 
 Read the answers back as the fleet.toml you'll write, and get a yes before Step 2.
@@ -101,6 +103,7 @@ max_rulings        = 6                 # the operator's rulings a ticket may nee
 # groom_skill      = "<name>"          # the project's own grooming skill; unset = /fleet-ready-done
 # assess_skill     = "<name>"          # its read-only readiness check, run before dispatch; unset = /fleet-ready-done
 dry_run            = false
+tender             = "<PREFIX-N>"      # the standing convoy for fleet-wide fixes: required, opened by fleetd at boot, seated first
 
 [project]
 path = "<checkout>"            # relative to this folder
@@ -116,6 +119,11 @@ kind    = "<filesystem|jira>"
 project = "<PREFIX>"
 # filesystem: path = "tickets", user = "…"  ·  jira: claim_label = "…"
 ```
+
+File the tender's epic once the tracker is set up, and write its key as `tender`: titled
+`Tender: fleet-wide CI and bug fixes`, its body saying each ticket in it fixes one fleet-wide red,
+titled after the failing job and the error (filesystem tracker: a `tickets/<PREFIX-N>.md` with
+`type: epic`; Jira: `fleetc ticket new --type epic`). Preflight refuses to start without it.
 
 `projects/` is gitignored (only the showcase is tracked), so the new project stays local;
 whether to version it is the operator's call.

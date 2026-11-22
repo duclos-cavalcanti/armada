@@ -28,7 +28,7 @@ fn socket() -> String {
 
 /// fleetc's usage: a header, then one line per verb form (`fleetc <verb> …`).
 const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project: the cwd's, or -C's — nearest folder with a fleet.toml; in a cog, an omitted ticket / --iid / --convoy is its own)\n  \
-     (convoy keys: a convoy's <KEY> is its epic's key or its number, #N — `fleetc convoy list` shows both)\n  \
+     (convoy keys: a convoy's <KEY> is its epic's key, its number, #N — `fleetc convoy list` shows both — or `tender`, the standing convoy for fleet-wide fixes)\n  \
      fleetc status   --cog <kind> [--ticket <KEY-N>|--convoy <KEY>] --state <state> [--last-action <text>]\n  \
      fleetc dispatch --ticket <KEY-N> --ac <summary> [--hand] [--fork-from <ref>] [--worktree <path>] [--park-at <where>]\n  \
      fleetc hand     [--worktree <path>]   (ticketless operator-driven hand in a worktree; defaults to cwd)\n  \
@@ -60,12 +60,12 @@ const USAGE: &str = "usage: fleetc [-C <project-dir>] <verb> …   (the project:
      fleetc diff     --iid <N> --path <file>   (one MR's diff of one file)\n  \
      fleetc review-post [--iid <N>] --body <text|-> [--approve | --unapprove | --thread | --request-changes]   (post one review comment, approving if clean, withdrawing that approval, or requesting changes on a refused match; or open one review thread)\n  \
      fleetc rebase   [--iid <N>]       (server-side rebase an MR)\n  \
-     fleetc ci       [--iid <N>]       (the MR's CI: status + each failed job's log excerpt, as JSON)\n  \
+     fleetc ci       [--iid <N>] [--job <name>]   (the MR's CI: status + each failed job's log excerpt, as JSON; --job: is that job's failure fleet-wide — the same job on up to 15 other open red MRs, newest first, stopping at 2 that fail it too, each with its first failure line)\n  \
      fleetc retry-ci [--iid <N>]       (re-run the MR's failed CI jobs)\n  \
      fleetc arm      [<KEY-N>]        (arm the ticket's MR to merge once green; refused while held or blocked)\n  \
      fleetc ticket   [<KEY-N>] [--where]    (a ticket's full text; --where: its URL or file path)\n  \
      fleetc ticket   new --title <t> --type <story|bug|task|epic> [--convoy <KEY>] [--blocked-by <KEY-N>]… [--component <c>]… [--label <l>]… [--points <N>] [--priority <p>] [--fix-version <v>]… [--body <text>|-]   (prints the new key)\n  \
-     fleetc ticket   search <query> [--full]   (the tickets it matches, one line each, or in full; Jira: the query is JQL)\n  \
+     fleetc ticket   search <query> | --terms <term>… [--convoy <KEY>] [--full]   (the tickets it matches, one line each, or in full; Jira: the query is JQL; --terms: the open tickets whose title or description holds every term, a hyphen read as a space — the duplicate check)\n  \
      fleetc ticket   block|unblock <KEY-N> --by <KEY-N>   (add or remove an 'is blocked by' edge; unblock: never a cog)\n  \
      fleetc ticket   relate|unrelate <KEY-N> --to <KEY-N>   (add or remove a 'relates to' link, both ways; the fleet never acts on it)\n  \
      fleetc ticket   duplicate|unduplicate <KEY-N> --of <KEY-N>   (mark the first a duplicate of the second, or stop)\n  \
@@ -950,8 +950,11 @@ fn ticket_key(t: &str, verb: &str) -> Result<String> {
 }
 
 /// Validate a convoy key at the edge — same shape as a ticket key.
-/// A convoy argument: its epic's key, or its number (`2` or `#2`), looked up in the ledger.
+/// A convoy argument: its epic's key, its number (`2` or `#2`, looked up in the ledger), or `tender`.
 fn convoy_key(c: &str, verb: &str) -> Result<String> {
+    if c == "tender" {
+        return tender().map_err(|e| anyhow!("{verb}: {e}"));
+    }
     let Some(no) = convoy_no(c) else {
         return domain::ConvoyKey::parse(c).map(|k| k.0).map_err(|e| anyhow!("{verb}: {e}"));
     };
@@ -959,6 +962,15 @@ fn convoy_key(c: &str, verb: &str) -> Result<String> {
     let ledger = ledger::Ledger::open_readonly(&db).map_err(|_| anyhow!("no ledger yet ({db})"))?;
     let key = ledger.convoy_by_no(no)?.ok_or_else(|| anyhow!("{verb}: no convoy #{no} (fleetc convoy list)"))?;
     Ok(key.0)
+}
+
+/// The project's tender, the standing convoy fleet.toml names (`tender = "<epic key>"`).
+fn tender() -> Result<String> {
+    let path = project_dir().config();
+    let text = std::fs::read_to_string(&path).map_err(|e| anyhow!("reading {}: {e}", path.display()))?;
+    let toml: toml::Value = toml::from_str(&text).map_err(|e| anyhow!("parsing {}: {e}", path.display()))?;
+    let key = toml.get("tender").and_then(|t| t.as_str()).ok_or_else(|| anyhow!("no tender in {}", path.display()))?;
+    domain::ConvoyKey::parse(key).map(|k| k.0).map_err(|e| anyhow!("tender: {e}"))
 }
 
 /// A convoy's number, as typed: `2` or `#2`. A ticket key never parses as one.
@@ -1425,8 +1437,22 @@ fn review_post(args: &[String]) -> Result<()> {
 /// `fleetc ci --iid <N>` — the MR's CI as JSON: `{status, failed: [{name, url, log_excerpt}]}`, failed
 /// child pipelines included — what fleet-repair classifies.
 fn ci(args: &[String]) -> Result<()> {
-    let iid = require_iid(args, "ci")?;
-    let (code, body) = wire::get_json(&socket(), &format!("/ci?iid={iid}"))?;
+    let (mut job, mut iid) = (None, None);
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        let mut take = || it.next().cloned().ok_or_else(|| anyhow!("{flag} needs a value"));
+        match flag.as_str() {
+            "--job" => job = Some(take()?),
+            "--iid" => iid = Some(take()?.parse::<i64>().map_err(|_| anyhow!("ci: --iid must be an integer"))?),
+            other => bail!("ci: unknown flag {other:?}"),
+        }
+    }
+    let iid = iid_or_own(iid, "ci")?;
+    let path = match &job {
+        Some(job) => format!("/ci-job?iid={iid}&job={}", wire::pct_encode(job)),
+        None => format!("/ci?iid={iid}"),
+    };
+    let (code, body) = wire::get_json(&socket(), &path)?;
     if code != 200 {
         bail!("fleetd ({code}): {body}");
     }
@@ -1532,12 +1558,26 @@ fn ticket_where(key: &str) -> Result<()> {
 /// `fleetc ticket search <query> [--full]` — the tickets the query matches (Jira: JQL, paged to the
 /// end), one line each: key, status, type, title. `--full` prints each one as `fleetc ticket` does.
 fn ticket_search(args: &[String]) -> Result<()> {
-    let full = args.iter().any(|a| a == "--full");
-    let query = args.iter().filter(|a| *a != "--full").cloned().collect::<Vec<_>>().join(" ");
-    if query.trim().is_empty() {
-        bail!("usage: fleetc ticket search <query> [--full]   (Jira: the query is JQL)");
+    const USAGE: &str = "usage: fleetc ticket search <query> | --terms <term>… [--convoy <KEY>] [--full]   (Jira: the query is JQL)";
+    let (mut full, mut convoy, mut terms, mut words) = (false, None, Vec::new(), Vec::new());
+    let mut it = args.iter().peekable();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--full" => full = true,
+            "--convoy" => convoy = Some(convoy_key(it.next().ok_or_else(|| anyhow!("{USAGE}"))?, "ticket search")?),
+            "--terms" => {
+                while let Some(t) = it.next_if(|t| !t.starts_with("--")) {
+                    terms.push(t.clone());
+                }
+            }
+            _ => words.push(a.clone()),
+        }
     }
-    let (code, body) = wire::post_json(&socket(), "/ticket-search", &wire::TicketSearchCmd { query })?;
+    let query = words.join(" ");
+    if query.trim().is_empty() == terms.is_empty() {
+        bail!("{USAGE}");
+    }
+    let (code, body) = wire::post_json(&socket(), "/ticket-search", &wire::TicketSearchCmd { query, terms, convoy })?;
     if code != 200 {
         bail!("fleetd ({code}): {body}");
     }

@@ -68,9 +68,12 @@ both write one:
 
 1. **Draft** the title and the four-section body above, from what you know (ask only for
    what's missing).
-2. **Check it's new** — search the board for the title's key terms (filesystem tracker:
-   `grep -ril "<term>" <tickets folder>`; Jira: its search). If an existing ticket already
-   covers it, stop and name that ticket instead (a cog proposes taking it on: `/fleet-propose`).
+2. **Check it's new** — `fleetc ticket search --terms <term>…`: the open tickets whose title or
+   description holds every term. Pick 2–4 specific ones — the names and identifiers the work acts
+   on (a crate, a job, a file, an advisory id) — never the action verb or a generic word; a hyphen
+   reads as a space. Read each candidate (`fleetc ticket <KEY>`): one with the same outcome
+   already covers it, so stop and name that ticket instead (a cog proposes taking it on:
+   `/fleet-propose`).
 3. **Wire it** — each existing ticket it needs first is a `--blocked-by <KEY>`; the epic it
    belongs to, if any, is `--convoy <KEY>`.
 4. **Check Ready** (below) — a gap (an untestable criterion, two goals, too big for one MR) is

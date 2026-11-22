@@ -110,6 +110,16 @@ pub fn runtime(project: &wire::Project) -> Result<String> {
     Ok(format!("{} · {state}", dir.display()))
 }
 
+/// The tender: fleet.toml names it, and it's an epic on the tracker.
+pub fn tender(tender: Option<&str>, tracker: &dyn domain::ports::Tracker) -> Result<String> {
+    let key = tender.ok_or_else(|| anyhow!("no tender: set `tender = \"<epic key>\"` in fleet.toml (the standing convoy for fleet-wide fixes)"))?;
+    let detail = tracker.read(&domain::TicketKey(key.into())).map_err(|e| anyhow!("tender {key} isn't on the tracker: {e:#}"))?;
+    if !detail.kind.eq_ignore_ascii_case("epic") {
+        bail!("tender {key} is a {}, not an epic", detail.kind);
+    }
+    Ok(format!("{key} · {}", detail.ticket.title))
+}
+
 /// Print the checklist; `Err` (after printing it) if any check failed.
 pub fn report(checks: &[(&str, Result<String>)]) -> Result<()> {
     print!("{}", render(checks));
@@ -148,6 +158,23 @@ fn render(checks: &[(&str, Result<String>)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_tender_must_be_named_and_be_an_epic() {
+        let dir = std::env::temp_dir().join(format!("fleetd-tender-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ticket = |key: &str, kind: &str| {
+            std::fs::write(dir.join(format!("{key}.md")), format!("---\ntitle: Fleet repairs\ntype: {kind}\nstatus: todo\n---\n")).unwrap()
+        };
+        ticket("PROJ-1", "epic");
+        ticket("PROJ-2", "story");
+        let tracker = crate::filesystem::FsTracker::new(dir.clone(), "PROJ", "me");
+        assert_eq!(tender(Some("PROJ-1"), &tracker).unwrap(), "PROJ-1 · Fleet repairs");
+        assert!(tender(None, &tracker).unwrap_err().to_string().contains("no tender"));
+        assert!(tender(Some("PROJ-2"), &tracker).unwrap_err().to_string().contains("not an epic"));
+        assert!(tender(Some("PROJ-9"), &tracker).unwrap_err().to_string().contains("isn't on the tracker"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn log_excerpt_keeps_a_failure_the_tail_ran_past() {

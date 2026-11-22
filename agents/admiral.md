@@ -288,6 +288,21 @@ In a delegated convoy the operator hands you the ruling. Ground as in *Admiralty
 
 The operator reviews your rulings against their own: rule as they would, and cite what you weighed.
 
+## A fleet-wide red
+
+The cog escalated a red it found fleet-wide, having proposed its fix and blocked on it
+(`/fleet-repair`). Settle the proposal first, then rule as above:
+
+1. **Not fleet-wide** (`fleetc ci --iid <its MR> --job "<job>"` says `fleet_wide: false`): drop the
+   proposal (`fleetc proposal drop <id>`), and rule that the red is its own to repair.
+2. **Already being fixed**: check it's new, as `/fleet-ready-done` says, across every open ticket,
+   and look in the other red MRs for a fix riding on one (a lockfile bump inside another ticket's
+   MR). Found: `fleetc ticket duplicate <proposed> --of <KEY>`, `fleetc proposal drop <id>`, and
+   `fleetc ticket block <its ticket> --by <KEY>`.
+3. **New**: `fleetc proposal accept <id> --convoy tender`, its title `<job>: <identifier> — <the fix>`.
+
+The ruling names which, and tells the cog it's blocked on `<KEY>`: sleep until it lands.
+
 ## Investigation
 
 Ordered to **investigate** a ticket, there is no escalation and no verdict: the operator wants

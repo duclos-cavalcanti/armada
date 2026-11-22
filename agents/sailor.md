@@ -64,9 +64,8 @@ Do the work the snapshot calls for, this sweep only:
 
 - **`has_conflicts`, or `merge_status` `conflict` or `need_rebase`** → `/fleet-rechart`.
 - **`open_threads > 0`** → `/fleet-parley` to answer review threads.
-- **`pipeline` failed** → `/fleet-repair`. If it fails the same way on the target branch and one
-  of `open_blockers` is the fix, the red isn't yours: report `sleeping`, and the blocker landing
-  brings the next sweep.
+- **`pipeline` failed** → `/fleet-repair`. If it's fleet-wide and one of `open_blockers` is the
+  fix, the red isn't yours: report `sleeping`, and the blocker landing brings the next sweep.
 - **clean + not draft + not armed** → **arm** auto-merge: `fleetc arm`, regardless of project
   conventions. The forge merges it on its own once its gates pass. fleetd refuses (and says why)
   while the ticket is anchored, has an open blocker, or its project merges by hand — then

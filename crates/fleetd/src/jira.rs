@@ -348,6 +348,10 @@ impl Tracker for JiraTracker {
         Ok(whole_page(&self.first_page(jql)?, jql)?.iter().filter_map(|i| self.detail(i)).collect())
     }
 
+    fn search_terms(&self, terms: &[String]) -> Result<Vec<TicketDetail>> {
+        self.search(&terms_jql(terms))
+    }
+
     fn sprint(&self, key: &TicketKey, active: bool) -> Result<()> {
         match active {
             true => self.add_to_active_sprint(key),
@@ -586,6 +590,18 @@ fn page_issues(json: &str) -> Result<Vec<serde_json::Value>> {
 
 /// A search's issues, all of them: a full page may not be, and jira-cli can't read past it, so
 /// the query is refused rather than its matches cut short.
+/// The JQL for `search_terms`: open tickets, each term a phrase in the summary or the description,
+/// every term required. A hyphen reads as a space (Jira's text index splits on it); quotes and
+/// backslashes are dropped, as no text search needs them.
+fn terms_jql(terms: &[String]) -> String {
+    let phrase = |t: &str| t.replace('-', " ").replace(['"', '\\'], "");
+    let clauses = terms.iter().map(|t| {
+        let p = phrase(t);
+        format!("(summary ~ \"\\\"{p}\\\"\" OR description ~ \"\\\"{p}\\\"\")")
+    });
+    std::iter::once("statusCategory != Done".to_string()).chain(clauses).collect::<Vec<_>>().join(" AND ")
+}
+
 fn whole_page(json: &str, jql: &str) -> Result<Vec<serde_json::Value>> {
     let issues = page_issues(json)?;
     ensure!(issues.len() < PAGE, "{PAGE} or more tickets match {jql:?}, and jira-cli reads only the first {PAGE}: narrow the query");
@@ -736,6 +752,15 @@ fn jira_status_name(s: TicketStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terms_become_one_phrase_clause_each_on_open_tickets() {
+        let terms = vec!["audit".to_string(), "create-jira-ticket".to_string(), "say \"hi\"".to_string()];
+        assert_eq!(
+            terms_jql(&terms),
+            r#"statusCategory != Done AND (summary ~ "\"audit\"" OR description ~ "\"audit\"") AND (summary ~ "\"create jira ticket\"" OR description ~ "\"create jira ticket\"") AND (summary ~ "\"say hi\"" OR description ~ "\"say hi\"")"#
+        );
+    }
 
     #[test]
     fn reads_an_issue_with_an_adf_description() {
