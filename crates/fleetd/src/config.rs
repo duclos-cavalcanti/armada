@@ -33,6 +33,14 @@ pub struct Config {
     /// How many lookouts may review our own MRs at once (a worker's `review`), apart from the
     /// allies' cap: -1 = no cap (the default), 0 = none.
     pub self_lookouts: i64,
+    /// How many workers may run at once: -1 = no cap (the default), 0 = none. A spawn or heal past
+    /// it waits for a seat, the critical paths first.
+    pub workers: i64,
+    /// How many sailors may run at once, as `workers`.
+    pub sailors: i64,
+    /// The convoys, by number, whose work takes a worker's or sailor's seat first, in this order:
+    /// their own tickets and every ticket their goal waits on, in any convoy. Empty = none.
+    pub priority: Vec<i64>,
     /// Review rounds a worker gets on its MR: past them with threads still open, it escalates.
     pub review_rounds: u64,
     /// Red pipelines a worker gets on its MR: at that many, it escalates instead of repairing.
@@ -162,6 +170,9 @@ impl Default for Config {
             admirals: 3,
             lookouts: 3,
             self_lookouts: -1,
+            workers: -1,
+            sailors: -1,
+            priority: Vec::new(),
             review_rounds: 5,
             trial_rounds: 5,
             review_settle_secs: 300,

@@ -327,6 +327,16 @@ pub fn upstream(goal: &TicketKey, board: &[Ticket]) -> std::collections::HashSet
     seen
 }
 
+/// The `convoys`' critical paths: each goal and every ticket of its convoy it waits on.
+pub fn critical_paths(convoys: &[Convoy], board: &[Ticket]) -> std::collections::HashSet<TicketKey> {
+    convoys
+        .iter()
+        .filter_map(|c| c.goal.as_ref().map(|g| (c, upstream(g, board))))
+        .flat_map(|(c, path)| board.iter().filter(move |t| t.convoy.as_ref() == Some(&c.key) && path.contains(&t.key)))
+        .map(|t| t.key.clone())
+        .collect()
+}
+
 /// A cog's work-packet — the composed read `fleetc packet` serves: the dispatch order, the
 /// ship + its latest snapshot, the cached ticket, `open_blockers` — the ticket's blockers not
 /// yet Done/Cancelled, which gate the merge (`ticket.blocked_by` lists every edge, landed ones

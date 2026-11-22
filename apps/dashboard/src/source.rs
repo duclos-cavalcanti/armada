@@ -291,12 +291,7 @@ impl Fleet {
         }
 
         let convoys = ConvoyRepo::active(&db)?;
-        let critical = convoys
-            .iter()
-            .filter_map(|c| c.goal.as_ref().map(|g| (c, domain::upstream(g, &board))))
-            .flat_map(|(c, path)| board.iter().filter(move |t| t.convoy.as_ref() == Some(&c.key) && path.contains(&t.key)))
-            .map(|t| t.key.clone())
-            .collect();
+        let critical = domain::critical_paths(&convoys, &board);
         let mut captain_launched = HashMap::new();
         for c in &convoys {
             if let Some(at) = db.last_captain_launch(&c.key)? {

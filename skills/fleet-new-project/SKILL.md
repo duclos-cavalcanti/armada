@@ -90,6 +90,9 @@ captain_sleep_secs = 900
 admirals           = 3
 lookouts           = 3
 self_lookouts      = -1                # lookouts on our own MRs, apart from the allies': -1 = no cap
+workers            = -1                # workers at once (critical paths seated first): -1 = no cap
+sailors            = -1                # sailors at once, as workers
+priority           = []                # convoys (by number) seated first, in order, with every ticket their goal waits on
 review_rounds      = 5
 trial_rounds       = 5                 # red pipelines a worker repairs on its MR before it escalates
 review_settle_secs = 300               # how long an MR's review threads hold still before a sailor answers them

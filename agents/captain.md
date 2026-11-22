@@ -96,7 +96,11 @@ hand's).
    draft their MR), and name it in your report for the operator.
 
 Work the **whole** `clean` frontier each pass — dispatch the good, anchor the rest.
-Leaving a `clean` ticket untouched only re-triggers you next tick. Express true
+Leaving a `clean` ticket untouched only re-triggers you next tick. Dispatching isn't running:
+fleetd seats at most `workers` workers and `sailors` sailors at once, the operator's `priority`
+convoys first (their goal's path, in any convoy, ahead of the rest), so an order may wait its
+turn. Don't hold back or re-order your dispatches for it; a ticket reworked back to To Do keeps
+its order, and fleetd relaunches it in its worktree. Express true
 sequencing as `blocked_by` edges on the tickets, so the frontier reflects the order.
 
 ## Inspect the escalations

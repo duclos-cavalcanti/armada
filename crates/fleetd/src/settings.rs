@@ -72,6 +72,26 @@ pub fn lookouts(cfg: &Config, l: &Ledger) -> i64 {
 pub fn self_lookouts(cfg: &Config, l: &Ledger) -> i64 {
     resolve_i64(l, None, "self_lookouts", cfg.self_lookouts)
 }
+pub fn workers(cfg: &Config, l: &Ledger) -> i64 {
+    resolve_i64(l, None, "workers", cfg.workers)
+}
+pub fn sailors(cfg: &Config, l: &Ledger) -> i64 {
+    resolve_i64(l, None, "sailors", cfg.sailors)
+}
+/// The convoys whose work is seated first, by number, in order (`"2,4"`; `""` = none).
+pub fn priority(cfg: &Config, l: &Ledger) -> Vec<i64> {
+    setting(l, "priority").and_then(|v| convoy_numbers(&v)).unwrap_or_else(|| cfg.priority.clone())
+}
+
+/// A comma-separated list of convoy numbers (`"2, 4"`, `"#2,#4"`); `""` is the empty list.
+fn convoy_numbers(value: &str) -> Option<Vec<i64>> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| v.trim_start_matches('#').parse::<i64>().ok().filter(|n| *n > 0))
+        .collect()
+}
 pub fn review_rounds(cfg: &Config, l: &Ledger) -> u64 {
     resolve_u64(l, None, "review_rounds", cfg.review_rounds)
 }
@@ -99,6 +119,7 @@ enum Ty {
     U64,
     I64,
     Bool,
+    Convoys,
 }
 
 impl Ty {
@@ -107,6 +128,7 @@ impl Ty {
             Ty::U64 => value.parse::<u64>().is_ok(),
             Ty::I64 => value.parse::<i64>().is_ok(),
             Ty::Bool => config::parse_bool(value).is_some(),
+            Ty::Convoys => convoy_numbers(value).is_some(),
         }
     }
     fn describe(self) -> &'static str {
@@ -114,6 +136,7 @@ impl Ty {
             Ty::U64 => "a non-negative integer",
             Ty::I64 => "an integer",
             Ty::Bool => "a boolean (true/false/1/0/on/off)",
+            Ty::Convoys => "convoy numbers, comma-separated (\"2,4\"; \"\" for none)",
         }
     }
 }
@@ -135,6 +158,9 @@ const LEVERS: &[Lever] = &[
     Lever { key: "admirals", env: None, ty: Ty::I64 },
     Lever { key: "lookouts", env: None, ty: Ty::I64 },
     Lever { key: "self_lookouts", env: None, ty: Ty::I64 },
+    Lever { key: "workers", env: None, ty: Ty::I64 },
+    Lever { key: "sailors", env: None, ty: Ty::I64 },
+    Lever { key: "priority", env: None, ty: Ty::Convoys },
     Lever { key: "review_rounds", env: None, ty: Ty::U64 },
     Lever { key: "trial_rounds", env: None, ty: Ty::U64 },
     Lever { key: "review_settle_secs", env: None, ty: Ty::U64 },
@@ -206,6 +232,9 @@ fn value_of(cfg: &Config, l: &Ledger, key: &str) -> String {
         "admirals" => admirals(cfg, l).to_string(),
         "lookouts" => lookouts(cfg, l).to_string(),
         "self_lookouts" => self_lookouts(cfg, l).to_string(),
+        "workers" => workers(cfg, l).to_string(),
+        "sailors" => sailors(cfg, l).to_string(),
+        "priority" => priority(cfg, l).iter().map(i64::to_string).collect::<Vec<_>>().join(","),
         "review_rounds" => review_rounds(cfg, l).to_string(),
         "trial_rounds" => trial_rounds(cfg, l).to_string(),
         "review_settle_secs" => review_settle_secs(cfg, l).to_string(),
@@ -260,6 +289,19 @@ mod tests {
         assert!(validate("poll_secs", "soon").is_err(), "u64 lever rejects non-numeric");
         assert!(validate("dry_run", "maybe").is_err(), "bool lever rejects a non-bool");
         assert!(validate("bogus", "1").is_err(), "unknown lever rejected");
+        assert!(validate("priority", "2, #4").is_ok() && validate("priority", "").is_ok());
+        assert!(validate("priority", "2,x").is_err() && validate("priority", "0").is_err(), "convoy numbers only");
+    }
+
+    #[test]
+    fn priority_resolves_as_a_convoy_list() {
+        let l = Ledger::in_memory().unwrap();
+        let c = Config { priority: vec![3], ..cfg() };
+        assert_eq!(priority(&c, &l), [3]);
+        l.setting_set("priority", "2,#4").unwrap();
+        assert_eq!(priority(&c, &l), [2, 4]);
+        l.setting_set("priority", "").unwrap();
+        assert!(priority(&c, &l).is_empty(), "a live empty list clears the file's");
     }
 
     #[test]
