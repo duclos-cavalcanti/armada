@@ -136,6 +136,9 @@ admiral's.
 - **Contract in types.** A data shape is a `wire`/`domain` serde type + `ledger`
   schema constraints — validated at the edge, re-checked on read, never silently
   coerced. (No JSON schemas — retired with the bash kit.)
+- **No comments.** Not `//`, `///`, `//!` or `/* */`: names and types carry the meaning;
+  clap help goes in `#[command(about = …)]` / `#[arg(help = …)]`. Enforced by
+  `crates/domain/tests/no_comments.rs`, ignored until today's comments go.
 - **Verify before you ship.** `cargo test` + `cargo clippy --all-targets` clean.
 
 **Skill-script (bash) conventions** — for the bash that remains (skills, install):
