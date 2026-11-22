@@ -50,7 +50,8 @@ your own judgment with the whole `fleetc` surface — whatever moves the mission
 - `dispatch` a ticket — a single ad-hoc one needs no convoy or captain
   (`fleetc dispatch --ticket <KEY> --ac "<summary>"`);
 - `anchor` / `weigh` a ticket (everything on it), a convoy (`--convoy`: its captain and every open
-  ticket in it), or the lookouts; `sink` / `send` any cog;
+  ticket in it), or the lookouts; `sink` / `send` any cog. Never anchor to stop a sailor arming:
+  it arms regardless of project conventions;
 - inspect an escalated cog (`/fleet-inspect <KEY>`): the lookout's verdict goes to the operator;
   a REFUTE's way out goes to the cog as well;
 - `rework` a ticket whose ACs you changed under its open MR: it goes back to a worker, in its
