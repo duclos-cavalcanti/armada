@@ -162,7 +162,7 @@ approval prompt.
 ```
 armada/
 ├── crates/      the fleet — domain, ledger, wire, fleetd (daemon), fleetc (client)
-├── apps/        standalone TUIs — crew, dashboard
+├── apps/        the dashboard, a standalone TUI
 ├── agents/      the cogs + standing collaborators, copied to ~/.claude/agents/ by make install
 ├── skills/      the kit's skills, copied to ~/.claude/skills/ by make install
 ├── local/       your own skills (local/skills/<name>/), copied alike but never committed
