@@ -2,7 +2,8 @@
 //! at boot, where a `Fail` refuses to come online, and after every sync, where a `Fail` holds the
 //! lookouts until it passes (the dashboard's `fleet:` light goes out) and a `Warn` only lights the
 //! dashboard. Each change is recorded (`health_checked`), and the dashboard's Health tab shows it.
-//! - **Kit**: its agents are linked into `~/.claude/agents`; the lookouts' command guard is there.
+//! - **Kit**: its agents and skills are installed in `~/.claude` as the repo has them; the lookouts'
+//!   command guard is there.
 //! - **Git**: the checkout is a git repository; the kit's ref guard is linked into its hooks and no
 //!   `core.hooksPath` skips it; its git settings carry no `core.worktree`, `user.name` or
 //!   `user.email` (what a test that borrowed its `.git` leaves behind); and it follows origin, on its
@@ -33,7 +34,8 @@ pub fn kit_hooks() -> PathBuf {
 /// Every check, in the Health tab's order.
 pub fn checks(cfg: &Config) -> Vec<HealthCheck> {
     let checkout = cfg.project.path.as_str();
-    let mut out = vec![kit_agents(), lookout_guard()];
+    let mut out = Vec::from(kit_installed());
+    out.push(lookout_guard());
     out.extend(git(checkout));
     out.extend([
         skill(checkout, "review-skill", "the review skill fleet.toml names exists", cfg.review_skill.as_deref(), HealthStatus::Fail, "the kit's /fleet-review runs"),
@@ -78,28 +80,58 @@ fn verdict(group: &str, name: &str, about: &str, status: HealthStatus, detail: O
 
 // ── Kit ─────────────────────────────────────────────────────────────────────────────
 
-fn kit_agents() -> HealthCheck {
-    let about = "each kit agent is linked into ~/.claude/agents";
-    let agents = kit_hooks().join("../agents");
-    let linked = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude/agents"));
-    let mut missing: Vec<String> = std::fs::read_dir(&agents)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "md"))
-        .filter(|p| {
-            let name = p.file_name().unwrap_or_default();
-            linked.as_ref().and_then(|l| l.join(name).canonicalize().ok()) != p.canonicalize().ok()
-        })
-        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .collect();
-    missing.sort();
-    if missing.is_empty() {
-        return check("Kit", "agents", about, HealthStatus::Ok, None);
-    }
+/// Each kit agent and skill is installed in `~/.claude` as the repo has it (`make install` copies
+/// them). A missing review agent holds the lookouts; any other miss, or a copy that differs from
+/// the repo (an edit not yet deployed), only warns.
+fn kit_installed() -> [HealthCheck; 2] {
+    let kit = kit_hooks().join("..");
+    let home = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude")).unwrap_or_default();
+    let audit = |dir: &str, unit: fn(&Path) -> bool| {
+        let (mut missing, mut differs) = (Vec::new(), Vec::new());
+        for src in std::fs::read_dir(kit.join(dir)).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| unit(p)) {
+            let name = src.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            match tree(&home.join(dir).join(&name)) {
+                None => missing.push(name),
+                installed if installed != tree(&src) => differs.push(name),
+                _ => {}
+            }
+        }
+        missing.sort();
+        differs.sort();
+        (missing, differs)
+    };
+    let detail = |missing: &[String], differs: &[String]| {
+        let mut parts = Vec::new();
+        if !missing.is_empty() {
+            parts.push(format!("missing: {}", missing.join(", ")));
+        }
+        if !differs.is_empty() {
+            parts.push(format!("differs from the repo: {}", differs.join(", ")));
+        }
+        (!parts.is_empty()).then(|| format!("{}: run make install", parts.join("; ")))
+    };
+    let (missing, differs) = audit("agents", |p| p.extension().is_some_and(|x| x == "md"));
     let status = if missing.iter().any(|m| REVIEW_AGENTS.contains(&m.as_str())) { HealthStatus::Fail } else { HealthStatus::Warn };
-    check("Kit", "agents", about, status, Some(format!("not linked: {}: run ./install.sh", missing.join(", "))))
+    let agents = verdict("Kit", "agents", "each kit agent is installed in ~/.claude/agents as the repo has it", status, detail(&missing, &differs));
+    let (missing, differs) = audit("skills", Path::is_dir);
+    let skills = verdict("Kit", "skills", "each kit skill is installed in ~/.claude/skills as the repo has it", HealthStatus::Warn, detail(&missing, &differs));
+    [agents, skills]
+}
+
+/// A file's or folder's content, every file by its path under `root`, in order; `None` when absent.
+fn tree(root: &Path) -> Option<Vec<(PathBuf, Vec<u8>)>> {
+    fn walk(root: &Path, at: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
+        match std::fs::read_dir(at) {
+            Ok(entries) => entries.flatten().for_each(|e| walk(root, &e.path(), out)),
+            Err(_) => out.push((at.strip_prefix(root).unwrap_or(at).to_path_buf(), std::fs::read(at).unwrap_or_default())),
+        }
+    }
+    root.exists().then(|| {
+        let mut out = Vec::new();
+        walk(root, root, &mut out);
+        out.sort();
+        out
+    })
 }
 
 fn lookout_guard() -> HealthCheck {
@@ -292,6 +324,25 @@ fn executable(path: &Path) -> bool {
 
 #[cfg(test)]
 pub(crate) mod tests {
+
+    #[test]
+    fn a_copy_matches_its_source_until_either_changes() {
+        let dir = std::env::temp_dir().join(format!("fleetd-tree-{}", std::process::id()));
+        let (src, copy) = (dir.join("src"), dir.join("copy"));
+        for d in [&src, &copy] {
+            std::fs::create_dir_all(d.join("scripts")).unwrap();
+            std::fs::write(d.join("SKILL.md"), "one").unwrap();
+            std::fs::write(d.join("scripts/run.sh"), "two").unwrap();
+        }
+        assert!(tree(&src).is_some() && tree(&src) == tree(&copy), "a faithful copy");
+        std::fs::write(src.join("SKILL.md"), "one, edited").unwrap();
+        assert_ne!(tree(&src), tree(&copy), "an edit not yet deployed");
+        std::fs::write(copy.join("SKILL.md"), "one, edited").unwrap();
+        std::fs::write(copy.join("stale.md"), "gone from the repo").unwrap();
+        assert_ne!(tree(&src), tree(&copy), "a file the repo dropped");
+        assert_eq!(tree(&dir.join("absent")), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn a_remote_warns_once_its_reads_keep_failing_and_clears_on_a_good_one() {

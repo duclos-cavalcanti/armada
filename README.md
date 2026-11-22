@@ -48,12 +48,14 @@ Integrations are chosen in `fleet.toml` (`[forge]`, `[tracker]`); initialize eac
 ### 2. Install
 
 ```bash
-make install      # gate on the Brewfile, stow the Claude surface, put fleetc on PATH
-make uninstall    # reverse it (unstow; assumes the fleet is stopped)
+make install      # gate on the Brewfile, copy the agents + skills, stow the Claude config, put fleetc on PATH
+make uninstall    # reverse it (assumes the fleet is stopped)
 ```
 
-`make install` uses [stow](https://www.gnu.org/software/stow/) to symlink the
-agents and skills into place.
+`make install` copies the agents and skills into `~/.claude`, so an edit in the repo reaches the
+fleet only when you run it again: it's the deploy. fleetd's health check warns while a copy
+differs from the repo. The loose Claude config is linked with
+[stow](https://www.gnu.org/software/stow/).
 
 Per-deployment harness settings (auto-mode trust, permissions for *your* work or
 personal systems) live in a gitignored profile, applied onto `.claude/settings.json`:
@@ -161,9 +163,9 @@ approval prompt.
 armada/
 ├── crates/      the fleet — domain, ledger, wire, fleetd (daemon), fleetc (client)
 ├── apps/        standalone TUIs — crew, dashboard
-├── agents/      the cogs + standing collaborators, stowed to ~/.claude/agents/
-├── skills/      the kit's skills, stowed to ~/.claude/skills/
-├── local/       your own skills (local/skills/<name>/), stowed alike but never committed
+├── agents/      the cogs + standing collaborators, copied to ~/.claude/agents/ by make install
+├── skills/      the kit's skills, copied to ~/.claude/skills/ by make install
+├── local/       your own skills (local/skills/<name>/), copied alike but never committed
 ├── .claude/     Claude config (settings, CLAUDE.md, scripts), stowed to ~/.claude/
 ├── harness/     apply.sh + gitignored per-deployment settings profiles + mcp.json (MCP servers a
 │                root session adds with `--mcp-config`)
@@ -173,7 +175,7 @@ armada/
 │                (open-slide decks), drawings/ (Excalidraw) and viewer/ (a React Flow map)
 ├── site/        the notes: a Docusaurus site over the repo's markdown + the fleet viewer (`make serve`)
 ├── Brewfile     dependency manifest
-├── install.sh   install / --uninstall (gates on Brewfile + stows + installs fleetc) / --hooks
+├── install.sh   install / --uninstall (gates on Brewfile, copies the kit, stows the config, installs fleetc) / --hooks
 ├── fleet.sh     start, stop and watch a project's fleet (`make` wraps it)
 ├── Makefile     one-word wrappers (run `make` for the cheat sheet)
 ├── TODO.md      the forward backlog

@@ -1,28 +1,30 @@
 #!/usr/bin/env bash
 #
-# install.sh — stow this kit into a harness provider's config tree (or tear it down).
+# install.sh — install this kit into a harness provider's config tree (or tear it down).
 #
 # The repo ROOT is the source of truth: agents/ and skills/ live at the top level,
-# harness-neutral, and stow into whichever provider you name (claude default; pi,
-# gpt, … → ~/.<harness>). For the CLAUDE harness only, it additionally stows the
-# loose Claude config (.claude/*) into ~/.claude. The fleet's state isn't installed: each
+# harness-neutral, and are COPIED into whichever provider you name (claude default; pi,
+# gpt, … → ~/.<harness>): an edit in the repo reaches the fleet only on the next install, the
+# deploy. For the CLAUDE harness only, it additionally stows (links) the loose Claude config
+# (.claude/*) into ~/.claude. The fleet's state isn't installed: each
 # project keeps its own, in projects/<name>/.fleet/ (fleetd creates it on first run).
 #
 # Usage:
 #   ./install.sh                     install for the default harness (claude)
 #   ./install.sh -H|--harness pi     install agents/ + skills/ for a named harness
 #   ./install.sh --home <dir>        override the harness home dir
-#   ./install.sh -u|--uninstall      uninstall (unstow) — the mirror of install
+#   ./install.sh -u|--uninstall      uninstall — the mirror of install
 #   ./install.sh --fleetc            build fleetc and put it on PATH (a claude install does this too)
 #   ./install.sh --hooks             link the kit's git hooks into each project's checkout ($FLEET_PROJECT, else all)
 #   ./install.sh -h|--help           this help
 #
 # LAYOUT (repo root = source of truth):
-#   agents/            → <harness-home>/agents/        (per-file, --no-folding; the
-#                        dir is shared with the operator's own agents)
-#   skills/<name>/     → <harness-home>/skills/<name>  (dir-as-unit fold, so
-#                        post-install edits propagate through the symlink)
+#   agents/<name>.md   → <harness-home>/agents/<name>.md  (copied, per file; the dir is shared
+#                        with the operator's own agents)
+#   skills/<name>/     → <harness-home>/skills/<name>/    (copied, per skill)
 #   local/skills/<name>/ → the same: the operator's own skills, gitignored — never committed
+#   <harness-home>/.armada-manifest names every path copied: uninstall, and the next install,
+#   remove exactly those. A path there that isn't the kit's is never replaced.
 #   CLAUDE HARNESS ONLY, additionally:
 #   .claude/*          → ~/.claude/   (loose config: CLAUDE.md, settings.json,
 #                        keybindings.json, scripts/; agent-memory/ + settings.local.json
@@ -45,20 +47,16 @@ HARNESS_HOME=""
 AGENTS_TARGET=""
 SKILLS_TARGET=""
 CLAUDE_TARGET=""
+MANIFEST=""
 
 # ---- Prerequisite gate ----
 check_prereqs() {
-    if ! command -v stow >/dev/null; then
-        echo "error: GNU Stow is required." >&2
-        echo "  install: brew install stow" >&2
-        exit 1
-    fi
     if [[ ! -d "$REPO/agents" || ! -d "$REPO/skills" ]]; then
         echo "error: expected agents/ and skills/ at repo root ($REPO)." >&2
         exit 1
     fi
-    # The full Brewfile gate (the fleet's runtime prereqs) applies only to the claude
-    # install — another harness only needs stow + the agents/skills dirs above.
+    # The Brewfile gate (the fleet's runtime prereqs, stow among them) applies only to the claude
+    # install — another harness only needs the agents/skills dirs above.
     [[ "$HARNESS" == "claude" ]] || return 0
     if ! command -v brew >/dev/null; then
         echo "error: Homebrew is required for the claude/fleet install." >&2
@@ -95,31 +93,58 @@ resolve_harness() {
     AGENTS_TARGET="$HARNESS_HOME/agents"
     SKILLS_TARGET="$HARNESS_HOME/skills"
     CLAUDE_TARGET="$HARNESS_HOME" # only used by the claude-only phase
+    MANIFEST="$HARNESS_HOME/.armada-manifest"
 }
 
-# ---- agents/ + skills/ (harness-agnostic) ----
-# --target points at the FINAL destination dir (stow strips the package name).
-stow_agents() {
-    stow --dir "$REPO" --target "$AGENTS_TARGET" \
-        --restow --no-folding --verbose --ignore='^\.stow-manifest' agents
+# ---- agents/ + skills/ (harness-agnostic): copied, so a repo edit isn't live until installed ----
+# Copy <src> to <harness-home>/<rel> and record it in the manifest; a path already there is
+# someone else's (the operator's own agent or skill) and is never replaced.
+place() {
+    local dst="$HARNESS_HOME/$2"
+    if [[ -e "$dst" || -L "$dst" ]]; then
+        echo "error: $dst exists and isn't the kit's; not replacing it" >&2
+        return 1
+    fi
+    cp -R "$1" "$dst"
+    echo "$2" >>"$MANIFEST"
+    echo "installed $2"
 }
-# The kit's skills, then the operator's own (local/skills/: stowed alike, never committed).
-stow_skills() {
-    local dir
-    for dir in "$REPO" "$REPO/local"; do
-        stow --dir "$dir" --target "$SKILLS_TARGET" \
-            --restow --verbose --ignore='^\.stow-manifest' --ignore='^\.gitignore$' skills
+# The kit's agents and skills, then the operator's own skills (local/skills/, never committed).
+copy_kit() {
+    local src dir
+    for src in "$REPO"/agents/*.md; do
+        [[ -f "$src" ]] && place "$src" "agents/${src##*/}"
+    done
+    for dir in "$REPO/skills" "$REPO/local/skills"; do
+        for src in "$dir"/*/; do
+            [[ -d "$src" ]] || continue
+            src="${src%/}"
+            place "$src" "skills/${src##*/}"
+        done
     done
 }
-unstow_agents() {
-    stow --dir "$REPO" --target "$AGENTS_TARGET" \
-        --delete --no-folding --verbose --ignore='^\.stow-manifest' agents
+# Remove what the manifest names — only agents/<x> and skills/<x> — then the manifest.
+remove_kit() {
+    local rel
+    [[ -f "$MANIFEST" ]] || return 0
+    while IFS= read -r rel; do
+        case "$rel" in
+            agents/?*|skills/?*) rm -rf "${HARNESS_HOME:?}/$rel" ;;
+            '') ;;
+            *) echo "warning: skipping $rel in $MANIFEST: not an agent or a skill" >&2 ;;
+        esac
+    done <"$MANIFEST"
+    rm -f "$MANIFEST"
 }
-unstow_skills() {
-    local dir
-    for dir in "$REPO" "$REPO/local"; do
-        stow --dir "$dir" --target "$SKILLS_TARGET" \
-            --delete --verbose --ignore='^\.stow-manifest' --ignore='^\.gitignore$' skills
+# The links an older, stowed install left: any agent or skill symlink into this repo.
+unlink_stowed() {
+    local link target
+    for link in "$AGENTS_TARGET"/* "$SKILLS_TARGET"/*; do
+        [[ -L "$link" ]] || continue
+        target="$(readlink "$link")"
+        case "$(cd "$(dirname "$link")" && cd "$(dirname "$target")" 2>/dev/null && pwd -P)" in
+            "$REPO" | "$REPO"/*) rm "$link" && echo "unlinked ${link#"$HARNESS_HOME"/}" ;;
+        esac
     done
 }
 
@@ -179,8 +204,9 @@ install() {
     check_prereqs
     resolve_harness
     echo "installing agents/ + skills/ → $HARNESS_HOME (harness: $HARNESS)"
-    stow_agents
-    stow_skills
+    remove_kit
+    unlink_stowed
+    copy_kit
     if [[ "$HARNESS" == "claude" ]]; then
         stow_claude_global
         install_fleetc
@@ -194,8 +220,8 @@ uninstall() {
         cargo uninstall fleetc || true
         unstow_claude_global
     fi
-    unstow_skills
-    unstow_agents
+    remove_kit
+    unlink_stowed
 }
 
 usage() { sed -n '11,18p' "${BASH_SOURCE[0]}" | sed 's/^#[[:space:]]*//;s/^#//'; }
