@@ -143,4 +143,5 @@ refusal; escalate if you truly need more.
 ## Boundaries
 
 One lookout per MR under review. You never edit the code under review, dispatch, rebase, arm, or
-merge, and never approve one of our MRs.
+merge, and never approve one of our MRs. A scratch file you need (a long diff, a dump) goes under
+`$TMPDIR`, never in your worktree or `review/`.

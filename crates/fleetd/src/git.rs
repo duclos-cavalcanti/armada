@@ -114,7 +114,8 @@ impl GitWorktrees {
     /// left behind while fleetd was down.
     pub fn sweep_reviews(&self, live: &[String]) -> Result<()> {
         let Ok(entries) = std::fs::read_dir(self.reviews()) else { return Ok(()) };
-        for path in entries.flatten().map(|e| e.path()) {
+        // Berths are folders: a stray file someone left in review/ is no berth, and never stops the sweep.
+        for path in entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
             if !live.iter().any(|l| Path::new(l) == path) {
                 self.strike_review(&path)?;
             }
@@ -197,10 +198,13 @@ mod tests {
         let one = wt.cut_review(1, "pull/1/head", "master", &sha).unwrap();
         let two = wt.cut_review(2, "pull/2/head", "master", &sha).unwrap();
         assert_eq!(Path::new(&two), dir.join("review/2"));
+        let stray = dir.join("review/0-notes");
+        std::fs::write(&stray, "a cog's scratch").unwrap();
 
         wt.sweep_reviews(std::slice::from_ref(&one)).unwrap();
         assert!(Path::new(&one).exists(), "a live lookout keeps its berth");
         assert!(!Path::new(&two).exists(), "an orphan is struck");
+        assert!(stray.exists(), "a stray file is left, and the sweep goes on past it");
 
         wt.strike_review(Path::new(&project)).unwrap();
         assert!(Path::new(&project).exists(), "never a path outside review/");
