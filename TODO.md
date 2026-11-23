@@ -7,6 +7,13 @@
   so a write landing in it waits it out. Time each step of `tick_sync`, then fetch off the loop and
   apply on it: the network calls on a worker thread, the ledger writes on the loop.
 
+- [ ] **Rework many tickets in one command.** Pushing 140 tickets back behind the frontier
+  (2026-11-21) took one `fleetc rework` each, and each queued behind the loop's own ticks: ~27 s
+  apiece, ~5 s of it the rework's Jira + GitLab calls. Take `fleetc rework <KEY> <KEY> …` as one
+  command that fleetd applies in a single pass, naming each ticket that failed. Part of the queue
+  was the liveness poll: two tmux calls per live session every 5 s (~550 for 277 sessions); one
+  `tmux list-sessions -F '#{session_name} #{window_activity}'` per poll would make it flat.
+
 - [ ] **Make /fleet-ready-done project-agnostic again.** The splits in Ready #4 (new from routine,
   contracts in steps, decision docs before the code) and the ruling-added AC in Done #5 came from
   one project's MRs and assume its kind of work: deployed workflows and design docs. Keep the kit's
